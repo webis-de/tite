@@ -1,0 +1,33 @@
+FROM debian:stable
+
+ENV DEBIAN_FRONTEND noninteractive
+RUN apt-get update && apt-get install -y locales &&\
+	echo "en_US.UTF-8 UTF-8" | tee -a /etc/locale.gen && locale-gen
+
+# Tools
+RUN apt-get update && apt-get -y install sudo git python3 python3-pip
+
+ENV PIP_BREAK_SYSTEM_PACKAGES 1
+COPY ../requirements.txt requirements.txt
+RUN <<EOF
+	# Dependencies
+	#  pytorch for CPU
+	apt-get install -y libpcre3-dev
+	pip3 install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
+
+	pip3 install -r requirements.txt
+
+	# Development Environment
+	pip3 install black flake8 isort
+EOF
+
+# Change root Password to 1234
+RUN echo 'root:1234' | chpasswd
+
+# Create new user: "dev" with password "1234" and change to that user
+RUN useradd -ms /bin/bash dev \
+ 	&& echo 'dev:1234' | chpasswd \
+	&& usermod -aG sudo dev \
+	&& groupadd -g 973 docker \
+	&& usermod -aG docker dev
+USER dev

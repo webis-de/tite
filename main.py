@@ -7,7 +7,7 @@ from lightning.pytorch.cli import LightningCLI, SaveConfigCallback
 from lightning.pytorch.loggers import WandbLogger
 from typing_extensions import override
 from tite.module import TiteModule  # noqa
-from tite.datamodule import FineWebDataModule  # noqa
+from tite.fineweb import FineWebDataModule  # noqa
 
 # from lightning_ir.lightning_utils.warmup_schedulers import (
 #     LR_SCHEDULERS,
