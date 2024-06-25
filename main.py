@@ -6,8 +6,8 @@ from lightning.fabric.loggers.logger import _DummyExperiment as DummyExperiment
 from lightning.pytorch.cli import LightningCLI, SaveConfigCallback
 from lightning.pytorch.loggers import WandbLogger
 from typing_extensions import override
-from tite.module import TiteModule  # noqa
-from tite.fineweb import FineWebDataModule  # noqa
+from tite.model import TiteModule  # noqa
+from tite.datasets import FineWebDataModule  # noqa
 
 # from lightning_ir.lightning_utils.warmup_schedulers import (
 #     LR_SCHEDULERS,
