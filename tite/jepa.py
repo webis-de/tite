@@ -24,6 +24,9 @@ class TJEPA(LightningModule):
         super().__init__(*args, **kwargs)
         self.student = student
 
+    def forward(self, *args, **kwargs):
+        self.student.forward(*args, **kwargs)
+
     def training_step(
         self, batch: MaskCollatorBatch
     ) -> Tensor | Mapping[str, Any] | None:

@@ -1,4 +1,5 @@
 from torch import Tensor
+import torch.nn as nn
 from torch.linalg import matrix_norm
 import torch.nn.functional as F
 
@@ -26,3 +27,11 @@ def mmcr(embeddings: Tensor) -> Tensor:
     centers = normed.mean(0)
     assert list(centers.shape) == [P, D]
     return -matrix_norm(centers, ord="nuc")
+
+
+class MMCRLoss(nn.Module):
+    def __init__(self) -> None:
+        super().__init__()
+
+    def forward(self, embeddings: Tensor) -> Tensor:
+        return mmcr(embeddings)
