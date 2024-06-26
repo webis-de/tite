@@ -8,3 +8,6 @@ class TiteModule(LightningModule):
     def __init__(self, model: TiteModel):
         super().__init__()
         self.model = model
+
+    def foreard(self, *args, **kwargs):
+        return self.model(*args, **kwargs)

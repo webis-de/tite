@@ -1,5 +1,5 @@
 import os
-from typing import Literal
+from typing import Any, Callable, Literal
 
 from datasets import load_dataset
 from pytorch_lightning import LightningDataModule
@@ -24,6 +24,7 @@ class BaseHFDataModule(LightningDataModule):
         seed: int | None = None,
         num_workers: int = 0,
         streaming: bool = True,
+        collate_fn: Callable[[list], Any] | None = None,
     ) -> None:
         """
         Args:
@@ -41,6 +42,7 @@ class BaseHFDataModule(LightningDataModule):
         self._data_dir = data_dir
         self._streaming = streaming
         self._dataset = None
+        self._collate_fn = collate_fn
         seed = _seed_or_none(seed)
         self.save_hyperparameters(
             {
@@ -80,6 +82,7 @@ class BaseHFDataModule(LightningDataModule):
             self._dataset["train"],
             batch_size=self.hparams["batch_size"],
             num_workers=self.hparams["num_workers"],
+            collate_fn=self._collate_fn,
         )
 
     def val_dataloader(self) -> DataLoader | list[DataLoader]:
@@ -89,6 +92,7 @@ class BaseHFDataModule(LightningDataModule):
                 split,
                 batch_size=self.hparams["batch_size"],
                 num_workers=self.hparams["num_workers"],
+                collate_fn=self._collate_fn,
             )
             for name, split in self._dataset.items()
             if "validation" in name
@@ -105,4 +109,5 @@ class BaseHFDataModule(LightningDataModule):
             self._dataset["train"],
             batch_size=self.hparams["batch_size"],
             num_workers=self.hparams["num_workers"],
+            collate_fn=self._collate_fn,
         )

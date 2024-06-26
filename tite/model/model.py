@@ -1,5 +1,5 @@
 from transformers import BertConfig as TiteConfig
-from transformers import BertPreTrainedModel as TiteModel
+from transformers import BertModel as TiteModel
 
 """
 from transformers import PretrainedConfig
