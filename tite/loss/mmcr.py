@@ -7,8 +7,9 @@ def mmcr(embeddings: Tensor) -> Tensor:
     r"""Implements the "Maximum Manifold Capacity Representation" loss.
 
     Let :math:`X\in\mathbb{R}^{K\times P\times D}` denote the embeddings obtained from embedding :math:`K`
-    transformations of :math:`P` data points. Here, :math:`D` denotes the embedding dimensionality. The maximum manifold
-    representations loss is defined as the nuclear norm of the :math:`P\times D` matrix made up from the centers of each data point's embeddings:
+    transformations of :math:`P` data points. Here, :math:`D` denotes the normalized embedding dimensionality. The
+    maximum manifold representations loss is defined as the nuclear norm of the :math:`P\times D` matrix made up from
+    the centers of each data point's embeddings:
 
     .. math::
         \mathcal{L}_\textrm{MMCR} := -\lVert C\rVert_\ast, \textrm{ with }
