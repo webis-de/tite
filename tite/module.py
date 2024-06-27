@@ -1,17 +1,14 @@
-from random import sample
 from typing import Any, Callable
 
 import torch.nn as nn
 from pytorch_lightning import LightningModule
-from torch import LongTensor, Tensor
+from torch import Tensor
 from torch.optim import AdamW, Optimizer
 from transformers import PreTrainedTokenizerBase, TensorType
 
 from .jepa import JEPA
 from .loss import BarlowTwins
 from .model.model import TiteModel
-
-Transformation = Callable[[tuple[LongTensor, LongTensor]], dict | tuple[dict, Any]]
 
 
 def _tite_jepa_predictor(x, aux):
@@ -28,18 +25,6 @@ class _DetachFromGrad(nn.Module):
         output = self._module(*args, **kwargs)
         assert isinstance(output, Tensor)
         return output.detach()
-
-
-class RandomTransformation:
-
-    def __init__(self, transformations: list[Transformation], numsamples: int) -> None:
-        self._transformations = transformations
-        self._num = numsamples
-
-    def __call__(self, *args: Any, **kwds: Any) -> list[dict]:
-        return [
-            trans(*args, **kwds) for trans in sample(self._transformations, self._num)
-        ]
 
 
 class TiteModule(LightningModule):
