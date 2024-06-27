@@ -220,7 +220,7 @@ class TiteSelfAttention(torch.nn.Module):
             query,
             key,
             value,
-            attention_mask.unsqueeze(1),
+            attention_mask.unsqueeze(1).unsqueeze(-1),
             self.dropout_prob if self.training else 0.0,
         )
 

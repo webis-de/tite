@@ -50,7 +50,7 @@ class MaskTokens:
     def __call__(
         self, input_ids: Tensor, attention_mask: LongTensor, **kwargs
     ) -> list[dict]:
-        mask = torch.rand_like(attention_mask) < self._mask_prob
+        mask = torch.rand(attention_mask.shape) < self._mask_prob
         input_ids = torch.masked_fill(input_ids, mask, self._maskid)
         return [{"input_ids": input_ids, "attention_mask": attention_mask}]
 

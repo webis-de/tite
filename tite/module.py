@@ -52,12 +52,15 @@ class TiteModule(LightningModule):
         tokenized = self._tokenizer(
             text=batch[self._text_key],
             return_attention_mask=True,
+            return_token_type_ids=False,
             padding=True,
             return_tensors=TensorType.PYTORCH,
+            truncation=True,
         )
         # TODO: support multiple transformations
         transformed = self._transform(**tokenized)[0]
         jepa_loss = self._jepa(tokenized, transformed, None)
+        self.log_dict({"loss": jepa_loss}, prog_bar=True, on_step=True)
         return jepa_loss
 
     def configure_optimizers(self) -> Optimizer:

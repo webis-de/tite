@@ -1,6 +1,6 @@
-from torch import Tensor
 import torch
 import torch.nn as nn
+from torch import Tensor
 
 
 class BarlowTwins(nn.Module):
