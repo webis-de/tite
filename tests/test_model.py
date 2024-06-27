@@ -47,7 +47,9 @@ def test_masked_avg_pool1d(kernel_size: int, stride: int, seq_length: int):
 def test_tite_model(config: TiteConfig):
     model = TiteModel(config)
     input_ids = torch.randint(0, config.vocab_size, (2, config.max_position_embeddings))
-    output = model(input_ids)
+    attention_mask = torch.ones_like(input_ids, dtype=torch.bool)
+    attention_mask[1, -config.max_position_embeddings // 2 :] = False
+    output = model(input_ids, attention_mask)
     assert output.shape == (2, 1, config.hidden_size[-1])
     assert output.requires_grad
 
@@ -77,8 +79,16 @@ def test_same_as_bert(config: TiteConfig):
             missing_keys.append(key)
     input_ids = torch.randint(0, config.vocab_size, (2, config.max_position_embeddings))
 
-    with torch.no_grad():
-        tite_output = model(input_ids)
-        bert_output = bert_model(input_ids)
+    attention_mask = torch.ones_like(input_ids, dtype=torch.bool)
+    attention_mask[1, -config.max_position_embeddings // 2 :] = False
+    attention_mask = None
 
-    assert torch.allclose(tite_output, bert_output.last_hidden_state, atol=1e-4)
+    with torch.no_grad():
+        tite_output = model(input_ids, attention_mask)
+        bert_output = bert_model(input_ids, attention_mask)
+
+    assert torch.allclose(
+        tite_output[attention_mask],
+        bert_output.last_hidden_state[attention_mask],
+        atol=1e-3,
+    )

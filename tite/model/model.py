@@ -1,10 +1,21 @@
 import warnings
-from typing import Tuple
+from typing import List, Sequence, Tuple
 
 import torch
 from transformers import PretrainedConfig, PreTrainedModel
 from transformers.activations import ACT2FN
 from transformers.modeling_utils import apply_chunking_to_forward
+
+
+def unpad(x: torch.Tensor, mask: torch.Tensor) -> Tuple[torch.Tensor, List[int]]:
+    mask = mask.expand(x.shape[:-1])
+    seq_lengths = mask.sum(1).detach().cpu().tolist()
+    x = x[mask]
+    return x, seq_lengths
+
+
+def re_pad(x: torch.Tensor, seq_lengths: Sequence[int]) -> torch.Tensor:
+    return torch.nn.utils.rnn.pad_sequence(x.split(seq_lengths), batch_first=True)
 
 
 def ceil_div(a: int, b: int) -> int:
@@ -102,7 +113,10 @@ class TiteModel(PreTrainedModel):
         self, input_ids: torch.Tensor, attention_mask: torch.Tensor | None = None
     ) -> torch.Tensor:
         if attention_mask is None:
-            attention_mask = torch.ones(1, input_ids.shape[1], device=input_ids.device)
+            attention_mask = torch.ones(
+                1, input_ids.shape[1], device=input_ids.device, dtype=torch.bool
+            )
+        attention_mask = attention_mask.bool()
         hidden_states = self.embeddings(input_ids)
         hidden_states = self.encoder(hidden_states, attention_mask)
         return hidden_states
@@ -191,15 +205,22 @@ class TiteSelfAttention(torch.nn.Module):
     def forward(
         self, hidden_states: torch.Tensor, attention_mask: torch.Tensor
     ) -> torch.Tensor:
-        query = self.transpose_for_scores(self.query(hidden_states))
-        key = self.transpose_for_scores(self.key(hidden_states))
-        value = self.transpose_for_scores(self.value(hidden_states))
+        unpad_hidden_states, seq_lengths = unpad(hidden_states, attention_mask)
+        query = self.transpose_for_scores(
+            re_pad(self.query(unpad_hidden_states), seq_lengths)
+        )
+        key = self.transpose_for_scores(
+            re_pad(self.key(unpad_hidden_states), seq_lengths)
+        )
+        value = self.transpose_for_scores(
+            re_pad(self.value(unpad_hidden_states), seq_lengths)
+        )
 
         attn_output = torch.nn.functional.scaled_dot_product_attention(
             query,
             key,
             value,
-            attention_mask,
+            attention_mask.unsqueeze(1),
             self.dropout_prob if self.training else 0.0,
         )
 
@@ -292,12 +313,14 @@ class TiteLayer(torch.nn.Module):
         self, hidden_states: torch.Tensor, attention_mask: torch.Tensor
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         attn_output = self.attention(hidden_states, attention_mask)
+        attn_output, seq_lengths = unpad(attn_output, attention_mask)
         layer_output = apply_chunking_to_forward(
             self.feed_forward_chunk,
             self.chunk_size_feed_forward,
             self.seq_len_dim,
             attn_output,
         )
+        layer_output = re_pad(layer_output, seq_lengths)
         if self.pooling is not None:
             layer_output, attention_mask = self.pooling(layer_output, attention_mask)
         return layer_output, attention_mask
