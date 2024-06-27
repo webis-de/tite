@@ -1,12 +1,12 @@
 from functools import reduce
-from typing import Any, Iterable, Mapping, NamedTuple
+from typing import Any, Callable, Iterable, Mapping, NamedTuple
 
 import torch
+from pytorch_lightning import LightningModule
 from torch import Tensor
 from torch.nn import Module
-from torch.utils.data import default_collate
 from torch.optim import AdamW, Optimizer
-from pytorch_lightning import LightningModule
+from torch.utils.data import default_collate
 from transformers import PreTrainedTokenizerBase, TensorType
 
 
@@ -17,8 +17,40 @@ class MaskCollatorBatch(NamedTuple):
     metadata: dict[str, Any]
 
 
+Encoder = Callable[[Any], Any]
+TargetEncoder = Callable[[Any], Any]
+Predictor = Callable[[Any, Any], Any]
+SimFn = Callable[[Any, Any], Any]
+
+
+class JEPA(Module):
+
+    def __init__(
+        self,
+        student: Encoder,
+        target_enc: TargetEncoder,
+        predictor: Predictor,
+        sim: SimFn,
+        return_embeddings: bool = False,
+    ) -> None:
+        super().__init__()
+        self._student = student
+        self._target_enc = target_enc
+        self._predictor = predictor
+        self._sim = sim
+        self._return_embeddings = return_embeddings
+
+    def forward(self, input: dict, target: dict, aux: Any | None = None):
+        embx = self._student(**input)
+        emby = self._target_enc(**target)
+        pred = self._predictor(embx, aux)
+        if not self._return_embeddings:
+            return self._sim(pred, emby)
+        return self._sim(pred, emby), embx, emby
+
+
 class TJEPA(LightningModule):
-    """I-JEPA adapted for text"""
+    """JEPA adapted for text"""
 
     def __init__(self, student: Module, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
