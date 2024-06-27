@@ -44,7 +44,7 @@ class SwapTokens:
 
 class MaskTokens:
     def __init__(self, maskid: int, mask_prob: float = 0.3) -> None:
-        self._mask_id
+        self._maskid = maskid
         self._mask_prob = mask_prob
 
     def __call__(
