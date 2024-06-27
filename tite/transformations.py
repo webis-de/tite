@@ -19,7 +19,9 @@ class SwapTokens:
         assert not isinstance(num_swaps, float) or num_swaps <= 1
         self._nswaps = num_swaps
 
-    def __call__(self, input_ids: Tensor, attention_mask: LongTensor) -> list[dict]:
+    def __call__(
+        self, input_ids: Tensor, attention_mask: LongTensor, **kwargs
+    ) -> list[dict]:
         inputlen = attention_mask.sum(-1)
         B, L = input_ids.shape
         nswaps = torch.ceil(
@@ -38,6 +40,34 @@ class SwapTokens:
         # Alternative: This does not only swap tokens though but copies and overrides
         # flattened[idx1], flattened[idx2] = flattened[idx2], flattened[idx1]
         return [{"input_ids": input_ids, "attention_mask": attention_mask}]
+
+
+class MaskTokens:
+    def __init__(self, maskid: int, mask_prob: float = 0.3) -> None:
+        self._mask_id
+        self._mask_prob = mask_prob
+
+    def __call__(
+        self, input_ids: Tensor, attention_mask: LongTensor, **kwargs
+    ) -> list[dict]:
+        mask = torch.rand_like(attention_mask) < self._mask_prob
+        input_ids = torch.masked_fill(input_ids, mask, self._maskid)
+        return [{"input_ids": input_ids, "attention_mask": attention_mask}]
+
+
+"""
+class HardMaskTokens:
+    def __init__(self, mask_prob: float = 0.3) -> None:
+        self._mask_prob = mask_prob
+
+    def __call__(
+        self, input_ids: Tensor, attention_mask: LongTensor, **kwargs
+    ) -> list[dict]:
+        attention_mask = torch.logical_and(
+            attention_mask, torch.rand_like(attention_mask) > self._mask_prob
+        )
+        return [{"input_ids": input_ids, "attention_mask": attention_mask}]
+"""
 
 
 class RandomTransformation:
