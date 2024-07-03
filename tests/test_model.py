@@ -3,7 +3,7 @@ import torch
 from transformers import BertConfig, BertModel
 from copy import deepcopy
 
-from tite.model.model import (
+from tite.model import (
     MaskedAvgPool1d,
     TiteConfig,
     TiteModel,

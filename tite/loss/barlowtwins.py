@@ -18,6 +18,8 @@ class BarlowTwins(nn.Module):
         self.batchnorm = nn.BatchNorm1d(num_features, affine=False)
 
     def forward(self, features1: Tensor, features2: Tensor) -> Tensor:
+        features1 = features1.view(features1.shape[0], -1)
+        features2 = features2.view(features2.shape[0], -1)
         N, D = features1.shape
         assert list(features2.shape) == [
             N,
@@ -29,5 +31,7 @@ class BarlowTwins(nn.Module):
 
         assert list(crosscorr.shape) == [D, D]
         obj = (crosscorr - torch.eye(D)).pow(2)
-        obj[~torch.eye(D, dtype=torch.bool)] *= self._alpha
-        return obj.sum()
+        obj[~torch.eye(D, dtype=torch.bool)] = (
+            obj[~torch.eye(D, dtype=torch.bool)] * self._alpha
+        )
+        return obj.mean()

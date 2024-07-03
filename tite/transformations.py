@@ -1,13 +1,20 @@
 from random import sample
-from typing import Any, Callable
+from typing import Any
 
 import torch
+from torch.nn import Module
 from torch import LongTensor, Tensor
 
-Transformation = Callable[[Any], list[dict | tuple[dict, Any]]]
+
+class Transformation(Module):
+    def __init__(self) -> None:
+        super().__init__()
+
+    def forward(self, *args: Any, **kwds: Any) -> list[dict]:
+        raise NotImplementedError
 
 
-class SwapTokens:
+class SwapTokens(Transformation):
     def __init__(self, num_swaps: int | float = 1):
         """Swaps two random (unmasked) tokens. The random swap is repeated `num_swaps` times if `num_swaps` is an
         integer and `num_swaps * input_len` times if it is a float.
@@ -15,11 +22,12 @@ class SwapTokens:
         Args:
             num_swaps (int | float, optional): The number of swaps to perform. Defaults to 1.
         """
+        super().__init__()
         assert num_swaps > 0
         assert not isinstance(num_swaps, float) or num_swaps <= 1
         self._nswaps = num_swaps
 
-    def __call__(
+    def forward(
         self, input_ids: Tensor, attention_mask: LongTensor, **kwargs
     ) -> list[dict]:
         inputlen = attention_mask.sum(-1)
@@ -42,15 +50,23 @@ class SwapTokens:
         return [{"input_ids": input_ids, "attention_mask": attention_mask}]
 
 
-class MaskTokens:
-    def __init__(self, maskid: int, mask_prob: float = 0.3) -> None:
+class MaskTokens(Transformation):
+    def __init__(
+        self, maskid: int, clsid: int, sepid: int, mask_prob: float = 0.3
+    ) -> None:
+        super().__init__()
         self._maskid = maskid
+        self._cls_id = clsid
+        self._sep_id = sepid
         self._mask_prob = mask_prob
 
-    def __call__(
+    def forward(
         self, input_ids: Tensor, attention_mask: LongTensor, **kwargs
     ) -> list[dict]:
         mask = torch.rand(attention_mask.shape) < self._mask_prob
+        mask = mask.logical_and(input_ids != self._cls_id).logical_and(
+            input_ids != self._sep_id
+        )
         input_ids = torch.masked_fill(input_ids, mask, self._maskid)
         return [{"input_ids": input_ids, "attention_mask": attention_mask}]
 
@@ -70,9 +86,10 @@ class HardMaskTokens:
 """
 
 
-class RandomTransformation:
+class RandomTransformation(Transformation):
 
     def __init__(self, transformations: list[Transformation], numsamples: int) -> None:
+        super().__init__()
         self._transformations = transformations
         self._num = numsamples
 

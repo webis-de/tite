@@ -2,7 +2,7 @@ import os
 from typing import Any, Callable, Literal
 
 from datasets import load_dataset
-from pytorch_lightning import LightningDataModule
+from lightning import LightningDataModule
 from torch.utils.data import DataLoader
 
 

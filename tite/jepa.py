@@ -18,9 +18,8 @@ class MaskCollatorBatch(NamedTuple):
 
 
 Encoder = Callable[[Any], Any]
-TargetEncoder = Callable[[Any], Any]
 Predictor = Callable[[Any, Any], Any]
-SimFn = Callable[[Any, Any], Any]
+LossFn = Callable[[Any, Any], Any]
 
 
 class JEPA(Module):
@@ -28,25 +27,25 @@ class JEPA(Module):
     def __init__(
         self,
         student: Encoder,
-        target_enc: TargetEncoder,
+        teacher: Encoder,
         predictor: Predictor,
-        sim: SimFn,
+        loss: LossFn,
         return_embeddings: bool = False,
     ) -> None:
         super().__init__()
         self._student = student
-        self._target_enc = target_enc
+        self._teacher = teacher
         self._predictor = predictor
-        self._sim = sim
+        self._loss = loss
         self._return_embeddings = return_embeddings
 
     def forward(self, input: dict, target: dict, aux: Any | None = None):
         embx = self._student(**input)
-        emby = self._target_enc(**target)
+        emby = self._teacher(**target)
         pred = self._predictor(embx, aux)
         if not self._return_embeddings:
-            return self._sim(pred, emby)
-        return self._sim(pred, emby), embx, emby
+            return self._loss(pred, emby)
+        return self._loss(pred, emby), embx, emby
 
 
 class TJEPA(LightningModule):

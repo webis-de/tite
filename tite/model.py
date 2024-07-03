@@ -109,6 +109,24 @@ class TiteModel(PreTrainedModel):
         self.embeddings = TiteEmbeddings(config)
         self.encoder = TiteEncoder(config)
 
+        self.post_init()
+
+    def _init_weights(self, module):
+        """Initialize the weights"""
+        if isinstance(module, torch.nn.Linear):
+            # Slightly different from the TF version which uses truncated_normal for initialization
+            # cf https://github.com/pytorch/pytorch/pull/5617
+            module.weight.data.normal_(mean=0.0, std=self.config.initializer_range)
+            if module.bias is not None:
+                module.bias.data.zero_()
+        elif isinstance(module, torch.nn.Embedding):
+            module.weight.data.normal_(mean=0.0, std=self.config.initializer_range)
+            if module.padding_idx is not None:
+                module.weight.data[module.padding_idx].zero_()
+        elif isinstance(module, torch.nn.LayerNorm):
+            module.bias.data.zero_()
+            module.weight.data.fill_(1.0)
+
     def forward(
         self, input_ids: torch.Tensor, attention_mask: torch.Tensor | None = None
     ) -> torch.Tensor:
@@ -216,11 +234,17 @@ class TiteSelfAttention(torch.nn.Module):
             re_pad(self.value(unpad_hidden_states), seq_lengths)
         )
 
+        attention_mask = attention_mask.unsqueeze(1).unsqueeze(-1)
+        sdpa_attention_mask = (
+            (~attention_mask)
+            .to(query)
+            .masked_fill(~attention_mask, torch.finfo(query.dtype).min)
+        )
         attn_output = torch.nn.functional.scaled_dot_product_attention(
             query,
             key,
             value,
-            attention_mask.unsqueeze(1).unsqueeze(-1),
+            sdpa_attention_mask,
             self.dropout_prob if self.training else 0.0,
         )
 

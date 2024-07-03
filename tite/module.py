@@ -1,23 +1,19 @@
-from typing import Any, Callable
+from typing import Any
 
-import torch.nn as nn
-from pytorch_lightning import LightningModule
+from torch.nn import Module
+from lightning import LightningModule
 from torch import Tensor
-from torch.optim import AdamW, Optimizer
+import torch
 from transformers import PreTrainedTokenizerBase, TensorType
 
-from .jepa import JEPA
-from .loss import BarlowTwins
-from .model.model import TiteModel
+from .jepa import JEPA, Predictor, LossFn
+from .model import TiteModel
+from .transformations import Transformation
 
 
-def _tite_jepa_predictor(x, aux):
-    return x
+class _DetachFromGrad(Module):
 
-
-class _DetachFromGrad(nn.Module):
-
-    def __init__(self, module: nn.Module, *args, **kwargs) -> None:
+    def __init__(self, module: Module, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
         self._module = module
 
@@ -32,21 +28,39 @@ class TiteModule(LightningModule):
     def __init__(
         self,
         student: TiteModel,
+        teacher: Module | None,
         tokenizer: PreTrainedTokenizerBase,
-        transformation: Callable[[Any], list[dict]],
+        transformations: list[Transformation],
+        predictor: Predictor,
+        loss: LossFn,
         text_key: str = "text",
     ) -> None:
         super().__init__()
+        if teacher is None:
+            teacher = student
         self._student = student
+        self._teacher = teacher
         self._tokenizer = tokenizer
-        self._transform = transformation
+        self._transforms = transformations
+        self._predictor = predictor
+        self._loss = loss
         self._text_key = text_key
         self._jepa = JEPA(
-            self._student,
-            _DetachFromGrad(self._student),
-            _tite_jepa_predictor,
-            BarlowTwins(0.5, 768),
+            self._student, _DetachFromGrad(self._teacher), predictor, loss
         )
+
+    def on_after_backward(self) -> None:
+        nans = []
+        for name, param in list(self._student.named_parameters())[::-1]:
+            if torch.isnan(param.grad).any():
+                nans.append(name)
+        for name, param in list(self._predictor.named_parameters())[::-1]:
+            if torch.isnan(param.grad).any():
+                nans.append(name)
+        for name, param in list(self._teacher.named_parameters())[::-1]:
+            if torch.isnan(param.grad).any():
+                nans.append(name)
+        nans
 
     def training_step(self, batch: dict[str, Any]):
         tokenized = self._tokenizer(
@@ -56,12 +70,12 @@ class TiteModule(LightningModule):
             padding=True,
             return_tensors=TensorType.PYTORCH,
             truncation=True,
-        )
-        # TODO: support multiple transformations
-        transformed = self._transform(**tokenized)[0]
+        ).to(self.device)
+        for transformation in self._transforms:
+            transformed = transformation(**tokenized)[0]
         jepa_loss = self._jepa(tokenized, transformed, None)
         self.log_dict({"loss": jepa_loss}, prog_bar=True, on_step=True)
         return jepa_loss
 
-    def configure_optimizers(self) -> Optimizer:
-        return AdamW(self._student.parameters())
+    # def configure_optimizers(self) -> Optimizer:
+    #     return AdamW(self._student.parameters())

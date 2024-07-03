@@ -1,0 +1,14 @@
+# lightning.pytorch==2.2.0.post0
+seed_everything: 42
+trainer:
+  accelerator: auto
+  strategy: auto
+  devices: auto
+  num_nodes: 1
+  precision: null
+  logger: null
+  callbacks: null
+  max_steps: 10000
+  accumulate_grad_batches: 1
+  gradient_clip_val: 10
+  detect_anomaly: false
