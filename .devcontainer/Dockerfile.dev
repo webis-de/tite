@@ -1,4 +1,4 @@
-FROM debian:stable
+FROM ubuntu:latest
 
 ENV DEBIAN_FRONTEND noninteractive
 RUN apt-get update && apt-get install -y locales &&\
@@ -24,10 +24,9 @@ EOF
 # Change root Password to 1234
 RUN echo 'root:1234' | chpasswd
 
-# Create new user: "dev" with password "1234" and change to that user
-RUN useradd -ms /bin/bash dev \
- 	&& echo 'dev:1234' | chpasswd \
-	&& usermod -aG sudo dev \
-	&& groupadd -g 973 docker \
-	&& usermod -aG docker dev
-USER dev
+# Ubuntu has a user "ubuntu". We set its password to "1234" and change to that user
+RUN <<EOF
+	echo 'ubuntu:1234' | chpasswd
+	usermod -aG sudo ubuntu
+EOF
+USER ubuntu

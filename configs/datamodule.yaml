@@ -2,5 +2,5 @@ data:
   class_path: tite.datasets.FineWebDataModule
   init_args:
     data_dir: null
-    batch_size: 32
+    batch_size: 64
     num_workers: 4

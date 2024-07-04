@@ -63,6 +63,7 @@ model:
           maskid: 103
           clsid: 101
           sepid: 102
+          mask_prob: 0.3
     predictor:
       tite.predictor.Identity
     loss:
