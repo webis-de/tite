@@ -5,7 +5,7 @@ from lightning import LightningModule, Trainer
 from lightning.fabric.loggers.logger import _DummyExperiment as DummyExperiment
 from lightning.pytorch.cli import LightningCLI, SaveConfigCallback
 from lightning.pytorch.loggers import WandbLogger
-from tite.lr_schedulers import WarmupScheduler
+from tite.lr_schedulers import WarmupScheduler, LR_SCHEDULERS
 from typing_extensions import override
 
 from tite.datasets import FineWebDataModule  # noqa
@@ -52,8 +52,7 @@ class CustomLightningCLI(LightningCLI):
         ]
 
     def add_arguments_to_parser(self, parser):
-        pass
-        # parser.add_lr_scheduler_args(tuple(LR_SCHEDULERS))
+        parser.add_lr_scheduler_args(tuple(LR_SCHEDULERS))
         # parser.link_arguments(
         #     "model.init_args.model_name_or_path", "data.init_args.model_name_or_path"
         # )
