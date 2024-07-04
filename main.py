@@ -5,14 +5,11 @@ from lightning import LightningModule, Trainer
 from lightning.fabric.loggers.logger import _DummyExperiment as DummyExperiment
 from lightning.pytorch.cli import LightningCLI, SaveConfigCallback
 from lightning.pytorch.loggers import WandbLogger
+from tite.lr_schedulers import WarmupScheduler
 from typing_extensions import override
-from tite.model import TiteModule  # noqa
-from tite.datasets import FineWebDataModule  # noqa
 
-# from lightning_ir.lightning_utils.warmup_schedulers import (
-#     LR_SCHEDULERS,
-#     WarmupScheduler,
-# )
+from tite.datasets import FineWebDataModule  # noqa
+from tite.module import TiteModule  # noqa
 
 if torch.cuda.is_available():
     torch.set_float32_matmul_precision("medium")
@@ -41,18 +38,18 @@ class CustomWandbLogger(WandbLogger):
 
 
 class CustomLightningCLI(LightningCLI):
-    # @staticmethod
-    # def configure_optimizers(
-    #     lightning_module: LightningModule,
-    #     optimizer: torch.optim.Optimizer,
-    #     lr_scheduler: WarmupScheduler | None = None,
-    # ) -> Any:
-    #     if lr_scheduler is None:
-    #         return optimizer
+    @staticmethod
+    def configure_optimizers(
+        lightning_module: LightningModule,
+        optimizer: torch.optim.Optimizer,
+        lr_scheduler: WarmupScheduler | None = None,
+    ) -> Any:
+        if lr_scheduler is None:
+            return optimizer
 
-    #     return [optimizer], [
-    #         {"scheduler": lr_scheduler, "interval": lr_scheduler.interval}
-    #     ]
+        return [optimizer], [
+            {"scheduler": lr_scheduler, "interval": lr_scheduler.interval}
+        ]
 
     def add_arguments_to_parser(self, parser):
         pass
