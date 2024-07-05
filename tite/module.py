@@ -49,19 +49,6 @@ class TiteModule(LightningModule):
             self._student, _DetachFromGrad(self._teacher), predictor, loss
         )
 
-    def on_after_backward(self) -> None:
-        nans = []
-        for name, param in list(self._student.named_parameters())[::-1]:
-            if torch.isnan(param.grad).any():
-                nans.append(name)
-        for name, param in list(self._predictor.named_parameters())[::-1]:
-            if torch.isnan(param.grad).any():
-                nans.append(name)
-        for name, param in list(self._teacher.named_parameters())[::-1]:
-            if torch.isnan(param.grad).any():
-                nans.append(name)
-        nans
-
     def training_step(self, batch: dict[str, Any]):
         tokenized = self._tokenizer(
             text=batch[self._text_key],
