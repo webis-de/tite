@@ -66,8 +66,8 @@ class TiteModule(LightningModule):
         return jepa_loss
 
     def save_pretrained(self, save_path: str | Path) -> None:
-        self.model.save_pretrained(save_path)
-        self.tokenizer.save_pretrained(save_path)
+        self._student.save_pretrained(save_path)
+        self._tokenizer.save_pretrained(save_path)
 
     def on_save_checkpoint(self, *args, **kwargs) -> None:
         if self.trainer is not None and self.trainer.log_dir is not None:
