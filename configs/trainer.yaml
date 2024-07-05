@@ -7,11 +7,11 @@ trainer:
   num_nodes: 1
   precision: "bf16-mixed"
   logger:
-    class_path: lightning.pytorch.loggers.WandbLogger
+    class_path: CustomWandbLogger
     init_args:
       project: tite
   callbacks: null
-  max_steps: 10000
+  max_steps: 1000000
   accumulate_grad_batches: 1
   gradient_clip_val: 10
   detect_anomaly: false
