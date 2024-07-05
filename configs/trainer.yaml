@@ -5,11 +5,13 @@ trainer:
   strategy: auto
   devices: auto
   num_nodes: 1
-  precision: "bf16-mixed"
+  precision: bf16-mixed
   logger:
     class_path: CustomWandbLogger
     init_args:
       project: tite
+    dict_kwargs:
+      entity: tite
   callbacks: null
   max_steps: 1000000
   accumulate_grad_batches: 1
