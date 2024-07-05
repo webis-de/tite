@@ -1,12 +1,13 @@
+from pathlib import Path
 from typing import Any
 
-from torch.nn import Module
+import torch
 from lightning import LightningModule
 from torch import Tensor
-import torch
+from torch.nn import Module
 from transformers import PreTrainedTokenizerBase, TensorType
 
-from .jepa import JEPA, Predictor, LossFn
+from .jepa import JEPA, LossFn, Predictor
 from .model import TiteModel
 from .transformations import Transformation
 
@@ -63,6 +64,20 @@ class TiteModule(LightningModule):
         jepa_loss = self._jepa(tokenized, transformed, None)
         self.log_dict({"loss": jepa_loss}, prog_bar=True, on_step=True)
         return jepa_loss
+
+    def save_pretrained(self, save_path: str | Path) -> None:
+        self.model.save_pretrained(save_path)
+        self.tokenizer.save_pretrained(save_path)
+
+    def on_save_checkpoint(self, *args, **kwargs) -> None:
+        if self.trainer is not None and self.trainer.log_dir is not None:
+            if self.trainer.global_rank != 0:
+                return
+            _step = self.trainer.global_step
+            self.config.save_step = _step
+            log_dir = Path(self.trainer.log_dir)
+            save_path = log_dir / "huggingface_checkpoint"
+            self.save_pretrained(save_path)
 
     # def configure_optimizers(self) -> Optimizer:
     #     return AdamW(self._student.parameters())
