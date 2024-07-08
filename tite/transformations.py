@@ -63,7 +63,7 @@ class MaskTokens(Transformation):
     def forward(
         self, input_ids: Tensor, attention_mask: LongTensor, **kwargs
     ) -> list[dict]:
-        mask = torch.rand(attention_mask.shape) < self._mask_prob
+        mask = torch.rand(attention_mask.shape, device=input_ids.device) < self._mask_prob
         mask = mask.logical_and(input_ids != self._cls_id).logical_and(
             input_ids != self._sep_id
         )
