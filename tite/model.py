@@ -238,7 +238,7 @@ class TiteSelfAttention(torch.nn.Module):
         sdpa_attention_mask = (
             (~attention_mask)
             .to(query)
-            .masked_fill(~attention_mask, torch.finfo(query.dtype).min)
+            .masked_fill(~attention_mask, -1e4 if self.training else -float("inf"))
         )
         attn_output = torch.nn.functional.scaled_dot_product_attention(
             query,
