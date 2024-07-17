@@ -66,7 +66,7 @@ class BaseHFDataModule(LightningDataModule):
             .with_format(type="torch")
             .shuffle(buffer_size=10_000, seed=self.hparams["seed"])
         )
-        # Maybe for the future: implement state_dict and load_state_dict
+        # Maybe for the future: implement state_dict and load_state_dict (TODO)
         # self.state_dict = self._dataset.state_dict
         # self.load_state_dict = self._dataset.load_state_dict
 
