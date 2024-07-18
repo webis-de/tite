@@ -47,9 +47,7 @@ class TiteModule(LightningModule):
         self._predictor = predictor
         self._loss = loss
         self._text_key = text_key
-        self._jepa = JEPA(
-            self._student, _DetachFromGrad(self._teacher), predictor, loss
-        )
+        self._jepa = JEPA(self._student, _DetachFromGrad(self._teacher), predictor, loss)
         # Stores the state before the current validation step (or None if currently not in a validation step).
         self.pre_val_state = None
 
@@ -60,7 +58,7 @@ class TiteModule(LightningModule):
         glue = GLUEDataModule()
         trainer = Trainer(
             logger=False,
-            precision="bf16-mixed",
+            precision=(self.trainer.precision if self.trainer is not None else "bf16-mixed"),
             limit_val_batches=0,
             max_epochs=1,
             deterministic=True,
