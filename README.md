@@ -7,3 +7,7 @@
 - [ ] implement AliBI
 - [ ] tie weights in the decoder for BERT (move BERT to new model)
 - [ ] don't save all models in wandb
+
+## Experiment Ideas
+
+- [ ] Remove CLS + SEP tokens
