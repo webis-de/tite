@@ -1,4 +1,5 @@
-from typing import Any
+from pathlib import Path
+from typing import Any, Literal
 
 import torch
 from lightning import LightningModule, Trainer
@@ -9,6 +10,7 @@ from typing_extensions import override
 
 from tite.datasets import FineWebDataModule  # noqa
 from tite.lr_schedulers import LR_SCHEDULERS, WarmupScheduler
+from tite.model import PreTrainedModel, TiteConfig
 
 # from lightning_ir.lightning_utils.warmup_schedulers import (
 #     LR_SCHEDULERS,
@@ -28,6 +30,39 @@ class CustomSaveConfigCallback(SaveConfigCallback):
 
 
 class CustomWandbLogger(WandbLogger):
+    def __init__(
+        self,
+        name: str | None = None,
+        save_dir: str | Path = ".",
+        version: str | None = None,
+        offline: bool = False,
+        dir: str | Path | None = None,
+        id: str | None = None,
+        anonymous: bool | None = None,
+        project: str | None = None,
+        log_model: bool | Literal["all"] = False,
+        experiment: Any | None = None,
+        prefix: str = "",
+        checkpoint_name: str | None = None,
+        **kwargs: Any
+    ) -> None:
+        super().__init__(
+            name,
+            save_dir,
+            version,
+            offline,
+            dir,
+            id,
+            anonymous,
+            project,
+            log_model,
+            experiment,
+            prefix,
+            checkpoint_name,
+            settings={"sync_dir": None, "sync_file": None, "ignore_globs": ["*.ckpt"]},
+            **kwargs
+        )
+
     @property
     def save_dir(self) -> str | None:
         """Gets the save directory.
@@ -57,6 +92,22 @@ class CustomLightningCLI(LightningCLI):
 
     def add_arguments_to_parser(self, parser):
         parser.add_lr_scheduler_args(tuple(LR_SCHEDULERS))
+
+
+class DummyTite(PreTrainedModel):
+    def __init__(self, config: TiteConfig):
+        super().__init__(config)
+        self.config = config
+        self.param = torch.nn.Parameter(torch.Tensor([42]), requires_grad=True)
+        self.register_parameter("super important parameter", self.param)
+        self.post_init()
+
+    def forward(
+        self, input_ids: torch.Tensor, attention_mask: torch.Tensor | None = None
+    ) -> torch.Tensor:
+        return (
+            torch.zeros((input_ids.shape[0], self.config.hidden_size[-1])) + self.param
+        )
 
 
 def main():

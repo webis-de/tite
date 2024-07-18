@@ -2,11 +2,12 @@ from pathlib import Path
 from typing import Any
 
 import torch
-from lightning import LightningModule
+from lightning import LightningModule, Trainer
 from torch import Tensor
 from torch.nn import Module
 from transformers import PreTrainedTokenizerBase, TensorType
 
+from .datasets import GLUEDataModule
 from .jepa import JEPA, LossFn, Predictor
 from .model import TiteModel
 from .transformations import Transformation
@@ -28,7 +29,7 @@ class TiteModule(LightningModule):
 
     def __init__(
         self,
-        student: TiteModel,
+        student: Module,
         teacher: Module | None,
         tokenizer: PreTrainedTokenizerBase,
         transformations: list[Transformation],
@@ -49,6 +50,33 @@ class TiteModule(LightningModule):
         self._jepa = JEPA(
             self._student, _DetachFromGrad(self._teacher), predictor, loss
         )
+        # Stores the state before the current validation step (or None if currently not in a validation step).
+        self.pre_val_state = None
+
+    def on_validation_start(self) -> None:
+        assert self.pre_val_state is None
+        self.pre_val_state = self.state_dict()
+        # Train on GLUE
+        glue = GLUEDataModule()
+        trainer = Trainer(
+            logger=False,
+            precision="bf16-mixed",
+            limit_val_batches=0,
+            max_epochs=1,
+            deterministic=True,
+        )
+        trainer.fit(self, glue)
+
+    def on_validation_end(self) -> None:
+        assert self.pre_val_state is not None
+        # Restore Model to before it was evaluated on GLUE
+        self.load_state_dict(self.pre_val_state)
+        self.pre_val_state = None
+
+    # def validation_step(
+    #    self, *args: Any, **kwargs: Any
+    # ) -> Tensor | Mapping[str, Any] | None:
+    #    return super().validation_step(*args, **kwargs)
 
     def training_step(self, batch: dict[str, Any]):
         tokenized = self._tokenizer(
@@ -73,8 +101,6 @@ class TiteModule(LightningModule):
         if self.trainer is not None and self.trainer.log_dir is not None:
             if self.trainer.global_rank != 0:
                 return
-            _step = self.trainer.global_step
-            self.config.save_step = _step
             log_dir = Path(self.trainer.log_dir)
             save_path = log_dir / "huggingface_checkpoint"
             self.save_pretrained(save_path)
