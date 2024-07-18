@@ -4,7 +4,7 @@ import pytest
 import torch
 from transformers import BertConfig, BertModel
 
-from tite.model import MaskedAvgPool1d, TiteConfig, TiteModel, compute_output_shape
+from tite.model import MaskedAvgPool1d, TiteConfig, TiteModel, compute_output_shapes
 
 
 @pytest.fixture
@@ -18,6 +18,7 @@ def config() -> TiteConfig:
         kernel_size=(8, 8),
         stride=(2, 1),
         max_position_embeddings=16,
+        positional_embedding_type="absolute",
     )
     return config
 
@@ -30,15 +31,17 @@ def test_masked_avg_pool1d(kernel_size: int, stride: int, seq_length: int):
     mask = torch.ones(2, seq_length)
     mask[0, -seq_length // 2 :] = 0
 
-    output_shape = compute_output_shape(seq_length, (kernel_size,), (stride,))
+    output_shapes = compute_output_shapes(seq_length, (kernel_size,), (stride,))
 
     output, output_mask = layer(x, mask)
-    assert output.shape[1] == output_shape
+    assert output.shape[1] == output_shapes[-1]
     assert ((output != 0).all(-1) == output_mask).all()
-    assert output_mask.shape[1] == output_shape
+    assert output_mask.shape[1] == output_shapes[-1]
 
 
-def test_tite_model(config: TiteConfig):
+@pytest.mark.parametrize("positional_embedding_type", ["absolute", "ALiBi"])
+def test_tite_model(config: TiteConfig, positional_embedding_type: str):
+    pytest.MonkeyPatch().setattr(config, "positional_embedding_type", positional_embedding_type)
     model = TiteModel(config)
     input_ids = torch.randint(0, config.vocab_size, (2, config.max_position_embeddings))
     attention_mask = torch.ones_like(input_ids, dtype=torch.bool)
@@ -95,8 +98,4 @@ def test_same_as_bert(config: TiteConfig):
         tite_output = model(input_ids, attention_mask)
         bert_output = bert_model(input_ids, attention_mask)
 
-    assert torch.allclose(
-        tite_output[attention_mask],
-        bert_output.last_hidden_state[attention_mask],
-        atol=1e-3,
-    )
+    assert torch.allclose(tite_output[attention_mask], bert_output.last_hidden_state[attention_mask], atol=1e-6)

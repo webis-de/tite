@@ -1,11 +1,15 @@
+import math
 import warnings
-from typing import Tuple
+from typing import List, Literal, Tuple
 
 import torch
 from einops import rearrange, repeat
 from transformers import PretrainedConfig, PreTrainedModel
 from transformers.activations import ACT2FN
 from transformers.modeling_utils import apply_chunking_to_forward
+
+# unpad from
+# https://github.com/mosaicml/examples/blob/daddaeff7a535273ff984b0134da4839c70a45b3/examples/benchmarks/bert/src/bert_padding.py
 
 
 class IndexFirstAxis(torch.autograd.Function):
@@ -100,17 +104,15 @@ def ceil_div(a: int, b: int) -> int:
     return -(-a // b)
 
 
-def compute_output_shape(
-    input_shape: int,
-    kernel_size: Tuple[int | None, ...],
-    stride: Tuple[int | None, ...],
-) -> int:
-    output_shape = input_shape
+def compute_output_shapes(
+    input_shape: int, kernel_size: Tuple[int | None, ...], stride: Tuple[int | None, ...]
+) -> List[int]:
+    output_shapes = [input_shape]
     for k, s in zip(kernel_size, stride):
         if k is None or s is None:
             continue
-        output_shape = ceil_div((max(0, output_shape - k)), s) + 1
-    return output_shape
+        output_shapes.append(ceil_div((max(0, output_shapes[-1] - k)), s) + 1)
+    return output_shapes
 
 
 class TiteConfig(PretrainedConfig):
@@ -129,6 +131,7 @@ class TiteConfig(PretrainedConfig):
         layer_norm_eps: float = 1e-12,
         pad_token_id: int = 0,
         hidden_act: str = "gelu_new",
+        positional_embedding_type: Literal["absolute", "ALiBi"] = "ALiBi",
         **kwargs,
     ):
         super().__init__(pad_token_id=pad_token_id, **kwargs)
@@ -144,6 +147,7 @@ class TiteConfig(PretrainedConfig):
         self.initializer_range = initializer_range
         self.layer_norm_eps = layer_norm_eps
         self.hidden_act = hidden_act
+        self.positional_embedding_type = positional_embedding_type
 
         iterator = zip(
             [
@@ -165,12 +169,15 @@ class TiteConfig(PretrainedConfig):
         if all(k is None and s is None for k, s in zip(kernel_size, stride)):
             warnings.warn("No pooling layers are used. The output shape will be the same as" " the input shape.")
         else:
-            output_shape = compute_output_shape(max_position_embeddings, kernel_size, stride)
-            if output_shape != 1:
+            if self.output_shapes[-1] != 1:
                 raise ValueError(
                     "Output shape with input of maximum sequence length is not 1. "
                     "Please adjust kernel_size and stride."
                 )
+
+    @property
+    def output_shapes(self) -> List[int]:
+        return compute_output_shapes(self.max_position_embeddings, self.kernel_size, self.stride)
 
 
 class TiteModel(PreTrainedModel):
@@ -211,15 +218,20 @@ class TiteEmbeddings(torch.nn.Module):
     def __init__(self, config: TiteConfig):
         super().__init__()
         hidden_size = config.hidden_size[0]
+        self.num_attention_heads = config.num_attention_heads
         self.word_embeddings = torch.nn.Embedding(config.vocab_size, hidden_size)
-        self.position_embeddings = torch.nn.Embedding(config.max_position_embeddings, hidden_size)
+        self.position_embeddings = None
+        if config.positional_embedding_type == "absolute":
+            self.position_embeddings = torch.nn.Embedding(config.max_position_embeddings, hidden_size)
         self.LayerNorm = torch.nn.LayerNorm(hidden_size, eps=config.layer_norm_eps)
         self.dropout = torch.nn.Dropout(config.dropout_prob)
 
     def forward(self, input_ids: torch.Tensor) -> torch.Tensor:
-        embeddings = self.word_embeddings(input_ids) + self.position_embeddings(
-            torch.arange(input_ids.shape[1], device=input_ids.device)
-        )
+        embeddings = self.word_embeddings(input_ids)
+        if self.position_embeddings is not None:
+            embeddings = embeddings + self.position_embeddings(
+                torch.arange(input_ids.shape[1], device=input_ids.device)
+            )
         embeddings = self.LayerNorm(embeddings)
         embeddings = self.dropout(embeddings)
         return embeddings
@@ -270,6 +282,52 @@ class TiteSelfAttention(torch.nn.Module):
         self.Wqkv = torch.nn.Linear(hidden_size, 3 * self.all_head_size)
 
         self.dropout_prob = config.dropout_prob
+        if config.positional_embedding_type == "ALiBi":
+            self.register_buffer(
+                "alibi", self.get_alibi_embeddings(config.output_shapes[layer_idx], self.num_attention_heads)
+            )
+        else:
+            self.alibi = None
+
+    def get_alibi_embeddings(self, max_position_embeddings: int, num_attention_heads: int) -> torch.Tensor:
+        # https://github.com/mosaicml/examples/blob/daddaeff7a535273ff984b0134da4839c70a45b3/examples/benchmarks/bert/src/bert_layers.py#L432
+        # ALiBi
+        # Following https://github.com/ofirpress/attention_with_linear_biases/issues/5 (Implementation 1)
+        # In the causal case, you can exploit the fact that softmax is invariant to a uniform translation
+        # of the logits, which makes the math work out *after* applying causal masking. If no causal masking
+        # will be applied, it is necessary to construct the diagonal mask.
+        def _get_alibi_head_slopes(num_attention_heads: int) -> List[float]:
+
+            def get_slopes_power_of_2(num_attention_heads: int) -> List[float]:
+                start = 2 ** (-(2 ** -(math.log2(num_attention_heads) - 3)))
+                ratio = start
+                return [start * ratio**i for i in range(num_attention_heads)]
+
+            # In the paper, they only train models that have 2^a heads for some a. This function
+            # has some good properties that only occur when the input is a power of 2. To
+            # maintain that even when the number of heads is not a power of 2, we use a
+            # workaround.
+            if math.log2(num_attention_heads).is_integer():
+                return get_slopes_power_of_2(num_attention_heads)
+
+            closest_power_of_2 = 2 ** math.floor(math.log2(num_attention_heads))
+            slopes_a = get_slopes_power_of_2(closest_power_of_2)
+            slopes_b = _get_alibi_head_slopes(2 * closest_power_of_2)
+            slopes_b = slopes_b[0::2][: num_attention_heads - closest_power_of_2]
+            return slopes_a + slopes_b
+
+        context_position = torch.arange(max_position_embeddings)[:, None]
+        memory_position = torch.arange(max_position_embeddings)[None, :]
+        relative_position = torch.abs(memory_position - context_position)
+        # [num_attention_heads, max_token_length, max_token_length]
+        relative_position = relative_position.unsqueeze(0).expand(num_attention_heads, -1, -1)
+        slopes = torch.Tensor(_get_alibi_head_slopes(num_attention_heads))
+        alibi = slopes.unsqueeze(1).unsqueeze(1) * -relative_position
+        # [1, num_attention_heads, max_token_length, max_token_length]
+        alibi = alibi.unsqueeze(0)
+        assert alibi.shape == torch.Size([1, num_attention_heads, max_position_embeddings, max_position_embeddings])
+
+        return alibi
 
     def forward(self, hidden_states: torch.Tensor, attention_mask: torch.Tensor, indices: torch.Tensor) -> torch.Tensor:
         unpad_hidden_states = unpad(hidden_states, indices)
@@ -281,13 +339,12 @@ class TiteSelfAttention(torch.nn.Module):
         query = qkv[0]
         key = qkv[1]
         value = qkv[2]
-        sdpa_attention_mask = (
-            ((~attention_mask).to(query).masked_fill(~attention_mask, -1e4 if self.training else -float("inf")))
-            .unsqueeze(1)
-            .unsqueeze(-1)
-        )
+        attention_mask = attention_mask.unsqueeze(1).unsqueeze(2)
+        attention_mask = (1.0 - attention_mask.to(hidden_states)) * -10000.0
+        if self.alibi is not None:
+            attention_mask = attention_mask + self.alibi[:, :, :seq_len, :seq_len]
         attn_output = torch.nn.functional.scaled_dot_product_attention(
-            query, key, value, sdpa_attention_mask, self.dropout_prob if self.training else 0.0
+            query, key, value, attention_mask, self.dropout_prob if self.training else 0.0
         )
 
         attn_output = attn_output.transpose(1, 2)
@@ -372,9 +429,9 @@ class TiteLayer(torch.nn.Module):
         if kernel_size is not None and stride is not None:
             self.pooling = MaskedAvgPool1d(kernel_size, stride)
 
-    def forward(
-        self, hidden_states: torch.Tensor, attention_mask: torch.Tensor, indices: torch.Tensor
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
+    def forward(self, hidden_states: torch.Tensor, attention_mask: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+        indices = torch.nonzero(attention_mask.flatten(), as_tuple=False).flatten()
+        batch_size, seq_len = hidden_states.shape[:2]
         attn_output = self.attention(hidden_states, attention_mask, indices)
         attn_output = unpad(attn_output, indices)
         layer_output = apply_chunking_to_forward(
@@ -383,7 +440,6 @@ class TiteLayer(torch.nn.Module):
             self.seq_len_dim,
             attn_output,
         )
-        batch_size, seq_len = hidden_states.shape[:2]
         layer_output = re_pad(layer_output, indices, batch_size, seq_len)
         if self.pooling is not None:
             layer_output, attention_mask = self.pooling(layer_output, attention_mask)
@@ -404,7 +460,6 @@ class TiteEncoder(torch.nn.Module):
         )
 
     def forward(self, hidden_states: torch.Tensor, attention_mask: torch.Tensor) -> torch.Tensor:
-        indices = torch.nonzero(attention_mask.flatten(), as_tuple=False).flatten()
         for layer_idx, layer_module in enumerate(self.layer):
-            hidden_states, attention_mask = layer_module(hidden_states, attention_mask, indices)
+            hidden_states, attention_mask = layer_module(hidden_states, attention_mask)
         return hidden_states
