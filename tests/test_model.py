@@ -66,16 +66,30 @@ def test_same_as_bert(config: TiteConfig):
     bert_model.embeddings.token_type_embeddings.weight.data.zero_()
 
     missing_keys = []
+    qkv_weight = []
+    qkv_bias = []
     for key, value in bert_model.state_dict().items():
         if key in model.state_dict():
             model.state_dict()[key].copy_(value)
         else:
-            missing_keys.append(key)
+            if "query" in key or "key" in key or "value" in key:
+                if "weight" in key:
+                    qkv_weight.append(value)
+                else:
+                    qkv_bias.append(value)
+            else:
+                missing_keys.append(key)
+            if "value" in key:
+                if "weight" in key:
+                    model.state_dict()[key.replace("value", "Wqkv")].copy_(torch.cat(qkv_weight, 0))
+                    qkv_weight = []
+                if "bias" in key:
+                    model.state_dict()[key.replace("value", "Wqkv")].copy_(torch.cat(qkv_bias, 0))
+                    qkv_bias = []
     input_ids = torch.randint(0, config.vocab_size, (2, config.max_position_embeddings))
 
     attention_mask = torch.ones_like(input_ids, dtype=torch.bool)
     attention_mask[1, -config.max_position_embeddings // 2 :] = False
-    attention_mask = None
 
     with torch.no_grad():
         tite_output = model(input_ids, attention_mask)

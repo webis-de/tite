@@ -1,21 +1,99 @@
 import warnings
-from typing import List, Sequence, Tuple
+from typing import Tuple
 
 import torch
+from einops import rearrange, repeat
 from transformers import PretrainedConfig, PreTrainedModel
 from transformers.activations import ACT2FN
 from transformers.modeling_utils import apply_chunking_to_forward
 
 
-def unpad(x: torch.Tensor, mask: torch.Tensor) -> Tuple[torch.Tensor, List[int]]:
-    mask = mask.expand(x.shape[:-1])
-    seq_lengths = mask.sum(1).detach().cpu().tolist()
-    x = x[mask]
-    return x, seq_lengths
+class IndexFirstAxis(torch.autograd.Function):
+
+    @staticmethod
+    def forward(ctx, input: torch.Tensor, indices: torch.Tensor) -> torch.Tensor:
+        ctx.save_for_backward(indices)
+        assert input.ndim >= 2
+        ctx.first_axis_dim, other_shape = input.shape[0], input.shape[1:]  # type: ignore
+        second_dim = other_shape.numel()  # product of sizes of all but first dimension
+        # TD [2022-03-04] For some reason torch.gather is a bit faster than indexing.
+        return torch.gather(
+            rearrange(input, "b ... -> b (...)"),  # (b, ...) -> (b, second_dim)
+            0,
+            repeat(indices, "z -> z d", d=second_dim),  # (indices,) -> (indices, second_dim)
+        ).reshape(
+            -1, *other_shape
+        )  # (num_idx, ...)
+
+    @staticmethod
+    def backward(ctx, grad_output: torch.Tensor) -> Tuple[torch.Tensor, None]:
+        (indices,) = ctx.saved_tensors
+        assert grad_output.ndim >= 2
+        other_shape = grad_output.shape[1:]
+        grad_output = rearrange(grad_output, "b ... -> b (...)")
+        grad_input = torch.zeros(
+            [ctx.first_axis_dim, grad_output.shape[1]], device=grad_output.device, dtype=grad_output.dtype
+        )
+        # TD [2022-03-04] For some reason torch.scatter is a bit faster than indexing.
+        # grad_input[indices] = grad_output
+        grad_input.scatter_(0, repeat(indices, "z -> z d", d=grad_output.shape[1]), grad_output)
+        return grad_input.reshape(ctx.first_axis_dim, *other_shape), None
 
 
-def re_pad(x: torch.Tensor, seq_lengths: Sequence[int]) -> torch.Tensor:
-    return torch.nn.utils.rnn.pad_sequence(x.split(seq_lengths), batch_first=True)
+index_first_axis = IndexFirstAxis.apply
+
+
+class IndexPutFirstAxis(torch.autograd.Function):
+
+    @staticmethod
+    def forward(ctx, values: torch.Tensor, indices: torch.Tensor, first_axis_dim) -> torch.Tensor:
+        ctx.save_for_backward(indices)
+        assert indices.ndim == 1
+        assert values.ndim >= 2
+        output = torch.zeros(first_axis_dim, *values.shape[1:], device=values.device, dtype=values.dtype)
+        output[indices] = values
+        return output
+
+    @staticmethod
+    def backward(ctx, grad_output: torch.Tensor) -> Tuple[torch.Tensor, None, None]:
+        (indices,) = ctx.saved_tensors
+        grad_values = grad_output[indices]
+        return grad_values, None, None
+
+
+index_put_first_axis = IndexPutFirstAxis.apply
+
+
+def unpad(hidden_states: torch.Tensor, indices: torch.Tensor) -> torch.Tensor:
+    """Like unpad_input, but only return the unpadded first tensor.
+
+    Save a small amount of overhead.
+
+    Arguments:
+        hidden_states: (batch, seqlen, ...)
+        attention_mask: (batch, seqlen), bool / int, 1 means valid and 0 means not valid.
+
+    Returns:
+        hidden_states: (total_nnz, ...), where total_nnz = number of tokens in selected in attention_mask.
+    """
+    rearranged = rearrange(hidden_states, "b s ... -> (b s) ...")
+    return index_first_axis(rearranged, indices)  # type: ignore
+
+
+def re_pad(hidden_states: torch.Tensor, indices: torch.Tensor, batch: int, seqlen: int) -> torch.Tensor:
+    """Add padding to sequences.
+
+    Arguments:
+        hidden_states: (total_nnz, ...), where total_nnz = number of tokens in selected in attention_mask.
+        indices: (total_nnz)
+        batch: int batch_size
+        seqlen: int max sequence length
+
+    Returns:
+        hidden_states: (batch, seqlen, ...)
+    """
+    output = index_put_first_axis(hidden_states, indices, batch * seqlen)
+    return rearrange(output, "(b s) ... -> b s ...", b=batch)  # type: ignore
 
 
 def ceil_div(a: int, b: int) -> int:
@@ -189,36 +267,27 @@ class TiteSelfAttention(torch.nn.Module):
         self.attention_head_size = int(hidden_size / num_attention_heads)
         self.all_head_size = self.num_attention_heads * self.attention_head_size
 
-        self.query = torch.nn.Linear(hidden_size, self.all_head_size)
-        self.key = torch.nn.Linear(hidden_size, self.all_head_size)
-        self.value = torch.nn.Linear(hidden_size, self.all_head_size)
+        self.Wqkv = torch.nn.Linear(hidden_size, 3 * self.all_head_size)
 
         self.dropout_prob = config.dropout_prob
 
-    def transpose_for_scores(self, x: torch.Tensor) -> torch.Tensor:
-        new_x_shape = x.size()[:-1] + (
-            self.num_attention_heads,
-            self.attention_head_size,
-        )
-        x = x.view(new_x_shape)
-        return x.permute(0, 2, 1, 3)
+    def forward(self, hidden_states: torch.Tensor, attention_mask: torch.Tensor, indices: torch.Tensor) -> torch.Tensor:
+        unpad_hidden_states = unpad(hidden_states, indices)
+        batch_size, seq_len = hidden_states.shape[:2]
+        qkv = re_pad(self.Wqkv(unpad_hidden_states), indices, batch_size, seq_len)
+        qkv = rearrange(qkv, "b s (t h d) -> b s t h d", t=3, h=self.num_attention_heads)
+        qkv = qkv.permute(2, 0, 3, 1, 4)
 
-    def forward(self, hidden_states: torch.Tensor, attention_mask: torch.Tensor) -> torch.Tensor:
-        unpad_hidden_states, seq_lengths = unpad(hidden_states, attention_mask)
-        query = self.transpose_for_scores(re_pad(self.query(unpad_hidden_states), seq_lengths))
-        key = self.transpose_for_scores(re_pad(self.key(unpad_hidden_states), seq_lengths))
-        value = self.transpose_for_scores(re_pad(self.value(unpad_hidden_states), seq_lengths))
-
-        attention_mask = attention_mask.unsqueeze(1).unsqueeze(-1)
+        query = qkv[0]
+        key = qkv[1]
+        value = qkv[2]
         sdpa_attention_mask = (
-            (~attention_mask).to(query).masked_fill(~attention_mask, -1e4 if self.training else -float("inf"))
+            ((~attention_mask).to(query).masked_fill(~attention_mask, -1e4 if self.training else -float("inf")))
+            .unsqueeze(1)
+            .unsqueeze(-1)
         )
         attn_output = torch.nn.functional.scaled_dot_product_attention(
-            query,
-            key,
-            value,
-            sdpa_attention_mask,
-            self.dropout_prob if self.training else 0.0,
+            query, key, value, sdpa_attention_mask, self.dropout_prob if self.training else 0.0
         )
 
         attn_output = attn_output.transpose(1, 2)
@@ -251,8 +320,9 @@ class TiteAttention(torch.nn.Module):
         self,
         hidden_states: torch.Tensor,
         attention_mask: torch.Tensor,
+        indices: torch.Tensor,
     ) -> torch.Tensor:
-        self_outputs = self.self(hidden_states, attention_mask)
+        self_outputs = self.self(hidden_states, attention_mask, indices)
         attn_output = self.output(self_outputs, hidden_states)
         return attn_output
 
@@ -302,16 +372,19 @@ class TiteLayer(torch.nn.Module):
         if kernel_size is not None and stride is not None:
             self.pooling = MaskedAvgPool1d(kernel_size, stride)
 
-    def forward(self, hidden_states: torch.Tensor, attention_mask: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
-        attn_output = self.attention(hidden_states, attention_mask)
-        attn_output, seq_lengths = unpad(attn_output, attention_mask)
+    def forward(
+        self, hidden_states: torch.Tensor, attention_mask: torch.Tensor, indices: torch.Tensor
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        attn_output = self.attention(hidden_states, attention_mask, indices)
+        attn_output = unpad(attn_output, indices)
         layer_output = apply_chunking_to_forward(
             self.feed_forward_chunk,
             self.chunk_size_feed_forward,
             self.seq_len_dim,
             attn_output,
         )
-        layer_output = re_pad(layer_output, seq_lengths)
+        batch_size, seq_len = hidden_states.shape[:2]
+        layer_output = re_pad(layer_output, indices, batch_size, seq_len)
         if self.pooling is not None:
             layer_output, attention_mask = self.pooling(layer_output, attention_mask)
         return layer_output, attention_mask
@@ -331,6 +404,7 @@ class TiteEncoder(torch.nn.Module):
         )
 
     def forward(self, hidden_states: torch.Tensor, attention_mask: torch.Tensor) -> torch.Tensor:
+        indices = torch.nonzero(attention_mask.flatten(), as_tuple=False).flatten()
         for layer_idx, layer_module in enumerate(self.layer):
-            hidden_states, attention_mask = layer_module(hidden_states, attention_mask)
+            hidden_states, attention_mask = layer_module(hidden_states, attention_mask, indices)
         return hidden_states
