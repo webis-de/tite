@@ -1,7 +1,6 @@
 from pathlib import Path
 from typing import Any
 
-import torch
 from lightning import LightningModule, Trainer
 from torch import Tensor
 from torch.nn import Module
@@ -9,7 +8,6 @@ from transformers import PreTrainedTokenizerBase, TensorType
 
 from .datasets import GLUEDataModule
 from .jepa import JEPA, LossFn, Predictor
-from .model import TiteModel
 from .transformations import Transformation
 
 
@@ -40,6 +38,7 @@ class TiteModule(LightningModule):
         super().__init__()
         if teacher is None:
             teacher = student
+        # ties weights for BERT models -- only works for teacher MLM and student BERT
         if hasattr(student, "tie_decoder_weights") and teacher is not None:
             student.tie_decoder_weights(teacher)
         self._student = student
