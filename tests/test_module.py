@@ -1,15 +1,16 @@
 from pathlib import Path
 
 import pytest
-
 from torch.nn import Module
+
+from tite.bert import BertConfig, BertModel
+from tite.loss import BarlowTwins, MLMCrossEntropy
 from tite.model import TiteConfig, TiteModel
 from tite.module import TiteModule
-from tite.predictor import MLMDecoder, Identity
+from tite.predictor import Identity, MLMDecoder
 from tite.teacher import MLMPredictor
 from tite.tokenizer import TiteTokenizer
 from tite.transformations import MaskTokens, Transformation
-from tite.loss import MLMCrossEntropy, BarlowTwins
 
 DATA_DIR = Path(__file__).parent / "data"
 
@@ -32,14 +33,12 @@ def config() -> TiteConfig:
     "config,teacher,predictor,transformation,loss",
     [
         (
-            TiteConfig(
+            BertConfig(
                 vocab_size=32,
                 num_hidden_layers=2,
-                hidden_size=(4, 4),
-                num_attention_heads=(2, 2),
-                intermediate_size=(8, 8),
-                kernel_size=(None, None),
-                stride=(None, None),
+                hidden_size=4,
+                num_attention_heads=2,
+                intermediate_size=8,
                 max_position_embeddings=16,
             ),
             MLMPredictor(0),
@@ -64,6 +63,7 @@ def config() -> TiteConfig:
             BarlowTwins(0.1, 4),
         ),
     ],
+    ids=["bert", "tite"],
 )
 def test_training_step(
     config: TiteConfig,
@@ -72,7 +72,10 @@ def test_training_step(
     transformation: Transformation,
     loss: Module,
 ):
-    student = TiteModel(config)
+    if isinstance(config, BertConfig):
+        student = BertModel(config, predictor)
+    else:
+        student = TiteModel(config)
     tokenizer_dir = DATA_DIR / "tokenizer"
     tokenizer = TiteTokenizer(
         str(tokenizer_dir / "vocab.txt"),

@@ -40,6 +40,8 @@ class TiteModule(LightningModule):
         super().__init__()
         if teacher is None:
             teacher = student
+        if hasattr(student, "tie_decoder_weights") and teacher is not None:
+            student.tie_decoder_weights(teacher)
         self._student = student
         self._teacher = teacher
         self._tokenizer = tokenizer

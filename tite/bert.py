@@ -1,6 +1,6 @@
-from typing import Tuple
-
 from torch import Tensor
+from torch.nn import Module
+
 from .model import TiteConfig, TiteModel
 
 
@@ -44,7 +44,14 @@ class BertModel(TiteModel):
     def __init__(self, config: BertConfig):
         super().__init__(config)
 
-    def forward(
-        self, input_ids: Tensor, attention_mask: Tensor | None = None
-    ) -> Tensor:
+    def get_input_embeddings(self):
+        return self.embeddings.word_embeddings
+
+    def set_input_embeddings(self, value):
+        self.embeddings.word_embeddings = value
+
+    def tie_decoder_weights(self, output_embeddings: Module):
+        self._tie_or_clone_weights(output_embeddings, self.get_input_embeddings())
+
+    def forward(self, input_ids: Tensor, attention_mask: Tensor | None = None) -> Tensor:
         return super().forward(input_ids, attention_mask)

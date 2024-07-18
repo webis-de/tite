@@ -12,17 +12,7 @@ class GELUActivation(Module):
     """
 
     def forward(self, input: Tensor) -> Tensor:
-        return (
-            0.5
-            * input
-            * (
-                1.0
-                + torch.tanh(
-                    math.sqrt(2.0 / math.pi)
-                    * (input + 0.044715 * torch.pow(input, 3.0))
-                )
-            )
-        )
+        return 0.5 * input * (1.0 + torch.tanh(math.sqrt(2.0 / math.pi) * (input + 0.044715 * torch.pow(input, 3.0))))
 
 
 class MLMDecoder(Module):
@@ -32,6 +22,11 @@ class MLMDecoder(Module):
         self.transform_act_fn = GELUActivation()
         self.LayerNorm = torch.nn.LayerNorm(hidden_size, eps=1e-12)
         self.decoder = torch.nn.Linear(hidden_size, vocab_size)
+
+        self.bias = torch.nn.Parameter(torch.zeros(vocab_size))
+
+    def _tie_weights(self):
+        self.decoder.bias = self.bias
 
     def forward(self, hidden_states: torch.Tensor, *args, **kwargs) -> torch.Tensor:
         hidden_states = self.dense(hidden_states)
