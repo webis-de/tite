@@ -14,7 +14,6 @@ def _seed_or_none(seed: int | None = None) -> int | None:
 
 
 class BaseHFDataModule(LightningDataModule):
-
     def __init__(
         self,
         path: str,

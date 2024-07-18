@@ -86,9 +86,7 @@ class CustomLightningCLI(LightningCLI):
         if lr_scheduler is None:
             return optimizer
 
-        return [optimizer], [
-            {"scheduler": lr_scheduler, "interval": lr_scheduler.interval}
-        ]
+        return [optimizer], [{"scheduler": lr_scheduler, "interval": lr_scheduler.interval}]
 
     def add_arguments_to_parser(self, parser):
         parser.add_lr_scheduler_args(tuple(LR_SCHEDULERS))
@@ -102,12 +100,8 @@ class DummyTite(PreTrainedModel):
         self.register_parameter("super important parameter", self.param)
         self.post_init()
 
-    def forward(
-        self, input_ids: torch.Tensor, attention_mask: torch.Tensor | None = None
-    ) -> torch.Tensor:
-        return (
-            torch.zeros((input_ids.shape[0], self.config.hidden_size[-1])) + self.param
-        )
+    def forward(self, input_ids: torch.Tensor, attention_mask: torch.Tensor | None = None) -> torch.Tensor:
+        return torch.zeros((input_ids.shape[0], self.config.hidden_size[-1])) + self.param
 
 
 def main():

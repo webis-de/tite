@@ -8,7 +8,6 @@ from tite.module import TiteModule
 
 
 class TiteModuleTest(unittest.TestCase):
-
     def test_training_step(self):
         student = MagicMock(return_value=torch.rand(3, 768))
         tokenizer_out = {"input_ids": torch.rand(3, 5)}

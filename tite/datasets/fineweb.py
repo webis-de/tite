@@ -17,7 +17,6 @@ class FWBatch(NamedTuple):
 
 
 class FineWebDataModule(BaseHFDataModule):
-
     def __init__(self, name: str = "CC-MAIN-2024-10", **kwargs) -> None:
         """
         Args:

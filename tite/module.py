@@ -12,7 +12,6 @@ from .transformations import Transformation
 
 
 class _DetachFromGrad(Module):
-
     def __init__(self, module: Module, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
         self._module = module
@@ -24,7 +23,6 @@ class _DetachFromGrad(Module):
 
 
 class TiteModule(LightningModule):
-
     def __init__(
         self,
         student: Module,

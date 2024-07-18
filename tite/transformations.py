@@ -2,8 +2,8 @@ from random import sample
 from typing import Any
 
 import torch
-from torch.nn import Module
 from torch import LongTensor, Tensor
+from torch.nn import Module
 
 
 class Transformation(Module):
@@ -27,15 +27,10 @@ class SwapTokens(Transformation):
         assert not isinstance(num_swaps, float) or num_swaps <= 1
         self._nswaps = num_swaps
 
-    def forward(
-        self, input_ids: Tensor, attention_mask: LongTensor, **kwargs
-    ) -> list[dict]:
+    def forward(self, input_ids: Tensor, attention_mask: LongTensor, **kwargs) -> list[dict]:
         inputlen = attention_mask.sum(-1)
         B, L = input_ids.shape
-        nswaps = torch.ceil(
-            (torch.ones(B) if isinstance(self._nswaps, int) else inputlen)
-            * self._nswaps
-        ).int()
+        nswaps = torch.ceil((torch.ones(B) if isinstance(self._nswaps, int) else inputlen) * self._nswaps).int()
         idx = torch.repeat_interleave(torch.arange(B), nswaps)
         randmin = idx * L
         randmax = idx * L + inputlen[idx] - 1
@@ -51,22 +46,16 @@ class SwapTokens(Transformation):
 
 
 class MaskTokens(Transformation):
-    def __init__(
-        self, maskid: int, clsid: int, sepid: int, mask_prob: float = 0.3
-    ) -> None:
+    def __init__(self, maskid: int, clsid: int, sepid: int, mask_prob: float = 0.3) -> None:
         super().__init__()
         self._maskid = maskid
         self._cls_id = clsid
         self._sep_id = sepid
         self._mask_prob = mask_prob
 
-    def forward(
-        self, input_ids: Tensor, attention_mask: LongTensor, **kwargs
-    ) -> list[dict]:
+    def forward(self, input_ids: Tensor, attention_mask: LongTensor, **kwargs) -> list[dict]:
         mask = torch.rand(attention_mask.shape, device=input_ids.device) < self._mask_prob
-        mask = mask.logical_and(input_ids != self._cls_id).logical_and(
-            input_ids != self._sep_id
-        )
+        mask = mask.logical_and(input_ids != self._cls_id).logical_and(input_ids != self._sep_id)
         input_ids = torch.masked_fill(input_ids, mask, self._maskid)
         return [{"input_ids": input_ids, "attention_mask": attention_mask}]
 
@@ -87,15 +76,10 @@ class HardMaskTokens:
 
 
 class RandomTransformation(Transformation):
-
     def __init__(self, transformations: list[Transformation], numsamples: int) -> None:
         super().__init__()
         self._transformations = transformations
         self._num = numsamples
 
     def __call__(self, *args: Any, **kwds: Any) -> list[dict]:
-        return [
-            t
-            for trans in sample(self._transformations, self._num)
-            for t in trans(*args, **kwds)
-        ]
+        return [t for trans in sample(self._transformations, self._num) for t in trans(*args, **kwds)]

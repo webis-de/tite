@@ -23,7 +23,6 @@ LossFn = Callable[[Any, Any], Any]
 
 
 class JEPA(Module):
-
     def __init__(
         self,
         student: Encoder,
@@ -58,9 +57,7 @@ class TJEPA(LightningModule):
     def forward(self, *args, **kwargs):
         self.student.forward(*args, **kwargs)
 
-    def training_step(
-        self, batch: MaskCollatorBatch
-    ) -> Tensor | Mapping[str, Any] | None:
+    def training_step(self, batch: MaskCollatorBatch) -> Tensor | Mapping[str, Any] | None:
         print(batch.ctxt_attn_mask)
         print(batch.pred_attn_mask)
         raise NotImplementedError()
@@ -100,14 +97,10 @@ class MaskCollator:
         """
         maxseq = torch.max(seqlen)
         idx = torch.arange(maxseq).unsqueeze(0).expand(len(idx_min), -1)
-        return torch.logical_and(
-            idx >= idx_min.unsqueeze(-1), idx < idx_max.unsqueeze(-1)
-        )
+        return torch.logical_and(idx >= idx_min.unsqueeze(-1), idx < idx_max.unsqueeze(-1))
 
     @staticmethod
-    def _sample_chunks(
-        scale: tuple[float, float], seqlen: Tensor
-    ) -> tuple[Tensor, Tensor]:
+    def _sample_chunks(scale: tuple[float, float], seqlen: Tensor) -> tuple[Tensor, Tensor]:
         """Samples a chunk for each entry in `seqlen`.
 
         Args:
@@ -127,22 +120,16 @@ class MaskCollator:
 
     def _sample_mask(self, attn_mask: Tensor) -> tuple[Tensor, Tensor]:
         # 1) Compute the length of each input sequence
-        seqlen = attn_mask.sum(
-            dim=1
-        )  # NOTE: we assume here that attn_mask contains only 1s for each input token
+        seqlen = attn_mask.sum(dim=1)  # NOTE: we assume here that attn_mask contains only 1s for each input token
         # 2) Sample `self._num_pred_blocks` prediction blocks
         pred_blocks = torch.stack(
             [
-                MaskCollator._to_mask(
-                    *MaskCollator._sample_chunks(self._pred_mask_ratio, seqlen), seqlen
-                )
+                MaskCollator._to_mask(*MaskCollator._sample_chunks(self._pred_mask_ratio, seqlen), seqlen)
                 for _ in range(self._num_pred_blocks)
             ]
         )
         # 3) Sample a single context block
-        ctxt_block = MaskCollator._to_mask(
-            *MaskCollator._sample_chunks(self._ctxt_mask_ratio, seqlen), seqlen
-        )
+        ctxt_block = MaskCollator._to_mask(*MaskCollator._sample_chunks(self._ctxt_mask_ratio, seqlen), seqlen)
         # 4) Remove prediction blocks from the context block
         not_pred = reduce(torch.logical_or, pred_blocks).logical_not()
         ctxt_block = attn_mask.logical_and(ctxt_block.logical_and(not_pred))
@@ -161,9 +148,7 @@ class MaskCollator:
             tuple[Tensor, Tensor, Tensor, list[Any]]: A quadrupel of the collated token ids, context attention mask,
             prediction attention mask, and meta information
         """
-        texts, meta = zip(
-            *((d[self._text_key], [d[k] for k in self._meta_keys]) for d in batch)
-        )
+        texts, meta = zip(*((d[self._text_key], [d[k] for k in self._meta_keys]) for d in batch))
         tokenized = self._tokenizer(
             text=texts,
             return_attention_mask=True,

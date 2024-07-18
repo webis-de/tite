@@ -3,7 +3,6 @@ from torch.nn import Module
 
 
 class Identity(Module):
-
     def __init__(self) -> None:
         super().__init__()
 
@@ -12,7 +11,6 @@ class Identity(Module):
 
 
 class MLMPredictor(Module):
-
     def __init__(self, padid: int) -> None:
         super().__init__()
         self._pad_id = padid

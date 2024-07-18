@@ -2,7 +2,6 @@ from transformers import BertTokenizerFast
 
 
 class TiteTokenizer(BertTokenizerFast):
-
     def __init__(
         self,
         vocab_file: str,

@@ -1,14 +1,10 @@
+from copy import deepcopy
+
 import pytest
 import torch
 from transformers import BertConfig, BertModel
-from copy import deepcopy
 
-from tite.model import (
-    MaskedAvgPool1d,
-    TiteConfig,
-    TiteModel,
-    compute_output_shape,
-)
+from tite.model import MaskedAvgPool1d, TiteConfig, TiteModel, compute_output_shape
 
 
 @pytest.fixture
@@ -26,9 +22,7 @@ def config() -> TiteConfig:
     return config
 
 
-@pytest.mark.parametrize(
-    "kernel_size, stride, seq_length", [(3, 1, 8), (3, 2, 8), (3, 3, 8)]
-)
+@pytest.mark.parametrize("kernel_size, stride, seq_length", [(3, 1, 8), (3, 2, 8), (3, 3, 8)])
 def test_masked_avg_pool1d(kernel_size: int, stride: int, seq_length: int):
     layer = MaskedAvgPool1d(kernel_size, stride)
 

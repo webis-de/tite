@@ -5,7 +5,6 @@ from .model import TiteConfig, TiteModel
 
 
 class BertConfig(TiteConfig):
-
     def __init__(
         self,
         vocab_size: int = 30522,
@@ -40,7 +39,6 @@ class BertConfig(TiteConfig):
 
 
 class BertModel(TiteModel):
-
     def __init__(self, config: BertConfig):
         super().__init__(config)
 

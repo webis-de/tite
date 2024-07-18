@@ -6,7 +6,6 @@ from tite.loss import BarlowTwins
 
 
 class BarlowTwinsTest(unittest.TestCase):
-
     def test_barlow_twins(self):
         # x and y were randomly created using
         # torch.rand(3*5*10, dtype=torch.float).round(decimals=1)

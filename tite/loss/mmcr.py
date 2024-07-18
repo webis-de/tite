@@ -1,7 +1,7 @@
-from torch import Tensor
 import torch.nn as nn
-from torch.linalg import matrix_norm
 import torch.nn.functional as F
+from torch import Tensor
+from torch.linalg import matrix_norm
 
 
 def mmcr(embeddings: Tensor) -> Tensor:

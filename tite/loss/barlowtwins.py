@@ -20,9 +20,7 @@ class BarlowTwins(nn.Module):
     def forward(self, features1: Tensor, features2: Tensor) -> Tensor:
         features1 = features1.view(-1, features1.shape[-1])
         features2 = features2.view(-1, features2.shape[-1])
-        N, D = (
-            features1.shape
-        )  # N is batchsize*num_features and D is the embedding dimensionality
+        N, D = features1.shape  # N is batchsize*num_features and D is the embedding dimensionality
         assert list(features2.shape) == [
             N,
             D,
@@ -33,7 +31,5 @@ class BarlowTwins(nn.Module):
 
         assert list(crosscorr.shape) == [D, D]
         obj = crosscorr - torch.eye(D, device=crosscorr.device)
-        obj[~torch.eye(D, dtype=torch.bool)] = (
-            obj[~torch.eye(D, dtype=torch.bool)] * self._alpha
-        )
+        obj[~torch.eye(D, dtype=torch.bool)] = obj[~torch.eye(D, dtype=torch.bool)] * self._alpha
         return obj.pow(2).sum()
