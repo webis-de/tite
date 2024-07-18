@@ -90,6 +90,12 @@ class TiteModule(LightningModule):
         for transformation in self._transforms:
             transformed = transformation(**tokenized)[0]
         jepa_loss = self._jepa(tokenized, transformed, None)
+        attention_mask = tokenized["attention_mask"]
+        if attention_mask is not None:
+            num_tokens = attention_mask.sum()
+        else:
+            num_tokens = tokenized["input_ids"].numel()
+        self.log_dict({"num_tokens": num_tokens}, on_step=True)
         self.log_dict({"loss": jepa_loss}, prog_bar=True, on_step=True)
         return jepa_loss
 
