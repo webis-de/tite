@@ -32,6 +32,7 @@ class TiteModule(LightningModule):
         predictor: Predictor,
         loss: LossFn,
         text_key: str = "text",
+        max_length: int | None = None,
     ) -> None:
         super().__init__()
         if teacher is None:
@@ -46,6 +47,7 @@ class TiteModule(LightningModule):
         self._predictor = predictor
         self._loss = loss
         self._text_key = text_key
+        self._max_length = max_length
         self._jepa = JEPA(self._student, _DetachFromGrad(self._teacher), predictor, loss)
         # Stores the state before the current validation step (or None if currently not in a validation step).
         self.pre_val_state = None
@@ -83,6 +85,7 @@ class TiteModule(LightningModule):
             padding=True,
             return_tensors=TensorType.PYTORCH,
             truncation=True,
+            max_length=self._max_length,
         ).to(self.device)
         for transformation in self._transforms:
             transformed = transformation(**tokenized)[0]
