@@ -72,41 +72,22 @@ class BaseHFDataModule(LightningDataModule):
     def teardown(self, stage: Literal["fit", "validate", "test", "predict"]) -> None:
         self._dataset = None
 
-    def train_dataloader(self) -> DataLoader:
-        assert self._dataset is not None, "The dataset needs to be set up"
-        if "train" not in self._dataset:
-            return super().val_dataloader()  # Act as if we did not implement this
-        # Note that we don't shuffle here -- we do that in setup() since IterableDatasets can't be shuffled otherwise
+    def dataloader(self, split: str) -> DataLoader:
         return DataLoader(
-            self._dataset["train"],
+            self._dataset[split],
             batch_size=self.hparams["batch_size"],
             num_workers=self.hparams["num_workers"],
             collate_fn=self._collate_fn,
         )
+
+    def train_dataloader(self) -> DataLoader:
+        assert self._dataset is not None, "The dataset needs to be set up"
+        return self.dataloader("train")
 
     def val_dataloader(self) -> DataLoader | list[DataLoader]:
         assert self._dataset is not None, "The dataset needs to be set up"
-        valsplits = [
-            DataLoader(
-                split,
-                batch_size=self.hparams["batch_size"],
-                num_workers=self.hparams["num_workers"],
-                collate_fn=self._collate_fn,
-            )
-            for name, split in self._dataset.items()
-            if "validation" in name
-        ]
-        if not valsplits:
-            return super().val_dataloader()  # Act as if we did not implement this
-        return valsplits[0] if len(valsplits) == 1 else valsplits
+        return self.dataloader("validation")
 
     def test_dataloader(self) -> DataLoader:
         assert self._dataset is not None, "The dataset needs to be set up"
-        if "test" not in self._dataset:
-            return super().val_dataloader()  # Act as if we did not implement this
-        return DataLoader(
-            self._dataset["train"],
-            batch_size=self.hparams["batch_size"],
-            num_workers=self.hparams["num_workers"],
-            collate_fn=self._collate_fn,
-        )
+        return self.dataloader("test")

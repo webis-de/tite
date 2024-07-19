@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 from typing import Any, Literal
 
@@ -12,10 +13,7 @@ from tite.datasets import FineWebDataModule  # noqa
 from tite.lr_schedulers import LR_SCHEDULERS, WarmupScheduler
 from tite.model import PreTrainedModel, TiteConfig
 
-# from lightning_ir.lightning_utils.warmup_schedulers import (
-#     LR_SCHEDULERS,
-#     WarmupScheduler,
-# )
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 if torch.cuda.is_available():
     torch.set_float32_matmul_precision("medium")

@@ -110,8 +110,9 @@ def compute_output_shapes(
     output_shapes = [input_shape]
     for k, s in zip(kernel_size, stride):
         if k is None or s is None:
-            continue
-        output_shapes.append(ceil_div((max(0, output_shapes[-1] - k)), s) + 1)
+            output_shapes.append(output_shapes[-1])
+        else:
+            output_shapes.append(ceil_div((max(0, output_shapes[-1] - k)), s) + 1)
     return output_shapes
 
 
@@ -167,7 +168,7 @@ class TiteConfig(PretrainedConfig):
                 )
 
         if all(k is None and s is None for k, s in zip(kernel_size, stride)):
-            warnings.warn("No pooling layers are used. The output shape will be the same as" " the input shape.")
+            warnings.warn("No pooling layers are used. The output shape will be the same as the input shape.")
         else:
             if self.output_shapes[-1] != 1:
                 raise ValueError(

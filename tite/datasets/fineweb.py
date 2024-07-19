@@ -1,6 +1,7 @@
 from typing import NamedTuple
 
 from torch import DoubleTensor, LongTensor
+from torch.utils.data import DataLoader, Dataset
 
 from .basehfdatamodule import BaseHFDataModule
 
@@ -16,6 +17,15 @@ class FWBatch(NamedTuple):
     token_count: LongTensor
 
 
+class DummyValDataset(Dataset):
+
+    def __len__(self) -> int:
+        return 1
+
+    def __getitem__(self, index) -> str:
+        return ""
+
+
 class FineWebDataModule(BaseHFDataModule):
     def __init__(self, name: str = "CC-MAIN-2024-10", **kwargs) -> None:
         """
@@ -25,3 +35,6 @@ class FineWebDataModule(BaseHFDataModule):
                 "CC-MAIN-2024-10".
         """
         super().__init__(path="HuggingFaceFW/fineweb", name=name, **kwargs)
+
+    def val_dataloader(self) -> DataLoader | list[DataLoader]:
+        return DataLoader(DummyValDataset())

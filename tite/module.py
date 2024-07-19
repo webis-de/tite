@@ -2,11 +2,13 @@ from pathlib import Path
 from typing import Any
 
 from lightning import LightningModule, Trainer
+from lightning.pytorch.callbacks.early_stopping import EarlyStopping
 from torch import Tensor
 from torch.nn import Module
 from transformers import PreTrainedTokenizerBase, TensorType
 
 from .datasets import GLUEDataModule
+from .glue_module import GlueModule
 from .jepa import JEPA, LossFn, Predictor
 from .transformations import Transformation
 
@@ -50,32 +52,37 @@ class TiteModule(LightningModule):
         self._max_length = max_length
         self._jepa = JEPA(self._student, _DetachFromGrad(self._teacher), predictor, loss)
         # Stores the state before the current validation step (or None if currently not in a validation step).
-        self.pre_val_state = None
+        self.pre_val_student_state = None
 
     def on_validation_start(self) -> None:
-        assert self.pre_val_state is None
-        self.pre_val_state = self.state_dict()
+        assert self.pre_val_student_state is None
+        self.pre_val_student_state = self._student.state_dict()
         # Train on GLUE
-        glue = GLUEDataModule()
+        glue = GLUEDataModule(batch_size=32)
+        glue_module = GlueModule(self._student, self._tokenizer, glue.hparams.name)
         trainer = Trainer(
             logger=False,
             precision=(self.trainer.precision if self.trainer is not None else "bf16-mixed"),
-            limit_val_batches=0,
-            max_epochs=1,
-            deterministic=True,
+            max_epochs=5,
+            callbacks=[EarlyStopping(glue_module._evaluation_metrics[0].__class__.__name__, mode="max", patience=1)],
+            enable_checkpointing=False,
         )
-        trainer.fit(self, glue)
+        trainer.fit(glue_module, glue)
+        self._student.to(self.device)
+        metrics = trainer.logged_metrics
+        for name, value in metrics.items():
+            if name == "train_loss":
+                continue
+            self.log(f"{glue.hparams.name}/{name}", value, on_step=False, on_epoch=True)
 
     def on_validation_end(self) -> None:
-        assert self.pre_val_state is not None
+        assert self.pre_val_student_state is not None
         # Restore Model to before it was evaluated on GLUE
-        self.load_state_dict(self.pre_val_state)
-        self.pre_val_state = None
+        self._student.load_state_dict(self.pre_val_student_state)
+        self.pre_val_student_state = None
 
-    # def validation_step(
-    #    self, *args: Any, **kwargs: Any
-    # ) -> Tensor | Mapping[str, Any] | None:
-    #    return super().validation_step(*args, **kwargs)
+    def validation_step(self, batch: dict[str, Any] | None) -> None:
+        return
 
     def training_step(self, batch: dict[str, Any]):
         tokenized = self._tokenizer(
