@@ -27,14 +27,14 @@ class DummyValDataset(Dataset):
 
 
 class FineWebDataModule(BaseHFDataModule):
-    def __init__(self, name: str = "CC-MAIN-2024-10", **kwargs) -> None:
+    def __init__(self, path: str = "HuggingFaceFW/fineweb", name: str = "CC-MAIN-2024-10", **kwargs) -> None:
         """
         Args:
             name (str, optional): The name of the dump to use (see
                 https://huggingface.co/datasets/HuggingFaceFW/fineweb#breakdown-by-dumpcrawl). Defaults to
                 "CC-MAIN-2024-10".
         """
-        super().__init__(path="HuggingFaceFW/fineweb", name=name, **kwargs)
+        super().__init__(path=path, name=name, **kwargs)
 
     def val_dataloader(self) -> DataLoader | list[DataLoader]:
         return DataLoader(DummyValDataset())
