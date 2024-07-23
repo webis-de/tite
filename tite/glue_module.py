@@ -37,7 +37,8 @@ LOSS_FUNCTION_MAP = {}
 class GlueModule(LightningModule):
     def __init__(self, model: TiteModel, tokenizer: PreTrainedTokenizerBase, task: str) -> None:
         super().__init__()
-        self._model = model
+        # Put the model into a list so it is not recognized as a submodule
+        self._model = [model]
         self._tokenizer = tokenizer
         self._task = task
         num_classes = NUM_CLASSES_MAP[task]
@@ -74,7 +75,8 @@ class GlueModule(LightningModule):
 
     def training_step(self, batch: dict[str, Any]) -> Tensor:
         encoded = self.parse_batch(batch)
-        output = self._model(**encoded)
+        with torch.no_grad():
+            output = self._model[0](**encoded)
         logits = self.classification_head(output[:, 0])
         loss = self._loss_function(logits, batch["label"])
         self.log("train_loss", loss, prog_bar=True)
@@ -82,7 +84,7 @@ class GlueModule(LightningModule):
 
     def validation_step(self, batch: dict[str, Any], *args, **kwargs) -> None:
         encoded = self.parse_batch(batch)
-        output = self._model(**encoded)
+        output = self._model[0](**encoded)
         logits = self.classification_head(output[:, 0])
         for validation_metric in self._evaluation_metrics:
             metric = validation_metric(logits.detach().cpu(), batch["label"].cpu())
@@ -92,4 +94,4 @@ class GlueModule(LightningModule):
         self.validation_step(batch, *args, **kwargs)
 
     def configure_optimizers(self) -> torch.optim.Optimizer:
-        return torch.optim.AdamW(self.parameters(), lr=5e-5)
+        return torch.optim.AdamW((p for p in self.parameters() if p.requires_grad), lr=5e-5)

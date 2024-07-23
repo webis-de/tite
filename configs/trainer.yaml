@@ -17,3 +17,4 @@ trainer:
   accumulate_grad_batches: 1
   gradient_clip_val: 10
   detect_anomaly: false
+  inference_mode: false

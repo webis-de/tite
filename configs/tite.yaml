@@ -69,5 +69,5 @@ model:
     loss:
       class_path: tite.loss.BarlowTwins
       init_args:
-        alpha: 0.5
+        alpha: 0.707
         num_features: 768
