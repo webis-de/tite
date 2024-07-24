@@ -2,7 +2,7 @@ from functools import reduce
 from typing import Any, Callable, Iterable, Mapping, NamedTuple
 
 import torch
-from pytorch_lightning import LightningModule
+from lightning import LightningModule
 from torch import Tensor
 from torch.nn import Module
 from torch.optim import AdamW, Optimizer

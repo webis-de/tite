@@ -1,11 +1,10 @@
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from typing import Any
 
 import torch
-from pytorch_lightning import LightningModule, Trainer
-from pytorch_lightning.callbacks import ModelCheckpoint
+from lightning import LightningModule, Trainer
+from lightning.pytorch.callbacks import ModelCheckpoint
 
 from tite.datasets import FineWebDataModule
 

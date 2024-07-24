@@ -182,6 +182,8 @@ class TiteConfig(PretrainedConfig):
 
 
 class TiteModel(PreTrainedModel):
+    config_class = TiteConfig
+
     def __init__(self, config: TiteConfig):
         super().__init__(config)
 
