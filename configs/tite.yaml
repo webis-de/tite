@@ -8,8 +8,14 @@ model:
           class_path: tite.model.TiteConfig
           init_args:
             vocab_size: 30522
-            num_hidden_layers: 6
+            num_hidden_layers: 12
             hidden_size:
+              - 768
+              - 768
+              - 768
+              - 768
+              - 768
+              - 768
               - 768
               - 768
               - 768
@@ -23,6 +29,12 @@ model:
               - 12
               - 12
               - 12
+              - 12
+              - 12
+              - 12
+              - 12
+              - 12
+              - 12
             intermediate_size:
               - 3072
               - 3072
@@ -30,19 +42,37 @@ model:
               - 3072
               - 3072
               - 3072
+              - 3072
+              - 3072
+              - 3072
+              - 3072
+              - 3072
+              - 3072
             kernel_size:
+              - null
               - 3
+              - null
               - 3
+              - null
               - 3
+              - null
               - 3
+              - null
               - 3
+              - null
               - 3
             stride:
+              - null
               - 3
+              - null
               - 3
+              - null
               - 3
+              - null
               - 3
+              - null
               - 3
+              - null
               - 3
     tokenizer:
       class_path: tite.tokenizer.TiteTokenizer
@@ -71,3 +101,4 @@ model:
       init_args:
         alpha: 0.707
         num_features: 768
+    max_length: 128

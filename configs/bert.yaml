@@ -7,7 +7,7 @@ model:
         config:
           class_path: tite.bert.BertConfig
           init_args:
-            num_hidden_layers: 2
+            num_hidden_layers: 12
     teacher:
       class_path: tite.teacher.MLMPredictor
       init_args:
@@ -31,6 +31,7 @@ model:
           maskid: 103
           clsid: 101
           sepid: 102
+          mask_prob: 0.3
     predictor:
       class_path: tite.predictor.MLMDecoder
       init_args:
@@ -40,3 +41,4 @@ model:
       class_path: tite.loss.mlm.MLMCrossEntropy
       init_args:
         vocab_size: 30522
+    max_length: 128
