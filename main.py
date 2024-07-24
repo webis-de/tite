@@ -10,7 +10,7 @@ from lightning.pytorch.loggers import WandbLogger
 from typing_extensions import override
 
 from tite.datasets import FineWebDataModule  # noqa
-from tite.lr_schedulers import LR_SCHEDULERS, WarmupScheduler
+from tite.lr_schedulers import LR_SCHEDULERS, WarmupLRScheduler
 from tite.model import PreTrainedModel, TiteConfig
 
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
@@ -79,7 +79,7 @@ class CustomLightningCLI(LightningCLI):
     def configure_optimizers(
         lightning_module: LightningModule,
         optimizer: torch.optim.Optimizer,
-        lr_scheduler: WarmupScheduler | None = None,
+        lr_scheduler: WarmupLRScheduler | None = None,
     ) -> Any:
         if lr_scheduler is None:
             return optimizer
