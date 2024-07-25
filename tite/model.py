@@ -324,7 +324,7 @@ class TiteSelfAttention(torch.nn.Module):
         relative_position = torch.abs(memory_position - context_position)
         # [num_attention_heads, max_token_length, max_token_length]
         relative_position = relative_position.unsqueeze(0).expand(num_attention_heads, -1, -1)
-        slopes = torch.Tensor(_get_alibi_head_slopes(num_attention_heads))
+        slopes = torch.tensor(_get_alibi_head_slopes(num_attention_heads), device=relative_position.device)
         alibi = slopes.unsqueeze(1).unsqueeze(1) * -relative_position
         # [1, num_attention_heads, max_token_length, max_token_length]
         alibi = alibi.unsqueeze(0)

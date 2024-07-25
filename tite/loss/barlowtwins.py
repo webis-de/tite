@@ -31,5 +31,6 @@ class BarlowTwins(nn.Module):
 
         assert list(crosscorr.shape) == [D, D]
         obj = crosscorr - torch.eye(D, device=crosscorr.device)
-        obj[~torch.eye(D, dtype=torch.bool)] = obj[~torch.eye(D, dtype=torch.bool)] * self._alpha
+        # obj[~torch.eye(D, dtype=torch.bool)] = obj[~torch.eye(D, dtype=torch.bool)] * self._alpha
+        obj = obj * ((1 - torch.eye(D)) * self._alpha + torch.eye(D))
         return obj.pow(2).sum()
