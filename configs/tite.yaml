@@ -99,6 +99,6 @@ model:
     loss:
       class_path: tite.loss.BarlowTwins
       init_args:
-        alpha: 0.5
+        lmbda: 0.5
         num_features: 768
     max_length: 128
