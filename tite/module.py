@@ -1,6 +1,7 @@
 from pathlib import Path
 from typing import Any
 
+import torch
 from lightning import LightningModule, Trainer
 from lightning.pytorch.callbacks.early_stopping import EarlyStopping
 from torch import Tensor
@@ -54,6 +55,8 @@ class TiteModule(LightningModule):
         # Stores the state before the current validation step (or None if currently not in a validation step).
         self.pre_val_student_state = None
 
+        self._tokens_seen = 0
+
     def on_validation_start(self) -> None:
         assert self.pre_val_student_state is None
         self.pre_val_student_state = self._student.state_dict()
@@ -98,11 +101,9 @@ class TiteModule(LightningModule):
             transformed = transformation(**tokenized)[0]
         jepa_loss = self._jepa(tokenized, transformed, None)
         attention_mask = tokenized["attention_mask"]
-        if attention_mask is not None:
-            num_tokens = attention_mask.sum()
-        else:
-            num_tokens = tokenized["input_ids"].numel()
-        self.log_dict({"num_tokens": num_tokens}, on_step=True)
+        num_tokens = attention_mask.sum() if attention_mask is not None else tokenized["input_ids"].numel()
+        self._tokens_seen += num_tokens
+        self.log("tokens_seen", self._tokens_seen, on_step=True, reduce_fx="sum")
         self.log_dict({"loss": jepa_loss}, prog_bar=True, on_step=True)
         return jepa_loss
 

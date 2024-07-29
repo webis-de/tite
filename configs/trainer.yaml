@@ -12,8 +12,17 @@ trainer:
       project: tite
     dict_kwargs:
       entity: tite
-  callbacks: null
-  max_steps: 1000000
-  accumulate_grad_batches: 1
+  callbacks:
+    - class_path: ModelCheckpoint
+      init_args:
+        save_on_train_epoch_end: false
+        save_top_k: -1
+    - class_path: LearningRateMonitor
+      init_args:
+        logging_interval: step
+  max_steps: 70000
+  val_check_interval: 32000
+  accumulate_grad_batches: 32
   gradient_clip_val: 10
   detect_anomaly: false
+  inference_mode: false

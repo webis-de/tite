@@ -5,7 +5,7 @@ import torchmetrics
 import torchmetrics.classification
 from lightning import LightningModule
 from torch import Tensor
-from transformers import BatchEncoding, PreTrainedTokenizerBase, TensorType
+from transformers import BatchEncoding, PreTrainedTokenizerBase, TensorType, get_constant_schedule_with_warmup
 
 from .model import TiteModel
 
@@ -37,11 +37,15 @@ LOSS_FUNCTION_MAP = {}
 class GlueModule(LightningModule):
     def __init__(self, model: TiteModel, tokenizer: PreTrainedTokenizerBase, task: str) -> None:
         super().__init__()
-        self._model = model
+        # Put the model into a list so it is not recognized as a submodule
+        self._model = [model]
         self._tokenizer = tokenizer
         self._task = task
         num_classes = NUM_CLASSES_MAP[task]
-        self.classification_head = torch.nn.Linear(model.config.hidden_size[-1], num_classes)
+        self.classification_head = torch.nn.Sequential(
+            torch.nn.Dropout(0.1),
+            torch.nn.Linear(model.config.hidden_size[-1], num_classes),
+        )
         if num_classes == 1:
             self._loss_function = torch.nn.MSELoss()
             self._evaluation_metrics = [torchmetrics.MeanSquaredError(), torchmetrics.PearsonCorrCoef()]
@@ -74,7 +78,8 @@ class GlueModule(LightningModule):
 
     def training_step(self, batch: dict[str, Any]) -> Tensor:
         encoded = self.parse_batch(batch)
-        output = self._model(**encoded)
+        with torch.no_grad():
+            output = self._model[0](**encoded)
         logits = self.classification_head(output[:, 0])
         loss = self._loss_function(logits, batch["label"])
         self.log("train_loss", loss, prog_bar=True)
@@ -82,14 +87,16 @@ class GlueModule(LightningModule):
 
     def validation_step(self, batch: dict[str, Any], *args, **kwargs) -> None:
         encoded = self.parse_batch(batch)
-        output = self._model(**encoded)
+        output = self._model[0](**encoded)
         logits = self.classification_head(output[:, 0])
         for validation_metric in self._evaluation_metrics:
-            metric = validation_metric(logits.detach().cpu(), batch["label"].cpu())
+            metric = validation_metric(logits, batch["label"])
             self.log(validation_metric.__class__.__name__, metric)
 
     def test_step(self, batch: dict[str, Any], *args, **kwargs) -> None:
         self.validation_step(batch, *args, **kwargs)
 
     def configure_optimizers(self) -> torch.optim.Optimizer:
-        return torch.optim.AdamW(self.parameters(), lr=5e-5)
+        opt = torch.optim.AdamW((p for p in self.parameters() if p.requires_grad), lr=5e-5)
+        sched = get_constant_schedule_with_warmup(opt, 1000)
+        return [opt], [{"scheduler": sched, "interval": "step"}]

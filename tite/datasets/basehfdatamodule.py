@@ -4,6 +4,7 @@ from typing import Any, Callable, Literal
 from datasets import load_dataset
 from lightning import LightningDataModule
 from torch.utils.data import DataLoader
+from torchdata.stateful_dataloader import StatefulDataLoader
 
 
 def _seed_or_none(seed: int | None = None) -> int | None:
@@ -52,6 +53,7 @@ class BaseHFDataModule(LightningDataModule):
                 "num_workers": num_workers,
             }
         )
+        self._dataloaders: dict[str, StatefulDataLoader] = dict()
 
     def setup(self, stage: Literal["fit", "validate", "test", "predict"]) -> None:
         assert self._dataset is None, "Dataset is already set up"
@@ -72,13 +74,17 @@ class BaseHFDataModule(LightningDataModule):
     def teardown(self, stage: Literal["fit", "validate", "test", "predict"]) -> None:
         self._dataset = None
 
-    def dataloader(self, split: str) -> DataLoader:
-        return DataLoader(
+    def dataloader(self, split: str) -> StatefulDataLoader:
+        if (x := self._dataloaders.get(split, None)) is not None:
+            return x
+        loader = StatefulDataLoader(
             self._dataset[split],
             batch_size=self.hparams["batch_size"],
             num_workers=self.hparams["num_workers"],
             collate_fn=self._collate_fn,
         )
+        self._dataloaders[split] = loader
+        return loader
 
     def train_dataloader(self) -> DataLoader:
         assert self._dataset is not None, "The dataset needs to be set up"
@@ -91,3 +97,10 @@ class BaseHFDataModule(LightningDataModule):
     def test_dataloader(self) -> DataLoader:
         assert self._dataset is not None, "The dataset needs to be set up"
         return self.dataloader("test")
+
+    def state_dict(self) -> dict[str, dict[str, Any]]:
+        return {split: loader.state_dict() for split, loader in self._dataloaders.items()}
+
+    def load_state_dict(self, state_dict: dict[str, dict[str, Any]]) -> None:
+        for split, state in state_dict.items():
+            self.dataloader(split).load_state_dict(state)

@@ -57,7 +57,7 @@ class CustomWandbLogger(WandbLogger):
             experiment,
             prefix,
             checkpoint_name,
-            settings={"sync_dir": None, "sync_file": None, "ignore_globs": ["*.ckpt"]},
+            settings={"sync_dir": None, "sync_file": None, "ignore_globs": ["*.ckpt", "*.safetensors"]},
             **kwargs
         )
 
