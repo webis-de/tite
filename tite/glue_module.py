@@ -81,8 +81,7 @@ class GlueModule(LightningModule):
 
     def training_step(self, batch: dict[str, Any]) -> Tensor:
         encoded = self.parse_batch(batch)
-        with torch.no_grad():
-            output = self._model(**encoded)
+        output = self._model(**encoded)
         logits = self.classification_head(output[:, 0])
         loss = self._loss_function(logits, batch["label"])
         self.log("train_loss", loss, prog_bar=True)
@@ -100,6 +99,6 @@ class GlueModule(LightningModule):
         self.validation_step(batch, *args, **kwargs)
 
     def configure_optimizers(self) -> torch.optim.Optimizer:
-        opt = torch.optim.AdamW((p for p in self.classification_head.parameters() if p.requires_grad), lr=5e-5)
+        opt = torch.optim.AdamW(self.parameters(), lr=5e-5)
         sched = get_constant_schedule_with_warmup(opt, 1000)
         return [opt], [{"scheduler": sched, "interval": "step"}]
