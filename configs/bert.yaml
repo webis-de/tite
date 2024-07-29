@@ -41,4 +41,4 @@ model:
       class_path: tite.loss.mlm.MLMCrossEntropy
       init_args:
         vocab_size: 30522
-    max_length: 128
+    max_length: 256

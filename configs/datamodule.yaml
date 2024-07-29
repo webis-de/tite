@@ -2,6 +2,8 @@ data:
   class_path: tite.datasets.FineWebDataModule
   init_args:
     path: HuggingFaceFW/fineweb-edu
+    name: default
     data_dir: null
     batch_size: 128
     num_workers: 4
+    streaming: false
