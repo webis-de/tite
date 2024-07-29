@@ -65,7 +65,7 @@ class BaseHFDataModule(LightningDataModule):
                 streaming=self._streaming,
             )
             .with_format(type="torch")
-            .shuffle(buffer_size=10_000, seed=self.hparams["seed"])
+            .shuffle(buffer_size=1_024, seed=self.hparams["seed"])
         )
         # Maybe for the future: implement state_dict and load_state_dict (TODO)
         # self.state_dict = self._dataset.state_dict
