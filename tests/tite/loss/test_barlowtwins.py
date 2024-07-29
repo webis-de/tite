@@ -15,7 +15,7 @@ class BarlowTwinsTest(unittest.TestCase):
         # Batch Size: 3
         # Num Features: 5
         # Embedding Dimension: 10
-        bt = BarlowTwins(0.6324555, 10)
+        bt = BarlowTwins(0.4, 10)
         x = torch.Tensor(
             [
                 [5.3, -5.6, -4.0, -3.3, 8.3, 3.6, 8.4, -8.7, -3.6, 5.9],
