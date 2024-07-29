@@ -1,7 +1,6 @@
 from pathlib import Path
 from typing import Any
 
-import torch
 from lightning import LightningModule, Trainer
 from lightning.pytorch.callbacks.early_stopping import EarlyStopping
 from torch import Tensor
