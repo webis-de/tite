@@ -57,7 +57,7 @@ class TiteModule(LightningModule):
         # Stores the state before the current validation step (or None if currently not in a validation step).
         self.pre_val_student_state = None
 
-        self._tokens_seen = 0
+        self._tokens_seen = 0.0
 
     def on_validation_start(self) -> None:
         assert self.pre_val_student_state is None
