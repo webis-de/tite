@@ -1,5 +1,5 @@
 import os
-from typing import Any, Callable, Literal
+from typing import Any, Callable, Literal, Mapping
 
 from datasets import load_dataset
 from lightning import LightningDataModule
@@ -18,8 +18,9 @@ class BaseHFDataModule(LightningDataModule):
     def __init__(
         self,
         path: str,
-        name: str,
+        name: str | None = None,
         data_dir: str | None = None,
+        data_files: Mapping[str, str] | None = None,
         batch_size: int | None = None,
         seed: int | None = None,
         num_workers: int = 0,
@@ -40,6 +41,7 @@ class BaseHFDataModule(LightningDataModule):
         """
         super().__init__()
         self._data_dir = data_dir
+        self._data_files = data_files
         self._streaming = streaming
         self._dataset = None
         self._collate_fn = collate_fn
@@ -57,16 +59,13 @@ class BaseHFDataModule(LightningDataModule):
 
     def setup(self, stage: Literal["fit", "validate", "test", "predict"]) -> None:
         assert self._dataset is None, "Dataset is already set up"
-        self._dataset = (
-            load_dataset(
-                path=self.hparams["path"],
-                name=self.hparams["name"],
-                data_dir=self._data_dir,
-                streaming=self._streaming,
-            )
-            .with_format(type="torch")
-            .shuffle(buffer_size=1_024, seed=self.hparams["seed"])
-        )
+        self._dataset = load_dataset(
+            path=self.hparams["path"],
+            name=self.hparams["name"],
+            data_dir=self._data_dir,
+            data_files=self._data_files,
+            streaming=self._streaming,
+        ).shuffle(buffer_size=1_024, seed=self.hparams["seed"])
         # Maybe for the future: implement state_dict and load_state_dict (TODO)
         # self.state_dict = self._dataset.state_dict
         # self.load_state_dict = self._dataset.load_state_dict
@@ -82,6 +81,7 @@ class BaseHFDataModule(LightningDataModule):
             batch_size=self.hparams["batch_size"],
             num_workers=self.hparams["num_workers"],
             collate_fn=self._collate_fn,
+            prefetch_factor=16 if self.hparams["num_workers"] > 0 else None,
         )
         self._dataloaders[split] = loader
         return loader
