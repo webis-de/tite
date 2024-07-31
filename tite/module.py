@@ -68,7 +68,7 @@ class TiteModule(LightningModule):
         trainer = Trainer(
             logger=False,
             precision=(self.trainer.precision if self.trainer is not None else "bf16-mixed"),
-            max_epochs=5,
+            max_epochs=10,
             callbacks=[EarlyStopping(glue_module._evaluation_metrics[0].__class__.__name__, mode="max", patience=1)],
             enable_checkpointing=False,
         )
