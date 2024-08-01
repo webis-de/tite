@@ -6,8 +6,8 @@ class Identity(Module):
     def __init__(self) -> None:
         super().__init__()
 
-    def forward(self, input_input_ids: Tensor, **kwargs) -> Tensor:
-        return input_input_ids
+    def forward(self, student_input_ids: Tensor, **kwargs) -> Tensor:
+        return student_input_ids
 
 
 class MLMPredictor(Module):
@@ -17,9 +17,9 @@ class MLMPredictor(Module):
         self._mask_id = maskid
         self.train_only_masked = train_only_masked
 
-    def forward(self, input_input_ids: Tensor, target_input_ids: Tensor, **kwargs) -> Tensor:
+    def forward(self, student_input_ids: Tensor, teacher_input_ids: Tensor, **kwargs) -> Tensor:
         if self.train_only_masked:
-            target_input_ids = target_input_ids.masked_fill(input_input_ids != self._mask_id, -100)
+            teacher_input_ids = teacher_input_ids.masked_fill(student_input_ids != self._mask_id, -100)
         else:
-            targets = target_input_ids.masked_fill(input_input_ids == self._pad_id, -100)
+            targets = teacher_input_ids.masked_fill(teacher_input_ids == self._pad_id, -100)
         return targets
