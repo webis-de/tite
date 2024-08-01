@@ -101,7 +101,7 @@ class TiteModule(LightningModule):
         ).to(self.device)
         for transformation in self._transforms:
             transformed = transformation(**tokenized)[0]
-        jepa_loss = self._jepa(tokenized, transformed, None)
+        jepa_loss = self._jepa(transformed, tokenized, None)
         attention_mask = tokenized["attention_mask"]
         num_tokens = attention_mask.sum() if attention_mask is not None else tokenized["input_ids"].numel()
         self._tokens_seen += num_tokens

@@ -40,7 +40,9 @@ class JEPA(Module):
 
     def forward(self, input: dict, target: dict, aux: Any | None = None):
         embx = self._student(**input)
-        emby = self._teacher(**target)
+        emby = self._teacher(
+            **{f"input_{k}": v for k, v in input.items()}, **{f"target_{k}": v for k, v in target.items()}
+        )
         pred = self._predictor(embx, aux)
         if not self._return_embeddings:
             return self._loss(pred, emby)

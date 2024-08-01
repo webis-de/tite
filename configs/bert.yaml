@@ -12,6 +12,8 @@ model:
       class_path: tite.teacher.MLMPredictor
       init_args:
         padid: 0
+        maskid: 103
+        train_only_masked: false
     tokenizer:
       class_path: tite.tokenizer.TiteTokenizer
       init_args:
