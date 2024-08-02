@@ -47,7 +47,7 @@ def test_tite_model(config: TiteConfig, positional_embedding_type: str):
     attention_mask = torch.ones_like(input_ids, dtype=torch.bool)
     attention_mask[1, -config.max_position_embeddings // 2 :] = False
     output = model(input_ids, attention_mask)
-    assert output.shape == (2, 1, config.hidden_size[-1])
+    assert output.shape == (2, 1, config.last_hidden_size)
     assert output.requires_grad
 
 

@@ -40,12 +40,12 @@ class GlueModule(LightningModule):
         self._model = model
         self._tokenizer = tokenizer
         self._task = task
-        num_classes = NUM_CLASSES_MAP[task]
+        self.num_classes = NUM_CLASSES_MAP[task]
         self.classification_head = torch.nn.Sequential(
             torch.nn.Dropout(0.1),
-            torch.nn.Linear(model.config.hidden_size[-1], num_classes),
+            torch.nn.Linear(model.config.last_hidden_size, self.num_classes),
         )
-        if num_classes == 1:
+        if self.num_classes == 1:
             self._loss_function = torch.nn.MSELoss()
             self._evaluation_metrics = torch.nn.ModuleList(
                 [torchmetrics.MeanSquaredError(), torchmetrics.PearsonCorrCoef()]
@@ -54,14 +54,12 @@ class GlueModule(LightningModule):
             self._loss_function = torch.nn.CrossEntropyLoss()
             self._evaluation_metrics = torch.nn.ModuleList(
                 [
-                    torchmetrics.classification.MulticlassAccuracy(num_classes=num_classes, average="micro"),
-                    torchmetrics.MatthewsCorrCoef(task="multiclass", num_classes=num_classes),
+                    torchmetrics.classification.MulticlassAccuracy(num_classes=self.num_classes, average="micro"),
+                    torchmetrics.MatthewsCorrCoef(task="multiclass", num_classes=self.num_classes),
                 ]
             )
-            if num_classes == 2:
-                self._evaluation_metrics.append(
-                    torchmetrics.classification.MulticlassF1Score(num_classes=num_classes, average="micro")
-                )
+            if self.num_classes == 2:
+                self._evaluation_metrics.append(torchmetrics.classification.BinaryF1Score())
 
     def parse_batch(self, batch: dict[str, Any]) -> BatchEncoding:
         text_column_names = TASK_COLUMN_NAMES[self._task]
@@ -91,6 +89,8 @@ class GlueModule(LightningModule):
         encoded = self.parse_batch(batch)
         output = self._model(**encoded)
         logits = self.classification_head(output[:, 0])
+        if self.num_classes > 1:
+            logits = logits.argmax(-1)
         for validation_metric in self._evaluation_metrics:
             metric = validation_metric(logits, batch["label"])
             self.log(validation_metric.__class__.__name__, metric)

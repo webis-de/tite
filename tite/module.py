@@ -76,8 +76,6 @@ class TiteModule(LightningModule):
         self._student.to(self.device)
         metrics = trainer.logged_metrics
         for name, value in metrics.items():
-            if name == "train_loss":
-                continue
             self.log(f"{glue.hparams.name}/{name}", value, on_step=False, on_epoch=True)
 
     def on_validation_end(self) -> None:

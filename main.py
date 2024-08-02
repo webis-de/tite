@@ -99,7 +99,7 @@ class DummyTite(PreTrainedModel):
         self.post_init()
 
     def forward(self, input_ids: torch.Tensor, attention_mask: torch.Tensor | None = None) -> torch.Tensor:
-        return torch.zeros((input_ids.shape[0], self.config.hidden_size[-1])) + self.param
+        return torch.zeros((input_ids.shape[0], self.config.last_hidden_size)) + self.param
 
 
 def main():

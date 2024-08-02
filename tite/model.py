@@ -91,6 +91,10 @@ class TiteConfig(PretrainedConfig):
     def output_shapes(self) -> List[int]:
         return compute_output_shapes(self.max_position_embeddings, self.kernel_size, self.stride)
 
+    @property
+    def last_hidden_size(self) -> int:
+        return self.hidden_size[-1]
+
 
 class TiteModel(PreTrainedModel):
     config_class = TiteConfig

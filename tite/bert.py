@@ -1,5 +1,8 @@
 from torch import Tensor
 from torch.nn import Module
+from transformers import BertConfig as HFBertConfig
+from transformers import BertForMaskedLM
+from transformers import BertModel as HFBert
 
 from .model import TiteConfig, TiteModel
 
@@ -53,3 +56,28 @@ class BertModel(TiteModel):
 
     def forward(self, input_ids: Tensor, attention_mask: Tensor | None = None) -> Tensor:
         return super().forward(input_ids, attention_mask)
+
+
+class HFBertModel(Module):
+
+    def __init__(self, model_name_or_path: str | None = None, config: HFBertConfig | None = None) -> None:
+        super().__init__()
+        if model_name_or_path is None:
+            if config is None:
+                raise ValueError("Either model_name_or_path or config must be provided")
+            self._model = HFBert(config)
+        else:
+            # self._model = HFBert.from_pretrained(model_name_or_path, config=config)
+            self._model = BertForMaskedLM.from_pretrained(model_name_or_path, config=config)
+        self.config = self._model.config
+        self.config.last_hidden_size = self.config.hidden_size
+
+    def forward(
+        self, input_ids: Tensor, attention_mask: Tensor | None = None, token_type_ids: Tensor | None = None
+    ) -> Tensor:
+        # return self._model(
+        #     input_ids, attention_mask=attention_mask, token_type_ids=token_type_ids, output_hidden_states=True
+        # ).last_hidden_state
+        return self._model(
+            input_ids, attention_mask=attention_mask, token_type_ids=token_type_ids, output_hidden_states=True
+        ).hidden_states[-1]
