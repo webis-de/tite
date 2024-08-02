@@ -100,5 +100,4 @@ class GlueModule(LightningModule):
 
     def configure_optimizers(self) -> torch.optim.Optimizer:
         opt = torch.optim.AdamW(self.parameters(), lr=5e-5)
-        sched = get_constant_schedule_with_warmup(opt, 1000)
-        return [opt], [{"scheduler": sched, "interval": "step"}]
+        return opt
