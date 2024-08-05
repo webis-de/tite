@@ -38,11 +38,11 @@ class TiteModule(LightningModule):
         detach_teacher_from_grad: bool = False,
     ) -> None:
         super().__init__()
-        if teacher is None:
-            teacher = student
         # ties weights for BERT models -- only works for teacher MLM and student BERT
         if hasattr(student, "tie_decoder_weights") and teacher is not None:
             student.tie_decoder_weights(teacher)
+        if teacher is None:
+            teacher = student
         self._student = student
         self._teacher = teacher
         self._tokenizer = tokenizer
@@ -85,6 +85,8 @@ class TiteModule(LightningModule):
         self.pre_val_student_state = None
 
     def validation_step(self, batch: dict[str, Any] | None) -> None:
+        # Empty validation step to trick pytorch lightning into validating this model though validation is actually done
+        # using the GlueModule
         return
 
     def training_step(self, batch: dict[str, Any]):
@@ -97,13 +99,15 @@ class TiteModule(LightningModule):
             truncation=True,
             max_length=self._max_length,
         ).to(self.device)
-        for transformation in self._transforms:
+        for transformation in self._transforms:  # Currently only supports exactly 1 transformation
             transformed = transformation(**tokenized)[0]
+        # JEPA will try to predict the original from the transformed input within the embedding space, i.e.,
+        #   Loss(pred(student(transformed)), teacher(tokenized))
         jepa_loss = self._jepa(transformed, tokenized, None)
         attention_mask = tokenized["attention_mask"]
         num_tokens = attention_mask.sum() if attention_mask is not None else tokenized["input_ids"].numel()
         self._tokens_seen += num_tokens
-        self.log("tokens_seen", self._tokens_seen, on_step=True, reduce_fx="sum")
+        self.log("tokens_seen", self._tokens_seen, on_step=True, reduce_fx="max")  # We sum it up ourselves
         self.log_dict({"loss": jepa_loss}, prog_bar=True, on_step=True)
         return jepa_loss
 
@@ -118,6 +122,3 @@ class TiteModule(LightningModule):
             log_dir = Path(self.trainer.log_dir)
             save_path = log_dir / "huggingface_checkpoint"
             self.save_pretrained(save_path)
-
-    # def configure_optimizers(self) -> Optimizer:
-    #     return AdamW(self._student.parameters())

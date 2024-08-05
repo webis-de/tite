@@ -28,8 +28,8 @@ def test_masked_avg_pool1d(kernel_size: int, stride: int, seq_length: int):
     layer = MaskedAvgPool1d(kernel_size, stride)
 
     x = torch.randn(2, seq_length, 4)
-    mask = torch.ones(2, seq_length)
-    mask[0, -seq_length // 2 :] = 0
+    mask = torch.ones(2, seq_length, dtype=torch.bool)
+    mask[0, -seq_length // 2 :] = False
 
     output_shapes = compute_output_shapes(seq_length, (kernel_size,), (stride,))
 

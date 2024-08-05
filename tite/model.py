@@ -109,6 +109,7 @@ class TiteModel(PreTrainedModel):
 
     def _init_weights(self, module):
         """Initialize the weights"""
+        # https://github.com/huggingface/transformers/blob/3d7c2f9dea45338b7ebcd459b452e2fad7abfa1f/src/transformers/models/bert/modeling_bert.py#L835
         if isinstance(module, torch.nn.Linear):
             # Slightly different from the TF version which uses truncated_normal for initialization
             # cf https://github.com/pytorch/pytorch/pull/5617
@@ -137,7 +138,7 @@ class TiteEmbeddings(torch.nn.Module):
         super().__init__()
         hidden_size = config.hidden_size[0]
         self.num_attention_heads = config.num_attention_heads
-        self.word_embeddings = torch.nn.Embedding(config.vocab_size, hidden_size)
+        self.word_embeddings = torch.nn.Embedding(config.vocab_size, hidden_size, padding_idx=config.pad_token_id)
         self.position_embeddings = None
         if config.positional_embedding_type == "absolute":
             self.position_embeddings = torch.nn.Embedding(config.max_position_embeddings, hidden_size)
@@ -161,15 +162,13 @@ class MaskedAvgPool1d(torch.nn.Module):
         self.kernel_size = kernel_size
         self.stride = stride
 
-    def forward(self, x: torch.Tensor, mask: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+    def forward(self, x: torch.Tensor, mask: torch.BoolTensor) -> Tuple[torch.Tensor, torch.BoolTensor]:
         if x.shape[-2] == 1:
             return x, mask
-        padding = 0
-        if (x.shape[-2] - self.kernel_size) % self.stride != 0 or self.kernel_size:
-            padding = (x.shape[-2] - self.kernel_size) % self.stride
+        padding = (x.shape[-2] - self.kernel_size) % self.stride
         if self.kernel_size > x.shape[-2]:
             padding = self.kernel_size - x.shape[-2]
-        if padding:
+        if padding != 0:
             x = torch.nn.functional.pad(x, (0, 0, 0, padding))
             mask = torch.nn.functional.pad(mask, (0, padding))
         x_blocks = x.unfold(-2, self.kernel_size, self.stride)
@@ -251,22 +250,24 @@ class TiteSelfAttention(torch.nn.Module):
         unpad_hidden_states = unpad(hidden_states, indices)
         batch_size, seq_len = hidden_states.shape[:2]
         qkv = repad(self.Wqkv(unpad_hidden_states), indices, batch_size, seq_len)
-        qkv = rearrange(qkv, "b s (t h d) -> b s t h d", t=3, h=self.num_attention_heads)
-        qkv = qkv.permute(2, 0, 3, 1, 4)
+        qkv = rearrange(qkv, "b s (t h d) -> t b h s d", t=3, h=self.num_attention_heads)
 
-        query = qkv[0]
-        key = qkv[1]
-        value = qkv[2]
+        query, key, value = qkv
         attention_mask = attention_mask.unsqueeze(1).unsqueeze(2)
-        attention_mask = (1.0 - attention_mask.to(hidden_states)) * -10000.0
+        attn_weight = torch.where(attention_mask, 0, -10000.0)
         if self.alibi is not None:
-            attention_mask = attention_mask + self.alibi[:, :, :seq_len, :seq_len]
+            attn_weight = attn_weight + self.alibi[:, :, :seq_len, :seq_len]
         attn_output = torch.nn.functional.scaled_dot_product_attention(
-            query, key, value, attention_mask, self.dropout_prob if self.training else 0.0
+            query, key, value, attn_weight, self.dropout_prob if self.training else 0.0
         )
-
-        attn_output = attn_output.transpose(1, 2)
-        attn_output = attn_output.reshape(hidden_states.shape)
+        attn_output = rearrange(
+            attn_output,
+            "b h s d -> b s (h d)",
+            b=batch_size,
+            h=self.num_attention_heads,
+            s=seq_len,
+            d=self.attention_head_size,
+        )
         return attn_output
 
 
@@ -377,7 +378,7 @@ class TiteEncoder(torch.nn.Module):
             [TiteLayer(config, layer_idx) for layer_idx in range(config.num_hidden_layers)]
         )
 
-    def forward(self, hidden_states: torch.Tensor, attention_mask: torch.Tensor) -> torch.Tensor:
+    def forward(self, hidden_states: torch.Tensor, attention_mask: torch.BoolTensor) -> torch.Tensor:
         for layer_idx, layer_module in enumerate(self.layer):
             hidden_states, attention_mask = layer_module(hidden_states, attention_mask)
         return hidden_states

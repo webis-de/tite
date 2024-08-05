@@ -11,19 +11,20 @@ class BarlowTwins(nn.Module):
     Reduction".
     """
 
-    def __init__(self, lmbda: float, num_features: int) -> None:
+    def __init__(self, lmbda: float, embeddim: int) -> None:
         """
         Args:
             lmbda (float): This hyper parameter is the square-root of "lambda" from the original paper.
+            embeddim (int): The embedding dimensionality
         """
         super().__init__()
         self._alpha = sqrt(lmbda)
-        self.batchnorm = nn.BatchNorm1d(num_features, affine=False)
+        self.batchnorm = nn.BatchNorm1d(embeddim, affine=False)
 
     def forward(self, features1: Tensor, features2: Tensor) -> Tensor:
         features1 = features1.reshape(-1, features1.shape[-1])
         features2 = features2.reshape(-1, features2.shape[-1])
-        N, D = features1.shape  # N is batchsize*num_features and D is the embedding dimensionality
+        N, D = features1.shape  # N is batchsize*num features and D is embeddim
         assert list(features2.shape) == [
             N,
             D,
@@ -40,5 +41,6 @@ class BarlowTwins(nn.Module):
         # a a . 1 a a
         # a a . a 1 a
         # a a . a a 1
-        weights = (1 - torch.eye(D, device=crosscorr.device)) * self._alpha + torch.eye(D, device=crosscorr.device)
+        # weights = (1 - torch.eye(D, device=crosscorr.device)) * self._alpha + torch.eye(D, device=crosscorr.device)
+        weights = torch.where(torch.eye(D, dtype=torch.bool, device=crosscorr.device), 1, self._alpha)
         return F.mse_loss(crosscorr * weights, torch.eye(D, device=crosscorr.device), reduction="sum")
