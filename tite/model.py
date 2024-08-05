@@ -3,11 +3,12 @@ import warnings
 from typing import List, Literal, Tuple
 
 import torch
-from einops import rearrange
+from einops import einsum, rearrange, repeat
 from transformers import PretrainedConfig, PreTrainedModel
 from transformers.activations import ACT2FN
 from transformers.modeling_utils import apply_chunking_to_forward
 
+from .attention import flash_attn_func
 from .unpad import repad, unpad
 
 
@@ -128,8 +129,15 @@ class TiteModel(PreTrainedModel):
         if attention_mask is None:
             attention_mask = torch.ones(1, input_ids.shape[1], device=input_ids.device, dtype=torch.bool)
         attention_mask = attention_mask.bool()
-        hidden_states = self.embeddings(input_ids)
+        batch_size, seq_len = input_ids.shape
+        indices = torch.nonzero(attention_mask.flatten(), as_tuple=False).flatten()
+        input_ids = unpad(input_ids, indices)
+        hidden_states = self.embeddings(input_ids, attention_mask)
         hidden_states = self.encoder(hidden_states, attention_mask)
+        if hidden_states.shape[0] != batch_size:
+            hidden_states = repad(hidden_states, indices, batch_size, seq_len)
+        else:
+            hidden_states = hidden_states.unsqueeze(1)
         return hidden_states
 
 
@@ -145,12 +153,10 @@ class TiteEmbeddings(torch.nn.Module):
         self.LayerNorm = torch.nn.LayerNorm(hidden_size, eps=config.layer_norm_eps)
         self.dropout = torch.nn.Dropout(config.dropout_prob)
 
-    def forward(self, input_ids: torch.Tensor) -> torch.Tensor:
+    def forward(self, input_ids: torch.Tensor, attention_mask: torch.Tensor) -> torch.Tensor:
         embeddings = self.word_embeddings(input_ids)
         if self.position_embeddings is not None:
-            embeddings = embeddings + self.position_embeddings(
-                torch.arange(input_ids.shape[1], device=input_ids.device)
-            )
+            embeddings = embeddings + self.position_embeddings(attention_mask.nonzero()[:, 1].flatten())
         embeddings = self.LayerNorm(embeddings)
         embeddings = self.dropout(embeddings)
         return embeddings
@@ -197,6 +203,12 @@ class TiteSelfAttention(torch.nn.Module):
         self.all_head_size = self.num_attention_heads * self.attention_head_size
 
         self.Wqkv = torch.nn.Linear(hidden_size, 3 * self.all_head_size)
+
+        kernel_size = config.kernel_size[layer_idx]
+        stride = config.stride[layer_idx]
+        self.pooling = None
+        if kernel_size is not None and stride is not None:
+            self.pooling = MaskedAvgPool1d(kernel_size, stride)
 
         self.dropout_prob = config.dropout_prob
         if config.positional_embedding_type == "ALiBi":
@@ -246,29 +258,69 @@ class TiteSelfAttention(torch.nn.Module):
 
         return alibi
 
-    def forward(self, hidden_states: torch.Tensor, attention_mask: torch.Tensor, indices: torch.Tensor) -> torch.Tensor:
-        unpad_hidden_states = unpad(hidden_states, indices)
-        batch_size, seq_len = hidden_states.shape[:2]
-        qkv = repad(self.Wqkv(unpad_hidden_states), indices, batch_size, seq_len)
-        qkv = rearrange(qkv, "b s (t h d) -> t b h s d", t=3, h=self.num_attention_heads)
+    def forward(
+        self, hidden_states: torch.Tensor, attention_mask: torch.Tensor
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor | None]:
+        batch_size, seq_len = attention_mask.shape
+        use_flash_attn = hidden_states.dtype in (torch.float16, torch.bfloat16) and hidden_states.is_cuda
+        qkv_unpadded = self.Wqkv(hidden_states)
 
-        query, key, value = qkv
-        attention_mask = attention_mask.unsqueeze(1).unsqueeze(2)
-        attn_weight = torch.where(attention_mask, 0, -10000.0)
-        if self.alibi is not None:
-            attn_weight = attn_weight + self.alibi[:, :, :seq_len, :seq_len]
-        attn_output = torch.nn.functional.scaled_dot_product_attention(
-            query, key, value, attn_weight, self.dropout_prob if self.training else 0.0
+        indices = torch.nonzero(attention_mask.flatten(), as_tuple=False).flatten()
+        qkv = repad(qkv_unpadded, indices, batch_size, seq_len)
+        if use_flash_attn:
+            qkv = rearrange(
+                qkv, "b s (t h d) -> t b s h d", t=3, h=self.num_attention_heads, d=self.attention_head_size
+            )
+        else:
+            qkv = rearrange(
+                qkv, "b s (t h d) -> t b h s d", t=3, h=self.num_attention_heads, d=self.attention_head_size
+            )
+
+        query, key, value = qkv.unbind(dim=0)
+
+        new_attention_mask = attention_mask
+        if self.pooling is not None:
+            query, new_attention_mask = self.pooling(query, attention_mask)
+        new_seq_len = new_attention_mask.shape[1]
+
+        attn_weight = repeat(
+            torch.where(einsum(attention_mask, new_attention_mask, "b s, b p -> b p s"), 0, -10000.0),
+            "b p s -> b h p s",
+            h=self.num_attention_heads,
         )
+        if self.alibi is not None:
+            attn_weight = attn_weight + self.alibi[:, :, : attn_weight.shape[-2], : attn_weight.shape[-1]]
+
+        if use_flash_attn:
+            # does not support dropout
+            attn_output = flash_attn_func(query, key, value, attn_weight)
+        else:
+            attn_output = torch.nn.functional.scaled_dot_product_attention(
+                query, key, value, attn_weight, self.dropout_prob if self.training else 0.0
+            )
         attn_output = rearrange(
             attn_output,
             "b h s d -> b s (h d)",
             b=batch_size,
             h=self.num_attention_heads,
-            s=seq_len,
+            s=new_seq_len,
             d=self.attention_head_size,
         )
-        return attn_output
+        if attention_mask.shape != new_attention_mask.shape:
+            indices = torch.nonzero(new_attention_mask.flatten(), as_tuple=False).flatten()
+        attn_output = unpad(attn_output, indices)
+        residual_query = None
+        if self.pooling is not None:
+            residual_query = rearrange(
+                query,
+                "b h s d -> b s (h d)",
+                b=batch_size,
+                h=self.num_attention_heads,
+                s=new_seq_len,
+                d=self.attention_head_size,
+            )
+            residual_query = unpad(residual_query, indices)
+        return attn_output, new_attention_mask, residual_query
 
 
 class TiteSelfOutput(torch.nn.Module):
@@ -279,10 +331,16 @@ class TiteSelfOutput(torch.nn.Module):
         self.LayerNorm = torch.nn.LayerNorm(hidden_size, eps=config.layer_norm_eps)
         self.dropout = torch.nn.Dropout(config.dropout_prob)
 
-    def forward(self, hidden_states: torch.Tensor, input_tensor: torch.Tensor) -> torch.Tensor:
+    def forward(
+        self, hidden_states: torch.Tensor, input_tensor: torch.Tensor, residual_query: torch.Tensor | None
+    ) -> torch.Tensor:
         hidden_states = self.dense(hidden_states)
         hidden_states = self.dropout(hidden_states)
-        hidden_states = self.LayerNorm(hidden_states + input_tensor)
+        if hidden_states.shape == input_tensor.shape:
+            hidden_states = hidden_states + input_tensor
+        else:
+            hidden_states = hidden_states + residual_query
+        hidden_states = self.LayerNorm(hidden_states)
         return hidden_states
 
 
@@ -292,15 +350,10 @@ class TiteAttention(torch.nn.Module):
         self.self = TiteSelfAttention(config, layer_idx)
         self.output = TiteSelfOutput(config, layer_idx)
 
-    def forward(
-        self,
-        hidden_states: torch.Tensor,
-        attention_mask: torch.Tensor,
-        indices: torch.Tensor,
-    ) -> torch.Tensor:
-        self_outputs = self.self(hidden_states, attention_mask, indices)
-        attn_output = self.output(self_outputs, hidden_states)
-        return attn_output
+    def forward(self, hidden_states: torch.Tensor, attention_mask: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+        self_outputs, attention_mask, residual_query = self.self(hidden_states, attention_mask)
+        attn_output = self.output(self_outputs, hidden_states, residual_query)
+        return attn_output, attention_mask
 
 
 class TiteIntermediate(torch.nn.Module):
@@ -342,26 +395,11 @@ class TiteLayer(torch.nn.Module):
         self.intermediate = TiteIntermediate(config, layer_idx)
         self.output = TiteOutput(config, layer_idx)
 
-        kernel_size = config.kernel_size[layer_idx]
-        stride = config.stride[layer_idx]
-        self.pooling = None
-        if kernel_size is not None and stride is not None:
-            self.pooling = MaskedAvgPool1d(kernel_size, stride)
-
     def forward(self, hidden_states: torch.Tensor, attention_mask: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
-        indices = torch.nonzero(attention_mask.flatten(), as_tuple=False).flatten()
-        batch_size, seq_len = hidden_states.shape[:2]
-        attn_output = self.attention(hidden_states, attention_mask, indices)
-        attn_output = unpad(attn_output, indices)
+        attn_output, attention_mask = self.attention(hidden_states, attention_mask)
         layer_output = apply_chunking_to_forward(
-            self.feed_forward_chunk,
-            self.chunk_size_feed_forward,
-            self.seq_len_dim,
-            attn_output,
+            self.feed_forward_chunk, self.chunk_size_feed_forward, self.seq_len_dim, attn_output
         )
-        layer_output = repad(layer_output, indices, batch_size, seq_len)
-        if self.pooling is not None:
-            layer_output, attention_mask = self.pooling(layer_output, attention_mask)
         return layer_output, attention_mask
 
     def feed_forward_chunk(self, attn_output: torch.Tensor) -> torch.Tensor:

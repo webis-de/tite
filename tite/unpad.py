@@ -12,7 +12,7 @@ class IndexFirstAxis(torch.autograd.Function):
     @staticmethod
     def forward(ctx, input: torch.Tensor, indices: torch.Tensor) -> torch.Tensor:
         ctx.save_for_backward(indices)
-        assert input.ndim >= 2
+        assert input.ndim >= 1
         ctx.first_axis_dim, other_shape = input.shape[0], input.shape[1:]  # type: ignore
         second_dim = other_shape.numel()  # product of sizes of all but first dimension
         # TD [2022-03-04] For some reason torch.gather is a bit faster than indexing.
@@ -27,7 +27,7 @@ class IndexFirstAxis(torch.autograd.Function):
     @staticmethod
     def backward(ctx, grad_output: torch.Tensor) -> Tuple[torch.Tensor, None]:
         (indices,) = ctx.saved_tensors
-        assert grad_output.ndim >= 2
+        assert grad_output.ndim >= 1
         other_shape = grad_output.shape[1:]
         grad_output = rearrange(grad_output, "b ... -> b (...)")
         grad_input = torch.zeros(
@@ -69,8 +69,8 @@ def unpad(hidden_states: torch.Tensor, indices: torch.Tensor) -> torch.Tensor:
     Save a small amount of overhead.
 
     Arguments:
-        hidden_states: (batch, seqlen, ...)
-        attention_mask: (batch, seqlen), bool / int, 1 means valid and 0 means not valid.
+        hidden_states: (batch_size, seq_len, ...)
+        attention_mask: (batch_size, seq_len), bool / int, 1 means valid and 0 means not valid.
 
     Returns:
         hidden_states: (total_nnz, ...), where total_nnz = number of tokens in selected in attention_mask.
@@ -79,17 +79,17 @@ def unpad(hidden_states: torch.Tensor, indices: torch.Tensor) -> torch.Tensor:
     return index_first_axis(rearranged, indices)  # type: ignore
 
 
-def repad(hidden_states: torch.Tensor, indices: torch.Tensor, batch: int, seqlen: int) -> torch.Tensor:
+def repad(hidden_states: torch.Tensor, indices: torch.Tensor, batch_size: int, seq_len: int) -> torch.Tensor:
     """Add padding to sequences.
 
     Arguments:
         hidden_states: (total_nnz, ...), where total_nnz = number of tokens in selected in attention_mask.
         indices: (total_nnz)
-        batch: int batch_size
-        seqlen: int max sequence length
+        batch_size: int batch_size
+        seq_len: int max sequence length
 
     Returns:
-        hidden_states: (batch, seqlen, ...)
+        hidden_states: (batch_size, seq_len, ...)
     """
-    output = index_put_first_axis(hidden_states, indices, batch * seqlen)
-    return rearrange(output, "(b s) ... -> b s ...", b=batch)  # type: ignore
+    output = index_put_first_axis(hidden_states, indices, batch_size * seq_len)
+    return rearrange(output, "(b s) ... -> b s ...", b=batch_size)  # type: ignore
