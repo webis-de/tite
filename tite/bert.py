@@ -1,7 +1,6 @@
 from torch import Tensor
 from torch.nn import Module
 from transformers import BertConfig as HFBertConfig
-from transformers import BertForMaskedLM
 from transformers import BertModel as HFBert
 
 from .model import TiteConfig, TiteModel
@@ -20,7 +19,7 @@ class BertConfig(TiteConfig):
         initializer_range: float = 0.02,
         layer_norm_eps: float = 1e-12,
         pad_token_id: int = 0,
-        hidden_act: str = "gelu_new",
+        hidden_act: str = "gelu_pytorch_tanh",
         **kwargs
     ):
         super().__init__(
