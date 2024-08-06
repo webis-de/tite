@@ -60,6 +60,8 @@ class TiteModule(LightningModule):
         self._tokens_seen = 0.0
 
     def on_validation_start(self) -> None:
+        if self.trainer is not None and self.trainer.limit_val_batches == 0:
+            return
         assert self.pre_val_student_state is None
         self.pre_val_student_state = self._student.state_dict()
         # Train on GLUE
@@ -79,6 +81,8 @@ class TiteModule(LightningModule):
             self.log(f"{glue.hparams.name}/{name}", value, on_step=False, on_epoch=True)
 
     def on_validation_end(self) -> None:
+        if self.trainer is not None and self.trainer.limit_val_batches == 0:
+            return
         assert self.pre_val_student_state is not None
         # Restore Model to before it was evaluated on GLUE
         self._student.load_state_dict(self.pre_val_student_state)
