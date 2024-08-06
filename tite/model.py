@@ -7,16 +7,6 @@ from einops import einsum, rearrange, repeat
 from transformers import PretrainedConfig, PreTrainedModel
 from transformers.activations import ACT2FN
 
-try:
-    flash_attn_found = False
-    from .attention import flash_attn_func
-
-    flash_attn_found = True
-except ImportError as e:
-    import logging
-
-    logging.error("Failed to import flash attention, disabling it", exc_info=e)
-
 from .unpad import repad, unpad
 
 
@@ -143,7 +133,7 @@ class TiteModel(PreTrainedModel):
         attention_mask = attention_mask.bool()
         batch_size, seq_len = input_ids.shape
         if self.unpadding:
-            indices = torch.nonzero(attention_mask.flatten(), as_tuple=False).flatten()
+            indices = torch.nonzero(attention_mask.flatten()).flatten()
             input_ids = unpad(input_ids, indices)
         hidden_states = self.embeddings(input_ids, attention_mask)
         hidden_states = self.encoder(hidden_states, attention_mask)
@@ -290,21 +280,19 @@ class TiteSelfAttention(torch.nn.Module):
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor | None]:
         batch_size, seq_len = attention_mask.shape
         qkv = self.Wqkv(hidden_states)
-        use_flash_attn = flash_attn_found and qkv.dtype in (torch.float16, torch.bfloat16) and hidden_states.is_cuda
 
         if self.unpadding:
-            indices = torch.nonzero(attention_mask.flatten(), as_tuple=False).flatten()
+            indices = torch.nonzero(attention_mask.flatten()).flatten()
             qkv = repad(qkv, indices, batch_size, seq_len)
-        order = "b s h d" if use_flash_attn else "b h s d"
-        qkv = rearrange(qkv, f"b s (t h d) -> t {order}", t=3, h=self.num_attention_heads, d=self.attention_head_size)
+        qkv = rearrange(qkv, f"b s (t h d) -> t b h s d", t=3, h=self.num_attention_heads, d=self.attention_head_size)
 
         query, key, value = qkv.unbind(dim=0)
 
         new_attention_mask = attention_mask
         if self.pooling is not None:
-            query = rearrange(query, f"{order} -> b s (h d)")
+            query = rearrange(query, "b h s d -> b s (h d)")
             query, new_attention_mask = self.pooling(query, attention_mask)
-            query = rearrange(query, f"b s (h d) -> {order}", h=self.num_attention_heads, d=self.attention_head_size)
+            query = rearrange(query, "b s (h d) -> b h s d", h=self.num_attention_heads, d=self.attention_head_size)
         new_seq_len = new_attention_mask.shape[1]
 
         attn_weight = repeat(
@@ -315,38 +303,26 @@ class TiteSelfAttention(torch.nn.Module):
         if self.alibi is not None:
             attn_weight = attn_weight + self.alibi[:, :, : attn_weight.shape[-2], : attn_weight.shape[-1]]
 
-        if use_flash_attn:
-            # does not support dropout
-            attn_output = flash_attn_func(query, key, value, attn_weight)
-            attn_output = rearrange(
-                attn_output,
-                "b s h d -> b s (h d)",
-                b=batch_size,
-                s=new_seq_len,
-                h=self.num_attention_heads,
-                d=self.attention_head_size,
-            )
-        else:
-            attn_output = torch.nn.functional.scaled_dot_product_attention(
-                query, key, value, attn_weight, self.dropout_prob if self.training else 0.0
-            )
-            attn_output = rearrange(
-                attn_output,
-                "b h s d -> b s (h d)",
-                b=batch_size,
-                h=self.num_attention_heads,
-                s=new_seq_len,
-                d=self.attention_head_size,
-            )
+        attn_output = torch.nn.functional.scaled_dot_product_attention(
+            query, key, value, attn_weight, self.dropout_prob if self.training else 0.0
+        )
+        attn_output = rearrange(
+            attn_output,
+            "b h s d -> b s (h d)",
+            b=batch_size,
+            h=self.num_attention_heads,
+            s=new_seq_len,
+            d=self.attention_head_size,
+        )
         if self.unpadding:
             if attention_mask.shape != new_attention_mask.shape:
-                indices = torch.nonzero(new_attention_mask.flatten(), as_tuple=False).flatten()
+                indices = torch.nonzero(new_attention_mask.flatten()).flatten()
             attn_output = unpad(attn_output, indices)
         residual_query = None
         if self.pooling is not None:
             residual_query = rearrange(
                 query,
-                f"{order} -> b s (h d)",
+                f"b h s d -> b s (h d)",
                 b=batch_size,
                 h=self.num_attention_heads,
                 s=new_seq_len,
