@@ -67,17 +67,13 @@ class HFBertModel(Module):
                 raise ValueError("Either model_name_or_path or config must be provided")
             self._model = HFBert(config)
         else:
-            # self._model = HFBert.from_pretrained(model_name_or_path, config=config)
-            self._model = BertForMaskedLM.from_pretrained(model_name_or_path, config=config)
+            self._model = HFBert.from_pretrained(model_name_or_path, config=config)
         self.config = self._model.config
         self.config.last_hidden_size = self.config.hidden_size
 
     def forward(
         self, input_ids: Tensor, attention_mask: Tensor | None = None, token_type_ids: Tensor | None = None
     ) -> Tensor:
-        # return self._model(
-        #     input_ids, attention_mask=attention_mask, token_type_ids=token_type_ids, output_hidden_states=True
-        # ).last_hidden_state
         return self._model(
             input_ids, attention_mask=attention_mask, token_type_ids=token_type_ids, output_hidden_states=True
-        ).hidden_states[-1]
+        ).last_hidden_state
