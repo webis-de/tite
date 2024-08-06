@@ -1,25 +1,14 @@
-import math
-
 import torch
 from torch import Tensor
 from torch.nn import Module
-
-
-class GELUActivation(Module):
-    """
-    Implementation of the GELU activation function currently in Google BERT repo (identical to OpenAI GPT). Also see
-    the Gaussian Error Linear Units paper: https://arxiv.org/abs/1606.08415
-    """
-
-    def forward(self, input: Tensor) -> Tensor:
-        return 0.5 * input * (1.0 + torch.tanh(math.sqrt(2.0 / math.pi) * (input + 0.044715 * torch.pow(input, 3.0))))
+from transformers.activations import ACT2FN
 
 
 class MLMDecoder(Module):
-    def __init__(self, vocab_size: int, hidden_size: int) -> None:
+    def __init__(self, vocab_size: int, hidden_size: int, hidden_act: str = "gelu_pytorch_tanh") -> None:
         super().__init__()
         self.dense = torch.nn.Linear(hidden_size, hidden_size)
-        self.transform_act_fn = GELUActivation()
+        self.transform_act_fn = ACT2FN[hidden_act]
         self.LayerNorm = torch.nn.LayerNorm(hidden_size, eps=1e-12)
         self.decoder = torch.nn.Linear(hidden_size, vocab_size)
 
