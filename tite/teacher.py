@@ -1,3 +1,4 @@
+import torch
 from torch import Tensor
 from torch.nn import Module
 
@@ -16,5 +17,5 @@ class MLMPredictor(Module):
         self._pad_id = padid
 
     def forward(self, input_ids: Tensor, **kwargs) -> Tensor:
-        targets = input_ids.masked_fill(input_ids == self._pad_id, -100)
+        targets = torch.where(input_ids == self._pad_id, -100, input_ids)
         return targets

@@ -48,7 +48,7 @@ class SwapTokens(Transformation):
 class MaskTokens(Transformation):
     def __init__(self, maskid: int, clsid: int, sepid: int, mask_prob: float = 0.3) -> None:
         super().__init__()
-        self._maskid = maskid
+        self._mask_id = maskid
         self._cls_id = clsid
         self._sep_id = sepid
         self._mask_prob = mask_prob
@@ -56,7 +56,7 @@ class MaskTokens(Transformation):
     def forward(self, input_ids: Tensor, attention_mask: LongTensor, **kwargs) -> list[dict]:
         mask = torch.rand(attention_mask.shape, device=input_ids.device) < self._mask_prob
         mask = mask.logical_and(input_ids != self._cls_id).logical_and(input_ids != self._sep_id)
-        input_ids = torch.masked_fill(input_ids, mask, self._maskid)
+        input_ids = torch.where(mask, self._mask_id, input_ids)
         return [{"input_ids": input_ids, "attention_mask": attention_mask}]
 
 
