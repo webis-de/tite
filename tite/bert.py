@@ -76,3 +76,6 @@ class HFBertModel(Module):
         return self._model(
             input_ids, attention_mask=attention_mask, token_type_ids=token_type_ids, output_hidden_states=True
         ).last_hidden_state
+
+    def save_pretrained(self, *args, **kwargs):
+        self._model.save_pretrained(*args, **kwargs)
