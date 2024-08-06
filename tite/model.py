@@ -262,8 +262,8 @@ class TiteSelfAttention(torch.nn.Module):
         self, hidden_states: torch.Tensor, attention_mask: torch.Tensor
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor | None]:
         batch_size, seq_len = attention_mask.shape
-        use_flash_attn = hidden_states.dtype in (torch.float16, torch.bfloat16) and hidden_states.is_cuda
         qkv_unpadded = self.Wqkv(hidden_states)
+        use_flash_attn = qkv_unpadded.dtype in (torch.float16, torch.bfloat16) and hidden_states.is_cuda
 
         indices = torch.nonzero(attention_mask.flatten(), as_tuple=False).flatten()
         qkv = repad(qkv_unpadded, indices, batch_size, seq_len)
@@ -280,7 +280,15 @@ class TiteSelfAttention(torch.nn.Module):
 
         new_attention_mask = attention_mask
         if self.pooling is not None:
+            if use_flash_attn:
+                query = rearrange(query, "b s h d -> b s (h d)")
+            else:
+                query = rearrange(query, "b h s d -> b s (h d)")
             query, new_attention_mask = self.pooling(query, attention_mask)
+            if use_flash_attn:
+                query = rearrange(query, "b s (h d) -> b s h d", h=self.num_attention_heads, d=self.attention_head_size)
+            else:
+                query = rearrange(query, "b s (h d) -> b h s d", h=self.num_attention_heads, d=self.attention_head_size)
         new_seq_len = new_attention_mask.shape[1]
 
         attn_weight = repeat(
@@ -294,18 +302,26 @@ class TiteSelfAttention(torch.nn.Module):
         if use_flash_attn:
             # does not support dropout
             attn_output = flash_attn_func(query, key, value, attn_weight)
+            attn_output = rearrange(
+                attn_output,
+                "b s h d -> b s (h d)",
+                b=batch_size,
+                s=new_seq_len,
+                h=self.num_attention_heads,
+                d=self.attention_head_size,
+            )
         else:
             attn_output = torch.nn.functional.scaled_dot_product_attention(
                 query, key, value, attn_weight, self.dropout_prob if self.training else 0.0
             )
-        attn_output = rearrange(
-            attn_output,
-            "b h s d -> b s (h d)",
-            b=batch_size,
-            h=self.num_attention_heads,
-            s=new_seq_len,
-            d=self.attention_head_size,
-        )
+            attn_output = rearrange(
+                attn_output,
+                "b h s d -> b s (h d)",
+                b=batch_size,
+                h=self.num_attention_heads,
+                s=new_seq_len,
+                d=self.attention_head_size,
+            )
         if attention_mask.shape != new_attention_mask.shape:
             indices = torch.nonzero(new_attention_mask.flatten(), as_tuple=False).flatten()
         attn_output = unpad(attn_output, indices)
