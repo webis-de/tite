@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 from typing import Any, Literal
 
@@ -14,6 +15,8 @@ from tite.model import PreTrainedModel, TiteConfig
 
 if torch.cuda.is_available():
     torch.set_float32_matmul_precision("medium")
+
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 
 class CustomSaveConfigCallback(SaveConfigCallback):
