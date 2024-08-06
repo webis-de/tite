@@ -6,7 +6,6 @@ import torch
 from einops import einsum, rearrange, repeat
 from transformers import PretrainedConfig, PreTrainedModel
 from transformers.activations import ACT2FN
-from transformers.modeling_utils import apply_chunking_to_forward
 
 try:
     flash_attn_found = False
@@ -52,7 +51,7 @@ class TiteConfig(PretrainedConfig):
         initializer_range: float = 0.02,
         layer_norm_eps: float = 1e-12,
         pad_token_id: int = 0,
-        hidden_act: str = "gelu_new",
+        hidden_act: str = "gelu_pytorch_tanh",
         positional_embedding_type: Literal["absolute", "ALiBi"] = "ALiBi",
         unpadding: bool = False,
         **kwargs,
@@ -432,15 +431,9 @@ class TiteLayer(torch.nn.Module):
 
     def forward(self, hidden_states: torch.Tensor, attention_mask: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         attn_output, attention_mask = self.attention(hidden_states, attention_mask)
-        layer_output = apply_chunking_to_forward(
-            self.feed_forward_chunk, self.chunk_size_feed_forward, self.seq_len_dim, attn_output
-        )
-        return layer_output, attention_mask
-
-    def feed_forward_chunk(self, attn_output: torch.Tensor) -> torch.Tensor:
         intermediate_output = self.intermediate(attn_output)
         layer_output = self.output(intermediate_output, attn_output)
-        return layer_output
+        return layer_output, attention_mask
 
 
 class TiteEncoder(torch.nn.Module):
