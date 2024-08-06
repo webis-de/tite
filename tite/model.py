@@ -296,28 +296,16 @@ class TiteSelfAttention(torch.nn.Module):
         if self.unpadding:
             indices = torch.nonzero(attention_mask.flatten(), as_tuple=False).flatten()
             qkv = repad(qkv, indices, batch_size, seq_len)
-        if use_flash_attn:
-            qkv = rearrange(
-                qkv, "b s (t h d) -> t b s h d", t=3, h=self.num_attention_heads, d=self.attention_head_size
-            )
-        else:
-            qkv = rearrange(
-                qkv, "b s (t h d) -> t b h s d", t=3, h=self.num_attention_heads, d=self.attention_head_size
-            )
+        order = "b s h d" if use_flash_attn else "b h s d"
+        qkv = rearrange(qkv, f"b s (t h d) -> t {order}", t=3, h=self.num_attention_heads, d=self.attention_head_size)
 
         query, key, value = qkv.unbind(dim=0)
 
         new_attention_mask = attention_mask
         if self.pooling is not None:
-            if use_flash_attn:
-                query = rearrange(query, "b s h d -> b s (h d)")
-            else:
-                query = rearrange(query, "b h s d -> b s (h d)")
+            query = rearrange(query, f"{order} -> b s (h d)")
             query, new_attention_mask = self.pooling(query, attention_mask)
-            if use_flash_attn:
-                query = rearrange(query, "b s (h d) -> b s h d", h=self.num_attention_heads, d=self.attention_head_size)
-            else:
-                query = rearrange(query, "b s (h d) -> b h s d", h=self.num_attention_heads, d=self.attention_head_size)
+            query = rearrange(query, f"b s (h d) -> {order}", h=self.num_attention_heads, d=self.attention_head_size)
         new_seq_len = new_attention_mask.shape[1]
 
         attn_weight = repeat(
@@ -359,7 +347,7 @@ class TiteSelfAttention(torch.nn.Module):
         if self.pooling is not None:
             residual_query = rearrange(
                 query,
-                "b h s d -> b s (h d)",
+                f"{order} -> b s (h d)",
                 b=batch_size,
                 h=self.num_attention_heads,
                 s=new_seq_len,
