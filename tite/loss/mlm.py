@@ -10,4 +10,4 @@ class MLMCrossEntropy(Module):
     def forward(self, logits, labels):
         logits = logits.view(-1, self.vocab_size)
         labels = labels.view(-1)
-        return torch.nn.functional.cross_entropy(logits, labels, ignore_index=-100)
+        return torch.nn.functional.cross_entropy(logits, labels)
