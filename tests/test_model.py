@@ -24,7 +24,7 @@ def config() -> TiteConfig:
 
 
 @pytest.mark.parametrize("kernel_size, stride, seq_length", [(3, 1, 8), (3, 2, 8), (3, 3, 8)])
-def test_masked_avg_pool1d(kernel_size: int, stride: int, seq_length: int):
+def test_masked_avg_pool1d_dimensions(kernel_size: int, stride: int, seq_length: int):
     layer = MaskedAvgPool1d(kernel_size, stride)
 
     x = torch.randn(2, seq_length, 4)
@@ -37,6 +37,29 @@ def test_masked_avg_pool1d(kernel_size: int, stride: int, seq_length: int):
     assert output.shape[1] == output_shapes[-1]
     assert ((output != 0).all(-1) == output_mask).all()
     assert output_mask.shape[1] == output_shapes[-1]
+
+
+def test_masked_avg_pool1d_2_5_4_3_3():
+    layer = MaskedAvgPool1d(3, 3)
+    x = torch.arange(2 * 5 * 4, dtype=torch.float32).reshape(2, 5, 4)
+    mask = torch.tensor([[True, True, True, True, True], [True, True, True, False, False]])
+    out, out_mask = layer(x, mask)
+    assert torch.allclose(
+        out,
+        torch.tensor(
+            [[[4.0, 5.0, 6.0, 7.0], [14.0, 15.0, 16.0, 17.0]], [[24.0, 25.0, 26.0, 27.0], [0.0, 0.0, 0.0, 0.0]]]
+        ),
+    )
+    assert torch.equal(out_mask, torch.tensor([[True, True], [True, False]]))
+
+
+def test_masked_avg_pool1d_2_5_4_8_1():
+    layer = MaskedAvgPool1d(8, 1)
+    x = torch.arange(2 * 5 * 4, dtype=torch.float32).reshape(2, 5, 4)
+    mask = torch.tensor([[True, True, True, True, True], [True, True, True, False, False]])
+    out, out_mask = layer(x, mask)
+    assert torch.allclose(out, torch.tensor([[[8.0, 9.0, 10.0, 11.0]], [[24.0, 25.0, 26.0, 27.0]]]))
+    assert torch.equal(out_mask, torch.tensor([[True], [True]]))
 
 
 @pytest.mark.parametrize("positional_embedding_type", ["absolute", "ALiBi"])
