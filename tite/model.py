@@ -7,7 +7,16 @@ from einops import einsum, rearrange, repeat
 from transformers import PretrainedConfig, PreTrainedModel
 from transformers.activations import ACT2FN
 
-from .attention import flash_attn_func
+try:
+    flash_attn_found = False
+    from .attention import flash_attn_func
+
+    flash_attn_found = True
+except ImportError as e:
+    import logging
+
+    logging.error("Failed to import flash attention, disabling it", exc_info=e)
+
 from .unpad import repad, unpad
 
 
@@ -174,28 +183,32 @@ class TiteEmbeddings(torch.nn.Module):
         return embeddings
 
 
+def sum_pool2d(
+    input: torch.Tensor, kernel_size: tuple[int, int], stride: tuple[int, int], ceil_mode: bool = False
+) -> torch.Tensor:
+    return torch.nn.functional.avg_pool2d(
+        input, kernel_size=kernel_size, stride=stride, ceil_mode=ceil_mode, divisor_override=1
+    )
+
+
 class MaskedAvgPool1d(torch.nn.Module):
     def __init__(self, kernel_size: int, stride: int):
         super().__init__()
         self.kernel_size = kernel_size
         self.stride = stride
 
-    def forward(self, x: torch.Tensor, mask: torch.BoolTensor) -> Tuple[torch.Tensor, torch.BoolTensor]:
+    def forward(self, x: torch.Tensor, mask: torch.BoolTensor) -> tuple[torch.Tensor, torch.BoolTensor]:
         if x.shape[-2] == 1:
             return x, mask
-        padding = (x.shape[-2] - self.kernel_size) % self.stride
-        if self.kernel_size > x.shape[-2]:
-            padding = self.kernel_size - x.shape[-2]
-        if padding != 0:
-            x = torch.nn.functional.pad(x, (0, 0, 0, padding))
-            mask = torch.nn.functional.pad(mask, (0, padding))
-        x_blocks = x.unfold(-2, self.kernel_size, self.stride)
-        mask_blocks = mask.unfold(1, self.kernel_size, self.stride).unsqueeze(-2)
-        x_masked = x_blocks * mask_blocks
-        normalization = mask_blocks.sum(-1)
+        x = torch.where(mask.unsqueeze(-1).expand((-1, -1, x.shape[-1])), x, 0)
+        kernel_size = min(self.kernel_size, mask.shape[-1])
+        normalization = sum_pool2d(
+            mask.float().unsqueeze(-1), kernel_size=(kernel_size, 1), stride=(self.stride, 1), ceil_mode=True
+        )
+        y_mask = (normalization != 0).squeeze(-1)
         normalization[normalization == 0] = 1
-        y = x_masked.sum(-1) / normalization
-        y_mask = mask_blocks.amax(-1).squeeze(-1)
+        sums = sum_pool2d(x, kernel_size=(kernel_size, 1), stride=(self.stride, 1), ceil_mode=True)
+        y = sums / normalization
         return y, y_mask
 
 
@@ -277,7 +290,7 @@ class TiteSelfAttention(torch.nn.Module):
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor | None]:
         batch_size, seq_len = attention_mask.shape
         qkv = self.Wqkv(hidden_states)
-        use_flash_attn = qkv.dtype in (torch.float16, torch.bfloat16) and hidden_states.is_cuda
+        use_flash_attn = flash_attn_found and qkv.dtype in (torch.float16, torch.bfloat16) and hidden_states.is_cuda
 
         if self.unpadding:
             indices = torch.nonzero(attention_mask.flatten(), as_tuple=False).flatten()
