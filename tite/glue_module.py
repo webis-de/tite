@@ -80,7 +80,7 @@ class GlueModule(LightningModule):
     def training_step(self, batch: dict[str, Any]) -> Tensor:
         encoded = self.parse_batch(batch)
         output = self._model(**encoded)
-        logits = self.classification_head(output[:, 0])
+        logits = self.classification_head(output.mean(1))
         loss = self._loss_function(logits, batch["label"])
         self.log("train_loss", loss, prog_bar=True)
         return loss
@@ -88,7 +88,7 @@ class GlueModule(LightningModule):
     def validation_step(self, batch: dict[str, Any], *args, **kwargs) -> None:
         encoded = self.parse_batch(batch)
         output = self._model(**encoded)
-        logits = self.classification_head(output[:, 0])
+        logits = self.classification_head(output.mean(1))
         if self.num_classes > 1:
             logits = logits.argmax(-1)
         for validation_metric in self._evaluation_metrics:
