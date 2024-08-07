@@ -6,4 +6,3 @@ wandb>=0.12.10
 einops==0.8.0
 torchdata@git+https://github.com/pytorch/data
 jsonargparse[signatures]>=4.27.7
-triton==3.0.0
