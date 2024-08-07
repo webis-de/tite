@@ -16,6 +16,6 @@ class MLMTeacher(Module):
         super().__init__()
         self._pad_id = padid
 
-    def forward(self, input_ids: Tensor, **kwargs) -> Tensor:
-        targets = torch.where(input_ids == self._pad_id, -100, input_ids)
+    def forward(self, input_ids: Tensor, mlm_mask: Tensor, **kwargs) -> Tensor:
+        targets = torch.where(input_ids.eq(self._pad_id) | ~mlm_mask, -100, input_ids)
         return targets

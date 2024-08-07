@@ -106,10 +106,12 @@ class TiteModule(LightningModule):
             max_length=self._max_length,
         ).to(self.device)
         for transformation in self._transforms:  # Currently only supports exactly 1 transformation
-            transformed = transformation(**tokenized)[0]
+            transformed, aux = transformation(**tokenized)
+            transformed = transformed[0]
+            aux = aux[0]
         # JEPA will try to predict the original from the transformed input within the embedding space, i.e.,
         #   Loss(pred(student(transformed)), teacher(tokenized))
-        jepa_loss = self._jepa(transformed, tokenized, None)
+        jepa_loss = self._jepa(transformed, tokenized, **aux)
         attention_mask = tokenized["attention_mask"]
         num_tokens = attention_mask.sum() if attention_mask is not None else tokenized["input_ids"].numel()
         self._tokens_seen += num_tokens
