@@ -1,6 +1,7 @@
 import torch
 from torch import Tensor
 from torch.nn import Module
+from transformers import BertConfig, BertForMaskedLM
 from transformers.activations import ACT2FN
 
 
@@ -23,6 +24,18 @@ class MLMDecoder(Module):
         hidden_states = self.LayerNorm(hidden_states)
         hidden_states = self.decoder(hidden_states)
         return hidden_states
+
+
+class HFMLMDecoder(MLMDecoder):
+
+    def __init__(self, model_name_or_path: str):
+        config = BertConfig.from_pretrained(model_name_or_path)
+        super().__init__(config.vocab_size, config.hidden_size, config.hidden_act)
+        model = BertForMaskedLM.from_pretrained(model_name_or_path)
+        state_dict = {}
+        for key, value in model.cls.state_dict().items():
+            state_dict[key.replace("predictions.", "").replace("transform.", "")] = value
+        self.load_state_dict(state_dict)
 
 
 class Identity(Module):

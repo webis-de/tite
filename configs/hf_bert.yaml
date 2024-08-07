@@ -31,10 +31,9 @@ model:
           sepid: 102
           mask_prob: 0.3
     predictor:
-      class_path: tite.predictor.MLMDecoder
+      class_path: tite.predictor.HFMLMDecoder
       init_args:
-        vocab_size: 30522
-        hidden_size: 768
+        model_name_or_path: bert-base-uncased
     loss:
       class_path: tite.loss.mlm.MLMCrossEntropy
       init_args:
