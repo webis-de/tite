@@ -57,19 +57,15 @@ class TiteModule(LightningModule):
         if detach_teacher_from_grad:
             self._teacher = _DetachFromGrad(self._teacher)
         self._jepa = JEPA(self._student, self._teacher, predictor, loss)
-        # Stores the state before the current validation step (or None if currently not in a validation step).
-        self.pre_val_student_state = None
 
         self._tokens_seen = 0.0
 
     def on_validation_start(self) -> None:
         if self.trainer is not None and self.trainer.limit_val_batches == 0:
             return
-        assert self.pre_val_student_state is None
-        self.pre_val_student_state = self._student.state_dict()
         # Train on GLUE
         glue = GLUEDataModule(batch_size=32)
-        glue_module = GlueModule(deepcopy(self._student), self._tokenizer, glue.hparams.name)
+        glue_module = GlueModule(deepcopy(self._student).train(), self._tokenizer, glue.hparams.name)
         trainer = Trainer(
             logger=False,
             precision=(self.trainer.precision if self.trainer is not None else "bf16-mixed"),
@@ -78,18 +74,9 @@ class TiteModule(LightningModule):
             enable_checkpointing=False,
         )
         trainer.fit(glue_module, glue)
-        self._student.to(self.device)
         metrics = trainer.logged_metrics
         for name, value in metrics.items():
             self.log(f"{glue.hparams.name}/{name}", value, on_step=False, on_epoch=True)
-
-    def on_validation_end(self) -> None:
-        if self.trainer is not None and self.trainer.limit_val_batches == 0:
-            return
-        assert self.pre_val_student_state is not None
-        # Restore Model to before it was evaluated on GLUE
-        self._student.load_state_dict(self.pre_val_student_state)
-        self.pre_val_student_state = None
 
     def validation_step(self, batch: dict[str, Any] | None) -> None:
         # Empty validation step to trick pytorch lightning into validating this model though validation is actually done
