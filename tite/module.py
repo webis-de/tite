@@ -1,3 +1,4 @@
+from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
@@ -68,7 +69,7 @@ class TiteModule(LightningModule):
         self.pre_val_student_state = self._student.state_dict()
         # Train on GLUE
         glue = GLUEDataModule(batch_size=32)
-        glue_module = GlueModule(self._student.detach().clone().train(), self._tokenizer, glue.hparams.name)
+        glue_module = GlueModule(deepcopy(self._student), self._tokenizer, glue.hparams.name)
         trainer = Trainer(
             logger=False,
             precision=(self.trainer.precision if self.trainer is not None else "bf16-mixed"),
