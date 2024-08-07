@@ -8,7 +8,7 @@ from tite.loss import BarlowTwins, MLMCrossEntropy
 from tite.model import TiteConfig, TiteModel
 from tite.module import TiteModule
 from tite.predictor import Identity, MLMDecoder
-from tite.teacher import MLMPredictor
+from tite.teacher import MLMTeacher
 from tite.tokenizer import TiteTokenizer
 from tite.transformations import MaskTokens, Transformation
 
@@ -41,7 +41,7 @@ def config() -> TiteConfig:
                 intermediate_size=8,
                 max_position_embeddings=16,
             ),
-            MLMPredictor(0),
+            MLMTeacher(0),
             MLMDecoder(32, 4),
             MaskTokens(4, 2, 3),
             MLMCrossEntropy(32),

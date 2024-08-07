@@ -11,7 +11,7 @@ class Identity(Module):
         return input_ids
 
 
-class MLMPredictor(Module):
+class MLMTeacher(Module):
     def __init__(self, padid: int) -> None:
         super().__init__()
         self._pad_id = padid
