@@ -1,11 +1,10 @@
+import inspect
 from functools import reduce
-from typing import Any, Callable, Iterable, Mapping, NamedTuple
+from typing import Any, Callable, Iterable, NamedTuple
 
 import torch
-from lightning import LightningModule
 from torch import Tensor
 from torch.nn import Module
-from torch.optim import AdamW, Optimizer
 from torch.utils.data import default_collate
 from transformers import PreTrainedTokenizerBase, TensorType
 
@@ -20,6 +19,11 @@ class MaskCollatorBatch(NamedTuple):
 Encoder = Callable[[Any], Any]
 Predictor = Callable[[Any, Any], Any]
 LossFn = Callable[[Any, Any], Any]
+
+
+def parse_kwargs(kwargs: dict[str, Any], module: Module) -> dict[str, Any]:
+    valid_keys = inspect.signature(module.forward).parameters.keys()
+    return {k: v for k, v in kwargs.items() if k in valid_keys}
 
 
 class JEPA(Module):
@@ -38,10 +42,12 @@ class JEPA(Module):
         self._loss = loss
         self._return_embeddings = return_embeddings
 
-    def forward(self, input: dict, target: dict, aux: Any | None = None):
+    def forward(self, input: dict, target: dict, **kwargs):
         embx = self._student(**input)
-        emby = self._teacher(**target)
-        pred = self._predictor(embx, aux)
+        teacher_kwargs = parse_kwargs(kwargs, self._teacher)
+        emby = self._teacher(**target, **teacher_kwargs)
+        predictor_kwargs = parse_kwargs(kwargs, self._predictor)
+        pred = self._predictor(embx, **predictor_kwargs)
         if not self._return_embeddings:
             return self._loss(pred, emby)
         return self._loss(pred, emby), embx, emby

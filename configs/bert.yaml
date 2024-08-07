@@ -9,7 +9,7 @@ model:
           init_args:
             num_hidden_layers: 12
     teacher:
-      class_path: tite.teacher.MLMPredictor
+      class_path: tite.teacher.MLMTeacher
       init_args:
         padid: 0
     tokenizer:

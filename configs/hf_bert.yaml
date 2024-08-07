@@ -6,7 +6,7 @@ model:
       init_args:
         model_name_or_path: bert-base-uncased
     teacher:
-      class_path: tite.teacher.MLMPredictor
+      class_path: tite.teacher.MLMTeacher
       init_args:
         padid: 0
     tokenizer:
