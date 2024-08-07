@@ -26,4 +26,3 @@ trainer:
   gradient_clip_val: 10
   detect_anomaly: false
   inference_mode: false
-  enable_progress_bar: false

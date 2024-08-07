@@ -28,6 +28,7 @@ model:
     transformations:
       - class_path: tite.transformations.MaskTokens
         init_args:
+          vocab_size: 30522
           maskid: 103
           clsid: 101
           sepid: 102
