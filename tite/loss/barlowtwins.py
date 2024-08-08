@@ -43,4 +43,4 @@ class BarlowTwins(nn.Module):
         # a a . a a 1
         # weights = (1 - torch.eye(D, device=crosscorr.device)) * self._alpha + torch.eye(D, device=crosscorr.device)
         weights = torch.where(torch.eye(D, dtype=torch.bool, device=crosscorr.device), 1, self._alpha)
-        return F.mse_loss(crosscorr * weights, torch.eye(D, device=crosscorr.device), reduction="sum")
+        return F.mse_loss(crosscorr * weights, torch.eye(D, device=crosscorr.device), reduction="mean")
