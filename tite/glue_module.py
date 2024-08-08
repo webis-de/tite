@@ -21,9 +21,6 @@ NUM_CLASSES_MAP = {
 }
 
 
-LOSS_FUNCTION_MAP = {}
-
-
 class GlueModule(LightningModule):
     def __init__(self, model: TiteModel, tokenizer: PreTrainedTokenizerBase, task: str) -> None:
         super().__init__()

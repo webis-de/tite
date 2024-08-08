@@ -405,7 +405,9 @@ class TiteLayer(torch.nn.Module):
         self.intermediate = TiteIntermediate(config, layer_idx)
         self.output = TiteOutput(config, layer_idx)
 
-    def forward(self, hidden_states: torch.Tensor, attention_mask: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+    def forward(
+        self, hidden_states: torch.Tensor, attention_mask: torch.BoolTensor
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
         attn_output, attention_mask = self.attention(hidden_states, attention_mask)
         intermediate_output = self.intermediate(attn_output)
         layer_output = self.output(intermediate_output, attn_output)
@@ -421,6 +423,6 @@ class TiteEncoder(torch.nn.Module):
         )
 
     def forward(self, hidden_states: torch.Tensor, attention_mask: torch.BoolTensor) -> torch.Tensor:
-        for layer_idx, layer_module in enumerate(self.layer):
+        for layer_module in self.layer:
             hidden_states, attention_mask = layer_module(hidden_states, attention_mask)
         return hidden_states

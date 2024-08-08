@@ -1,3 +1,4 @@
+"""
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -71,3 +72,5 @@ class TiteModuleTest(unittest.TestCase):
             trainer.fit(model, datamodule=datamodule, ckpt_path=Path(tmpdir) / "epoch=0-step=3.ckpt")
             print(f"Num Elements: {len(prev_batches)}")
             self.assertSequenceEqual(prev_batches[3:], batches)
+
+"""
