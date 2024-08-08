@@ -1,6 +1,7 @@
 model:
   class_path: tite.module.TiteModule
   init_args:
+    detach_teacher_from_grad: true
     student:
       class_path: tite.bert.BertModel
       init_args:
