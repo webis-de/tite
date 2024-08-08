@@ -2,6 +2,7 @@ from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
+import torch
 from lightning import LightningModule, Trainer
 from lightning.pytorch.callbacks.early_stopping import EarlyStopping
 from torch import Tensor
@@ -64,7 +65,7 @@ class TiteModule(LightningModule):
         if self.trainer is not None and self.trainer.limit_val_batches == 0:
             return
         # Train on GLUE
-        glue = GLUEDataModule(batch_size=32)
+        glue = GLUEDataModule(batch_size=32, tokenizer=self._tokenizer)
         glue_module = GlueModule(deepcopy(self._student).train(), self._tokenizer, glue.hparams.name)
         trainer = Trainer(
             logger=False,
@@ -83,25 +84,16 @@ class TiteModule(LightningModule):
         # using the GlueModule
         return
 
-    def training_step(self, batch: dict[str, Any]):
-        tokenized = self._tokenizer(
-            text=batch[self._text_key],
-            return_attention_mask=True,
-            return_token_type_ids=False,
-            padding=True,
-            return_tensors=TensorType.PYTORCH,
-            truncation=True,
-            max_length=self._max_length,
-        ).to(self.device)
+    def training_step(self, batch: dict[str, torch.Tensor]) -> Tensor:
         for transformation in self._transforms:  # Currently only supports exactly 1 transformation
-            transformed, aux = transformation(**tokenized)
+            transformed, aux = transformation(**batch)
             transformed = transformed[0]
             aux = aux[0]
         # JEPA will try to predict the original from the transformed input within the embedding space, i.e.,
         #   Loss(pred(student(transformed)), teacher(tokenized))
-        jepa_loss = self._jepa(transformed, tokenized, **aux)
-        attention_mask = tokenized["attention_mask"]
-        num_tokens = attention_mask.sum() if attention_mask is not None else tokenized["input_ids"].numel()
+        jepa_loss = self._jepa(transformed, batch, **aux)
+        attention_mask = batch["attention_mask"]
+        num_tokens = attention_mask.sum() if attention_mask is not None else batch["input_ids"].numel()
         self._tokens_seen += num_tokens
         self.log("tokens_seen", self._tokens_seen, on_step=True, reduce_fx="max")  # We sum it up ourselves
         self.log_dict({"loss": jepa_loss}, prog_bar=True, on_step=True)

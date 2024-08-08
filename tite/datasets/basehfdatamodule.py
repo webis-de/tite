@@ -1,10 +1,12 @@
 import os
-from typing import Any, Callable, Literal, Mapping
+from typing import Any, Literal, Mapping
 
+import torch
 from datasets import load_dataset
 from lightning import LightningDataModule
 from torch.utils.data import DataLoader
 from torchdata.stateful_dataloader import StatefulDataLoader
+from transformers import PreTrainedTokenizerBase
 
 
 def _seed_or_none(seed: int | None = None) -> int | None:
@@ -18,6 +20,7 @@ class BaseHFDataModule(LightningDataModule):
     def __init__(
         self,
         path: str,
+        tokenizer: PreTrainedTokenizerBase | None,
         name: str | None = None,
         data_dir: str | None = None,
         data_files: Mapping[str, str] | None = None,
@@ -25,7 +28,8 @@ class BaseHFDataModule(LightningDataModule):
         seed: int | None = None,
         num_workers: int = 0,
         streaming: bool = True,
-        collate_fn: Callable[[list], Any] | None = None,
+        max_length: int | None = None,
+        text_keys: tuple[str, str | None] = ("text", None),
     ) -> None:
         """
         Args:
@@ -40,11 +44,11 @@ class BaseHFDataModule(LightningDataModule):
                 Defaults to True.
         """
         super().__init__()
+        self._tokenizer = tokenizer
         self._data_dir = data_dir
         self._data_files = data_files
         self._streaming = streaming
         self._dataset = None
-        self._collate_fn = collate_fn
         seed = _seed_or_none(seed)
         self.save_hyperparameters(
             {
@@ -56,16 +60,52 @@ class BaseHFDataModule(LightningDataModule):
             }
         )
         self._dataloaders: dict[str, StatefulDataLoader] = dict()
+        self._max_length = max_length
+        self._text_keys = text_keys
+
+    def collate_fn(self, batch: list[dict]) -> Any:
+        agg = {"input_ids": [], "attention_mask": [], "label": []}
+        for item in batch:
+            for key, value in item.items():
+                if key in agg:
+                    agg[key].append(value)
+        pad_ids = {"input_ids": self._tokenizer.pad_token_id, "attention_mask": 0, "label": None}
+        out = {}
+        for key, values in agg.items():
+            if not values:
+                continue
+            pad_id = pad_ids[key]
+            if pad_id is None:
+                out[key] = torch.tensor(values)
+            else:
+                out[key] = torch.nn.utils.rnn.pad_sequence(
+                    [torch.tensor(value) for value in values], batch_first=True, padding_value=pad_id
+                )
+        return out
 
     def setup(self, stage: Literal["fit", "validate", "test", "predict"]) -> None:
         assert self._dataset is None, "Dataset is already set up"
-        self._dataset = load_dataset(
-            path=self.hparams["path"],
-            name=self.hparams["name"],
-            data_dir=self._data_dir,
-            data_files=self._data_files,
-            streaming=self._streaming,
-        ).shuffle(buffer_size=1_024, seed=self.hparams["seed"])
+        t1, t2 = self._text_keys
+        self._dataset = (
+            load_dataset(
+                path=self.hparams["path"],
+                name=self.hparams["name"],
+                data_dir=self._data_dir,
+                data_files=self._data_files,
+                streaming=self._streaming,
+            )
+            .map(
+                lambda x: self._tokenizer(
+                    x[t1],
+                    x[t2] if t2 is not None else None,
+                    truncation=True,
+                    max_length=self._max_length,
+                    return_token_type_ids=False,
+                ),
+                batched=True,
+            )
+            .shuffle(buffer_size=1_024, seed=self.hparams["seed"])
+        )
         # Maybe for the future: implement state_dict and load_state_dict (TODO)
         # self.state_dict = self._dataset.state_dict
         # self.load_state_dict = self._dataset.load_state_dict
@@ -80,7 +120,7 @@ class BaseHFDataModule(LightningDataModule):
             self._dataset[split],
             batch_size=self.hparams["batch_size"],
             num_workers=self.hparams["num_workers"],
-            collate_fn=self._collate_fn,
+            collate_fn=self.collate_fn,
             prefetch_factor=16 if self.hparams["num_workers"] > 0 else None,
         )
         self._dataloaders[split] = loader
