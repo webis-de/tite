@@ -23,9 +23,10 @@ class _DetachFromGrad(Module):
         self._module = module
 
     def forward(self, *args, **kwargs) -> Tensor:
-        output = self._module(*args, **kwargs)
+        with torch.no_grad():
+            output = self._module(*args, **kwargs)
         assert isinstance(output, Tensor)
-        return output.detach()
+        return output.detach()  # Better safe than sorry
 
 
 class TiteModule(LightningModule):
