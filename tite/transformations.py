@@ -44,7 +44,7 @@ class Transformation(Module):
 #         return [{"input_ids": input_ids, "attention_mask": attention_mask}]
 
 
-class MaskTokens(Transformation):
+class MLMMaskTokens(Transformation):
     def __init__(self, vocab_size: int, maskid: int, clsid: int, sepid: int, mask_prob: float = 0.3) -> None:
         super().__init__()
         self.vocab_size = vocab_size
@@ -66,7 +66,7 @@ class MaskTokens(Transformation):
         return [{"input_ids": input_ids, "attention_mask": attention_mask}], [{"mlm_mask": mlm_mask}]
 
 
-# class HardMaskTokens:
+# class HardMLMMaskTokens:
 #     def __init__(self, mask_prob: float = 0.3) -> None:
 #         self._mask_prob = mask_prob
 

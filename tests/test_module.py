@@ -13,7 +13,7 @@ from tite.module import TiteModule
 from tite.predictor import Identity, MLMDecoder
 from tite.teacher import MLMTeacher
 from tite.tokenizer import TiteTokenizer
-from tite.transformations import MaskTokens, Transformation
+from tite.transformations import MLMMaskTokens, Transformation
 
 DATA_DIR = Path(__file__).parent / "data"
 
@@ -47,7 +47,7 @@ def config() -> TiteConfig:
             ),
             MLMTeacher(0),
             MLMDecoder(32, 4),
-            MaskTokens(32, 4, 2, 3),
+            MLMMaskTokens(32, 4, 2, 3),
             MLMCrossEntropy(32),
         ),
         (
@@ -64,7 +64,7 @@ def config() -> TiteConfig:
             ),
             None,
             Identity(),
-            MaskTokens(32, 4, 2, 3),
+            MLMMaskTokens(32, 4, 2, 3),
             BarlowTwins(0.1, 4),
         ),
     ],
@@ -107,7 +107,7 @@ def test_training_step(
         assert not param.grad.isnan().any()
 
 
-class DeterministicMaskTokens(MaskTokens):
+class DeterministicMLMMaskTokens(MLMMaskTokens):
     def forward(self, input_ids: torch.Tensor, attention_mask: torch.LongTensor, **kwargs) -> list[dict]:
         torch.manual_seed(0)
         return super().forward(input_ids, attention_mask, **kwargs)
@@ -183,7 +183,7 @@ def test_same_as_bert_loss():
                 qkv_bias = []
     model.load_state_dict(state_dict)
     teacher = MLMTeacher(config.pad_token_id)
-    transformation = DeterministicMaskTokens(
+    transformation = DeterministicMLMMaskTokens(
         len(tokenizer), tokenizer.mask_token_id, tokenizer.cls_token_id, tokenizer.sep_token_id, 0.3
     )
     predictor = MLMDecoder(config.vocab_size, config.hidden_size[0], config.hidden_act)

@@ -88,7 +88,7 @@ model:
       dict_kwargs:
         model_max_length: 512
     transformations:
-      - class_path: tite.transformations.MaskTokens
+      - class_path: tite.transformations.MLMMaskTokens
         init_args:
           vocab_size: 30522
           maskid: 103
