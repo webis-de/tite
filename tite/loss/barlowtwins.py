@@ -21,6 +21,7 @@ class BarlowTwins(nn.Module):
         self._alpha = sqrt(lmbda)
         self.batchnorm = nn.BatchNorm1d(embeddim, affine=False)
 
+    @torch.autocast(device_type="cuda", enabled=False)
     def forward(self, features1: Tensor, features2: Tensor) -> Tensor:
         features1 = features1.reshape(-1, features1.shape[-1])
         features2 = features2.reshape(-1, features2.shape[-1])
