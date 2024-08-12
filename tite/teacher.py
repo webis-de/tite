@@ -17,5 +17,8 @@ class MLMTeacher(Module):
         self._pad_id = padid
 
     def forward(self, input_ids: Tensor, mlm_mask: Tensor, **kwargs) -> Tensor:
+        # Everything that is masked out (mlm_mask == True) should be predicted... except for padding tokens.
+        # Note that in MaskTokens (transformations.py) does not mask out [CLS] and [SEP] so we don't need to consider
+        # them here.
         targets = torch.where(input_ids.eq(self._pad_id) | ~mlm_mask, -100, input_ids)
         return targets

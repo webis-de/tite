@@ -35,6 +35,6 @@ model:
     loss:
       class_path: tite.loss.BarlowTwins
       init_args:
-        lmbda: 0.5
+        lmbda: 0.005
         embeddim: 768
     max_length: 256
