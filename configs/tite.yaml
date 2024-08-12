@@ -90,13 +90,14 @@ model:
     student_transformations:
       - class_path: tite.transformations.DeleteTokens
         init_args:
-          padid: 0
-          clsid: 101
-          sepid: 102
+          pad_id: 0
+          cls_id: 101
+          sep_id: 102
           delete_prob: 0.15
       - class_path: tite.transformations.InsertRandomTokens
         init_args:
-          insert_prob: 0.5
+          insert_prob: 0.05
+          pad_id: 0
           vocab_size: 30522
     teacher_transformations: student
     predictor:
@@ -106,5 +107,5 @@ model:
       init_args:
         lmbda: 0.005
         embeddim: 768
-        sizes: [8192, 8192, 8192]
+        sizes: [2048, 2048, 2048]
     max_length: 256

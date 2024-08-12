@@ -20,13 +20,14 @@ class BarlowTwins(nn.Module):
         super().__init__()
         self._alpha = sqrt(lmbda)
         self.batchnorm = nn.BatchNorm1d(embeddim, affine=False)
-        self.weights = torch.where(torch.eye(embeddim, dtype=torch.bool), 1, self._alpha)
-        self.register_buffer("weight-matrix", self.weights, persistent=False)
+        self.register_buffer(
+            "weights", torch.where(torch.eye(embeddim, dtype=torch.bool), 1, self._alpha), persistent=False
+        )
 
     @torch.autocast(device_type="cuda", enabled=False)
     def forward(self, features1: Tensor, features2: Tensor) -> Tensor:
-        features1 = features1.reshape(-1, features1.shape[-1])
-        features2 = features2.reshape(-1, features2.shape[-1])
+        features1 = features1.view(-1, features1.shape[-1])
+        features2 = features2.view(-1, features2.shape[-1])
         N, D = features1.shape  # N is batchsize*num features and D is embeddim
         assert list(features2.shape) == [
             N,
@@ -58,7 +59,9 @@ class ProjectedBarlowTwins(nn.Module):
         layers.append(nn.Linear(sizes[-2], sizes[-1]))
         self.projector = nn.Sequential(*layers)
         # BarlowTwins
-        self.bt = BarlowTwins(lmbda=lmbda, embeddim=embeddim)
+        self.bt = BarlowTwins(lmbda=lmbda, embeddim=sizes[-1])
 
     def forward(self, features1: Tensor, features2: Tensor):
+        features1 = features1.view(-1, features1.shape[-1])
+        features2 = features2.view(-1, features2.shape[-1])
         return self.bt(self.projector(features1), self.projector(features2))

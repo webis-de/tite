@@ -14,12 +14,12 @@ class Transformation(Module):
 
 
 class MLMMaskTokens(Transformation):
-    def __init__(self, vocab_size: int, maskid: int, clsid: int, sepid: int, mask_prob: float = 0.3) -> None:
+    def __init__(self, vocab_size: int, mask_id: int, cls_id: int, sep_id: int, mask_prob: float = 0.3) -> None:
         super().__init__()
         self._vocab_size = vocab_size
-        self._mask_id = maskid
-        self._cls_id = clsid
-        self._sep_id = sepid
+        self._mask_id = mask_id
+        self._cls_id = cls_id
+        self._sep_id = sep_id
         self._mask_prob = mask_prob
 
     def forward(self, input_ids: Tensor, attention_mask: LongTensor, **kwargs) -> tuple[dict, dict]:
@@ -36,11 +36,11 @@ class MLMMaskTokens(Transformation):
 
 
 class DeleteTokens(Transformation):
-    def __init__(self, padid: int, clsid: int, sepid: int, delete_prob: float = 0.3):
+    def __init__(self, pad_id: int, cls_id: int, sep_id: int, delete_prob: float = 0.3):
         super().__init__()
-        self._pad_id = padid
-        self._cls_id = clsid
-        self._sep_id = sepid
+        self._pad_id = pad_id
+        self._cls_id = cls_id
+        self._sep_id = sep_id
         self._delete_prob = delete_prob
 
     def forward(self, input_ids: Tensor, attention_mask: LongTensor, **kwargs) -> tuple[dict, dict]:
@@ -58,23 +58,36 @@ class DeleteTokens(Transformation):
 
 
 class InsertRandomTokens(Transformation):
-    def __init__(self, vocab_size: int, insert_prob: float):
+    def __init__(self, vocab_size: int, pad_id: int, insert_prob: float = 0.05):
         super().__init__()
+        self._pad_id = pad_id
         self._insert_prob = insert_prob
         self._vocab_size = vocab_size
 
     def forward(self, input_ids: Tensor, attention_mask: LongTensor, **kwargs) -> tuple[dict, dict]:
-        shape = attention_mask.shape
+        batch_size, orig_seq_len = input_ids.shape
         num_non_zero = attention_mask.sum(-1)
-        # TODO add random offset to token idcs
         batch_idx, token_idx = attention_mask.nonzero(as_tuple=True)
-        # TODO mu = random prob * len, sigma = ?!
-        # num_insert_tokens = torch.randn()
-        insert_mask = torch.rand(shape, device=input_ids.device) < self._insert_prob
-        insert_idx = insert_mask.cumsum(-1)
+
+        insert_mask = torch.rand((batch_size, orig_seq_len), device=input_ids.device) < self._insert_prob
+        insert_idx = torch.max(torch.poisson(insert_mask.float()), insert_mask).long().cumsum(-1)
         num_added = insert_idx[:, -1]
-        new_shape = (shape[0], shape[1] + num_added.max().item())
+        max_num_added = int(num_added.max().cpu())
+        new_seq_len = orig_seq_len + max_num_added
+
         new_token_idx = token_idx + insert_idx[attention_mask.bool()]
-        new_input_ids = torch.full(new_shape, -100, device=input_ids.device)
+        new_input_ids = torch.full((batch_size, new_seq_len), -100, device=input_ids.device)
         new_input_ids[batch_idx, new_token_idx] = input_ids[batch_idx, token_idx]
-        new_input_ids
+        # TODO can sample special tokens here; perhaps fix in the future
+        new_input_ids = torch.where(
+            new_input_ids == -100,
+            torch.randint(self._vocab_size, (batch_size, new_seq_len), device=input_ids.device),
+            new_input_ids,
+        )
+
+        new_lengths = num_non_zero + num_added
+        new_attention_mask = (
+            torch.arange(new_seq_len, device=input_ids.device)[None].expand(batch_size, -1) < new_lengths[..., None]
+        )
+        new_input_ids[~new_attention_mask] = self._pad_id
+        return {"input_ids": new_input_ids, "attention_mask": new_attention_mask}, {}
