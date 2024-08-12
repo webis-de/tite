@@ -14,12 +14,14 @@ class BarlowTwins(nn.Module):
     def __init__(self, lmbda: float, embeddim: int) -> None:
         """
         Args:
-            lmbda (float): This hyper parameter is the square-root of "lambda" from the original paper.
+            lmbda (float): This hyper parameter is also called "lambda" in the original paper.
             embeddim (int): The embedding dimensionality
         """
         super().__init__()
         self._alpha = sqrt(lmbda)
         self.batchnorm = nn.BatchNorm1d(embeddim, affine=False)
+        self.weights = torch.where(torch.eye(embeddim, dtype=torch.bool), 1, self._alpha)
+        self.register_buffer("weight-matrix", self.weights, persistent=False)
 
     @torch.autocast(device_type="cuda", enabled=False)
     def forward(self, features1: Tensor, features2: Tensor) -> Tensor:
@@ -34,14 +36,29 @@ class BarlowTwins(nn.Module):
         normed2 = self.batchnorm(features2)
         crosscorr = normed1.T @ normed2 / N
 
-        assert list(crosscorr.shape) == [D, D]
-        # 1 a a ... a
-        # a 1 a ... a
-        # a a 1     a
-        # . .       .
-        # a a . 1 a a
-        # a a . a 1 a
-        # a a . a a 1
-        # weights = (1 - torch.eye(D, device=crosscorr.device)) * self._alpha + torch.eye(D, device=crosscorr.device)
-        weights = torch.where(torch.eye(D, dtype=torch.bool, device=crosscorr.device), 1, self._alpha)
-        return F.mse_loss(crosscorr * weights, torch.eye(D, device=crosscorr.device), reduction="sum") / D
+        assert crosscorr.shape == self.weights.shape
+        return F.mse_loss(crosscorr * self.weights, torch.eye(D, device=crosscorr.device), reduction="sum") / D
+
+
+class ProjectedBarlowTwins(nn.Module):
+
+    def __init__(self, lmbda: float, embeddim: int, sizes: tuple[int, ...] = (8192,) * 3) -> None:
+        """
+        Args:
+            lmbda (float): This hyper parameter is also called "lambda" in the original paper.
+            embeddim (int): The embedding dimensionality
+            sizes (tuple[int]): The intermediate dimensions for the projector
+        """
+        super().__init__()
+        # Projector
+        sizes = [embeddim] + list(sizes)
+        layers = []
+        for i in range(len(sizes) - 2):
+            layers.extend([nn.Linear(sizes[i], sizes[i + 1], bias=False), nn.BatchNorm1d(sizes[i + 1]), nn.ReLU()])
+        layers.append(nn.Linear(sizes[-2], sizes[-1]))
+        self.projector = nn.Sequential(*layers)
+        # BarlowTwins
+        self.bt = BarlowTwins(lmbda=lmbda, embeddim=embeddim)
+
+    def forward(self, features1: Tensor, features2: Tensor):
+        return self.bt(self.projector(features1), self.projector(features2))
