@@ -7,14 +7,14 @@ from lightning import LightningModule, Trainer
 from lightning.pytorch.callbacks.early_stopping import EarlyStopping
 from torch import Tensor
 from torch.nn import Module
-from transformers import PreTrainedTokenizerBase, TensorType
+from transformers import PreTrainedTokenizerBase
 
 from .bert import BertModel
 from .datasets import GLUEDataModule
 from .glue_module import GlueModule
 from .jepa import JEPA, LossFn, Predictor
 from .predictor import MLMDecoder
-from .transformations import Transformation
+from .transformations import IdentTransform, Transformation
 
 
 class _DetachFromGrad(Module):
@@ -41,6 +41,7 @@ class TiteModule(LightningModule):
         text_key: str = "text",
         max_length: int | None = None,
         detach_teacher_from_grad: bool = False,
+        teacher_transformations: list[Transformation] | None = [IdentTransform],
     ) -> None:
         super().__init__()
         # ties weights for BERT models -- only works for teacher MLM and student BERT
@@ -52,6 +53,7 @@ class TiteModule(LightningModule):
         self._teacher = teacher
         self._tokenizer = tokenizer
         self._transforms = transformations
+        self._teacher_transforms = teacher_transformations if teacher_transformations is not None else self._transforms
         self._predictor = predictor
         self._loss = loss
         self._text_key = text_key
@@ -88,11 +90,14 @@ class TiteModule(LightningModule):
     def training_step(self, batch: dict[str, torch.Tensor]) -> Tensor:
         for transformation in self._transforms:  # Currently only supports exactly 1 transformation
             transformed, aux = transformation(**batch)
-            transformed = transformed[0]
+            studentinput = transformed[0]
             aux = aux[0]
+        for transformation in self._teacher_transforms:  # Currently only supports exactly 1 transformation
+            transformed, _ = transformation(**batch)
+            teacherinput = transformed[0]
         # JEPA will try to predict the original from the transformed input within the embedding space, i.e.,
-        #   Loss(pred(student(transformed)), teacher(batch))
-        jepa_loss = self._jepa(transformed, batch, **aux)
+        #   Loss(pred(student(studentinput), aux), teacher(teacherinput))
+        jepa_loss = self._jepa(studentinput, teacherinput, **aux)
         attention_mask = batch["attention_mask"]
         num_tokens = attention_mask.sum() if attention_mask is not None else batch["input_ids"].numel()
         self._tokens_seen += num_tokens

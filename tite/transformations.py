@@ -13,6 +13,14 @@ class Transformation(Module):
         raise NotImplementedError
 
 
+class IdentTransform(Transformation):
+    def __init__(self) -> None:
+        super().__init__()
+
+    def forward(self, input_ids: Tensor, attention_mask: LongTensor, **kwargs) -> tuple[list[dict], list[dict]]:
+        return [{"input_ids": input_ids, "attention_mask": attention_mask}], []
+
+
 # class SwapTokens(Transformation):
 #     def __init__(self, num_swaps: int | float = 1):
 #         """Swaps two random (unmasked) tokens. The random swap is repeated `num_swaps` times if `num_swaps` is an
