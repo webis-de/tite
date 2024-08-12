@@ -42,9 +42,10 @@ class JEPA(Module):
         self._loss = loss
         self._return_embeddings = return_embeddings
 
-    def forward(self, input: dict, target: dict, **kwargs):
+    def forward(self, input: dict, target: dict, student_kwargs: dict, teacher_kwargs: dict):
+        student_kwargs = parse_kwargs(student_kwargs, self._student)
         embx = self._student(**input)
-        teacher_kwargs = parse_kwargs(kwargs, self._teacher)
+        teacher_kwargs = parse_kwargs(teacher_kwargs, self._teacher)
         emby = self._teacher(**target, **teacher_kwargs)
         predictor_kwargs = parse_kwargs(kwargs, self._predictor)
         pred = self._predictor(embx, **predictor_kwargs)

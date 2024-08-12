@@ -87,16 +87,20 @@ model:
         mask_token: '[MASK]'
       dict_kwargs:
         model_max_length: 512
-    transformations:
-      - class_path: tite.transformations.MLMMaskTokens
+    student_transformations:
+      - class_path: tite.transformations.DeleteTokens
         init_args:
-          vocab_size: 30522
-          maskid: 103
+          padid: 0
           clsid: 101
           sepid: 102
-          mask_prob: 0.3
+          delete_prob: 0.15
+      - class_path: tite.transformations.InsertRandomTokens
+        init_args:
+          insert_prob: 0.5
+          vocab_size: 30522
+    teacher_transformations: student
     predictor:
-      tite.predictor.Identity
+      class_path: tite.predictor.Identity
     loss:
       class_path: tite.loss.ProjectedBarlowTwins
       init_args:

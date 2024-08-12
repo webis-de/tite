@@ -30,6 +30,7 @@ class BaseHFDataModule(LightningDataModule):
         streaming: bool = True,
         max_length: int | None = None,
         text_keys: tuple[str, str | None] = ("text", None),
+        add_special_tokens: bool = True,
     ) -> None:
         """
         Args:
@@ -62,6 +63,7 @@ class BaseHFDataModule(LightningDataModule):
         self._dataloaders: dict[str, StatefulDataLoader] = dict()
         self._max_length = max_length
         self._text_keys = text_keys
+        self._add_special_tokens = add_special_tokens
 
     def collate_fn(self, batch: list[dict]) -> Any:
         agg = {"input_ids": [], "attention_mask": [], "label": []}
@@ -101,6 +103,7 @@ class BaseHFDataModule(LightningDataModule):
                     truncation=True,
                     max_length=self._max_length,
                     return_token_type_ids=False,
+                    add_special_tokens=self._add_special_tokens,
                 ),
                 batched=True,
             )
