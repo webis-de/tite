@@ -7,6 +7,7 @@ from lightning import LightningModule, Trainer
 from lightning.pytorch.callbacks.early_stopping import EarlyStopping
 from torch import Tensor
 from torch.nn import Module
+from torch.nn.functional import normalize
 from transformers import PreTrainedTokenizerBase
 
 from .bert import BertModel
@@ -110,9 +111,12 @@ class TiteModule(LightningModule):
         self.log_dict({"loss": jepa_loss}, prog_bar=True, on_step=True)
         ####
         # Log additional metrics for more insight into the training
-        crossentropy = -torch.diag(torch.log_softmax(embs[:, 0] @ embt[:, 0].T), -1).mean()
-        # Equivalent: torch.nn.functional.cross_entropy(embs[:,0] @ embt[:,0].T, torch.arange(embs.shape[0]))
-        self.log_dict({"crossentropy": crossentropy}, prog_bar=False, on_step=True)
+        cossim = normalize(embs[:, 0]) @ normalize(embt[:, 0]).T
+        crossentropy = torch.nn.functional.cross_entropy(embs[:, 0] @ embt[:, 0].T, torch.arange(embs.shape[0]))
+        # Equivalent to above: -torch.diag(torch.log_softmax(embs[:, 0] @ embt[:, 0].T, dim=, -1)).mean()
+        crosscorr = normalize(embs[:, 0], dim=0).T @ normalize(embt[:, 0], dim=0) / embt.shape[0]
+        metrics = {"crossentropy": crossentropy, "pairwise-cossim": cossim, "crosscorrelation": crosscorr}
+        self.log_dict(metrics, prog_bar=False, on_step=True, reduce_fx="mean")
         ####
         return jepa_loss
 
