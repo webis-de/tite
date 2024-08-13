@@ -62,7 +62,7 @@ class TiteModule(LightningModule):
         self._max_length = max_length
         if detach_teacher_from_grad:
             self._teacher = _DetachFromGrad(self._teacher)
-        self._jepa = JEPA(self._student, self._teacher, predictor, loss)
+        self._jepa = JEPA(self._student, self._teacher, predictor, loss, return_embeddings=True)
 
         self._tokens_seen = 0.0
 
@@ -102,12 +102,18 @@ class TiteModule(LightningModule):
             teacher_input = transformed[0]
         # JEPA will try to predict the original from the transformed input within the embedding space, i.e.,
         #   Loss(pred(student(studentinput), aux), teacher(teacherinput))
-        jepa_loss = self._jepa(student_input, teacher_input, **aux)
+        jepa_loss, embs, embt = self._jepa(student_input, teacher_input, **aux)
         attention_mask = batch["attention_mask"]
         num_tokens = attention_mask.sum() if attention_mask is not None else batch["input_ids"].numel()
         self._tokens_seen += num_tokens
         self.log("tokens_seen", self._tokens_seen, on_step=True, reduce_fx="max")  # We sum it up ourselves
         self.log_dict({"loss": jepa_loss}, prog_bar=True, on_step=True)
+        ####
+        # Log additional metrics for more insight into the training
+        crossentropy = -torch.diag(torch.log_softmax(embs[:, 0] @ embt[:, 0].T), -1).mean()
+        # Equivalent: torch.nn.functional.cross_entropy(embs[:,0] @ embt[:,0].T, torch.arange(embs.shape[0]))
+        self.log_dict({"crossentropy": crossentropy}, prog_bar=False, on_step=True)
+        ####
         return jepa_loss
 
     def save_pretrained(self, save_path: str | Path) -> None:
