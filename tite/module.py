@@ -1,3 +1,4 @@
+import math
 from copy import deepcopy
 from pathlib import Path
 from typing import Any, Literal
@@ -71,19 +72,21 @@ class TiteModule(LightningModule):
         if self.trainer is not None and self.trainer.limit_val_batches == 0:
             return
         # Train on GLUE
-        glue = GLUEDataModule(batch_size=32, tokenizer=self._tokenizer)
-        glue_module = GlueModule(deepcopy(self._student).train(), self._tokenizer, glue.hparams.name)
-        trainer = Trainer(
-            logger=False,
-            precision=(self.trainer.precision if self.trainer is not None else "bf16-mixed"),
-            max_epochs=10,
-            # callbacks=[EarlyStopping(glue_module._evaluation_metrics[0].__class__.__name__, mode="max", patience=1)],
-            enable_checkpointing=False,
-        )
-        trainer.fit(glue_module, glue)
-        metrics = trainer.logged_metrics
-        for name, value in metrics.items():
-            self.log(f"{glue.hparams.name}/{name}", value, on_step=False, on_epoch=True)
+        # for task in TASK_COLUMN_NAMES:
+        for task in ["mrpc"]:
+            glue = GLUEDataModule(task=task, batch_size=32, tokenizer=self._tokenizer)
+            glue_module = GlueModule(deepcopy(self._student).train(), self._tokenizer, glue.hparams.name)
+            trainer = Trainer(
+                logger=False,
+                precision=(self.trainer.precision if self.trainer is not None else "bf16-mixed"),
+                max_epochs=10,
+                # callbacks=[EarlyStopping(glue_module._evaluation_metrics[0].__class__.__name__, mode="max", patience=1)],
+                enable_checkpointing=False,
+            )
+            trainer.fit(glue_module, glue)
+            metrics = trainer.logged_metrics
+            for name, value in metrics.items():
+                self.log(f"{glue.hparams.name}/{name}", value, on_step=False, on_epoch=True)
 
     def validation_step(self, batch: dict[str, Any] | None) -> None:
         # Empty validation step to trick pytorch lightning into validating this model though validation is actually done
@@ -111,12 +114,20 @@ class TiteModule(LightningModule):
         self.log_dict({"loss": jepa_loss}, prog_bar=True, on_step=True)
         ####
         # Log additional metrics for more insight into the training
-        cossim = normalize(embs[:, 0]) @ normalize(embt[:, 0]).T
-        crossentropy = torch.nn.functional.cross_entropy(embs[:, 0] @ embt[:, 0].T, torch.arange(embs.shape[0]))
-        # Equivalent to above: -torch.diag(torch.log_softmax(embs[:, 0] @ embt[:, 0].T, dim=, -1)).mean()
-        crosscorr = normalize(embs[:, 0], dim=0).T @ normalize(embt[:, 0], dim=0) / embt.shape[0]
+        with torch.autocast(device_type="cuda", enabled=False):
+            cossim = normalize(embs[:, 0]) @ normalize(embt[:, 0]).T
+            crossentropy = torch.nn.functional.cross_entropy(
+                (embs[:, 0] @ embt[:, 0].T) / math.sqrt(embs.shape[-1]), torch.arange(embs.shape[0], device=self.device)
+            )
+            # Equivalent to above: -torch.diag(torch.log_softmax(embs[:, 0] @ embt[:, 0].T, dim=, -1)).mean()
+            crosscorr = normalize(embs[:, 0], dim=0).T @ normalize(embt[:, 0], dim=0) / embt.shape[0]
         metrics = {"crossentropy": crossentropy, "pairwise-cossim": cossim, "crosscorrelation": crosscorr}
-        self.log_dict(metrics, prog_bar=False, on_step=True, reduce_fx="mean")
+        for metric_name, metric_value in metrics.items():
+            if metric_value.ndim > 1:
+                if self.logger is not None:
+                    self.logger.log_image(metric_name, [metric_value])
+            else:
+                self.log(metric_name, metric_value)
         ####
         return jepa_loss
 

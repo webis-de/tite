@@ -5,19 +5,36 @@ import torchmetrics
 import torchmetrics.classification
 from lightning import LightningModule
 from torch import Tensor
-from transformers import BatchEncoding, PreTrainedTokenizerBase, TensorType, get_constant_schedule_with_warmup
+from transformers import PreTrainedTokenizerBase
 
 from .model import TiteModel
 
 NUM_CLASSES_MAP = {
-    "mnli": 3,
-    "rte": 2,
-    "qqp": 2,
     "cola": 2,
-    "mrpc": 2,
-    "qnli": 2,
     "sst2": 2,
+    "mrpc": 2,
     "stsb": 1,
+    "qqp": 2,
+    "mnli": 3,
+    "qnli": 2,
+    "rte": 2,
+    # "wnli": 2, # excluded in MosaicBERT and original BERT
+}
+METRICS_MAP = {
+    "cola": [torchmetrics.MatthewsCorrCoef(num_classes=2, task="multiclass")],
+    "sst2": [torchmetrics.classification.MulticlassAccuracy(num_classes=2, average="micro")],
+    "mrpc": [
+        torchmetrics.classification.BinaryF1Score(),
+        torchmetrics.classification.MulticlassAccuracy(num_classes=2, average="micro"),
+    ],
+    "stsb": [torchmetrics.PearsonCorrCoef()],
+    "qqp": [
+        torchmetrics.classification.BinaryF1Score(),
+        torchmetrics.classification.MulticlassAccuracy(num_classes=2, average="micro"),
+    ],
+    "mnli": [torchmetrics.classification.MulticlassAccuracy(num_classes=3, average="micro")],
+    "qnli": [torchmetrics.classification.MulticlassAccuracy(num_classes=2, average="micro")],
+    "rte": [torchmetrics.classification.MulticlassAccuracy(num_classes=2, average="micro")],
 }
 
 
@@ -34,19 +51,9 @@ class GlueModule(LightningModule):
         )
         if self.num_classes == 1:
             self._loss_function = torch.nn.MSELoss()
-            self._evaluation_metrics = torch.nn.ModuleList(
-                [torchmetrics.MeanSquaredError(), torchmetrics.PearsonCorrCoef()]
-            )
         else:
             self._loss_function = torch.nn.CrossEntropyLoss()
-            self._evaluation_metrics = torch.nn.ModuleList(
-                [
-                    torchmetrics.classification.MulticlassAccuracy(num_classes=self.num_classes, average="micro"),
-                    torchmetrics.MatthewsCorrCoef(task="multiclass", num_classes=self.num_classes),
-                ]
-            )
-            if self.num_classes == 2:
-                self._evaluation_metrics.append(torchmetrics.classification.BinaryF1Score())
+        self._evaluation_metrics = torch.nn.ModuleList(METRICS_MAP[task])
 
     def training_step(self, batch) -> Tensor:
         tokenized = {"input_ids": batch["input_ids"], "attention_mask": batch["attention_mask"]}

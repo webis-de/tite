@@ -13,9 +13,6 @@ from tite.datasets import FineWebDataModule  # noqa
 from tite.lr_schedulers import LR_SCHEDULERS, WarmupLRScheduler
 from tite.model import PreTrainedModel, TiteConfig
 
-if torch.cuda.is_available():
-    torch.set_float32_matmul_precision("medium")
-
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 
