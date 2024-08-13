@@ -124,7 +124,7 @@ class TiteModule(LightningModule):
         metrics = {"crossentropy": crossentropy, "pairwise-cossim": cossim, "crosscorrelation": crosscorr}
         for metric_name, metric_value in metrics.items():
             if metric_value.ndim > 1:
-                if self.logger is not None:
+                if self.logger is not None and (self.trainer.global_step + 1) % self.trainer.log_every_n_steps == 0:
                     self.logger.log_image(metric_name, [metric_value])
             else:
                 self.log(metric_name, metric_value)
