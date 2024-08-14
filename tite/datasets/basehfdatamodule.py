@@ -1,71 +1,23 @@
-import os
-from typing import Any, Literal, Mapping
+from typing import Any, Callable, Literal, Mapping
 
 import torch
 from datasets import load_dataset
 from lightning import LightningDataModule
+
+# from torchdata.stateful_dataloader import StatefulDataLoader
 from torch.utils.data import DataLoader
-from torchdata.stateful_dataloader import StatefulDataLoader
+from torch.utils.data import DataLoader as StatefulDataLoader
 from transformers import PreTrainedTokenizerBase
 
-
-def _seed_or_none(seed: int | None = None) -> int | None:
-    if seed is not None:
-        return seed
-    seed = os.environ.get("PL_GLOBAL_SEED", default=None)
-    return int(seed) if seed is not None else None
+from .commons import seed_or_none
 
 
-class BaseHFDataModule(LightningDataModule):
-    def __init__(
-        self,
-        path: str,
-        tokenizer: PreTrainedTokenizerBase | None,
-        name: str | None = None,
-        data_dir: str | None = None,
-        data_files: Mapping[str, str] | None = None,
-        batch_size: int | None = None,
-        seed: int | None = None,
-        num_workers: int = 0,
-        streaming: bool = True,
-        max_length: int | None = None,
-        text_keys: tuple[str, str | None] = ("text", None),
-        add_special_tokens: bool = True,
-    ) -> None:
-        """
-        Args:
-            path (str): The hugging face datasets path of the dataset.
-            name (str): The hugging face datasets name of the dataset.
-            data_dir (str | None, optional): The path to store the dataset at. Defaults to None.
-            batch_size (int | None, optional): The number of texts per batch. Defaults to None.
-            seed (int | None, optional): The seed to use. If None, pytorch lightning's seed everything seed it used or
-                random if that is not set. Defaults to None.
-            num_workers (int, optional): The number of workers to employ for the dataloader. Defaults to 0.
-            streaming (bool, optional): If set, streams the data on-the-fly instead of downloading it to local storage.
-                Defaults to True.
-        """
-        super().__init__()
+class CollateTokenizerOutput:
+
+    def __init__(self, tokenizer: PreTrainedTokenizerBase) -> None:
         self._tokenizer = tokenizer
-        self._data_dir = data_dir
-        self._data_files = data_files
-        self._streaming = streaming
-        self._dataset = None
-        seed = _seed_or_none(seed)
-        self.save_hyperparameters(
-            {
-                "path": path,
-                "name": name,
-                "batch_size": batch_size,
-                "seed": seed,
-                "num_workers": num_workers,
-            }
-        )
-        self._dataloaders: dict[str, StatefulDataLoader] = dict()
-        self._max_length = max_length
-        self._text_keys = text_keys
-        self._add_special_tokens = add_special_tokens
 
-    def collate_fn(self, batch: list[dict]) -> Any:
+    def __call__(self, batch: list[dict]) -> dict:
         agg = {"input_ids": [], "attention_mask": [], "label": []}
         for item in batch:
             for key, value in item.items():
@@ -84,6 +36,58 @@ class BaseHFDataModule(LightningDataModule):
                     [torch.tensor(value) for value in values], batch_first=True, padding_value=pad_id
                 )
         return out
+
+
+class BaseHFDataModule(LightningDataModule):
+    def __init__(
+        self,
+        path: str,
+        tokenizer: PreTrainedTokenizerBase | None,
+        name: str | None = None,
+        data_dir: str | None = None,
+        data_files: Mapping[str, str] | None = None,
+        batch_size: int | None = None,
+        seed: int | None = None,
+        num_workers: int = 0,
+        streaming: bool = True,
+        max_length: int | None = None,
+        text_keys: tuple[str, str | None] = ("text", None),
+        add_special_tokens: bool = True,
+        collate_fn: Callable[[dict], dict] | None = None,
+    ) -> None:
+        """
+        Args:
+            path (str): The hugging face datasets path of the dataset.
+            name (str): The hugging face datasets name of the dataset.
+            data_dir (str | None, optional): The path to store the dataset at. Defaults to None.
+            batch_size (int | None, optional): The number of texts per batch. Defaults to None.
+            seed (int | None, optional): The seed to use. If None, pytorch lightning's seed everything seed it used or
+                random if that is not set. Defaults to None.
+            num_workers (int, optional): The number of workers to employ for the dataloader. Defaults to 0.
+            streaming (bool, optional): If set, streams the data on-the-fly instead of downloading it to local storage.
+                Defaults to True.
+        """
+        super().__init__()
+        self._data_dir = data_dir
+        self._data_files = data_files
+        self._streaming = streaming
+        self._dataset = None
+        seed = seed_or_none(seed)
+        self.save_hyperparameters(
+            {
+                "path": path,
+                "name": name,
+                "batch_size": batch_size,
+                "seed": seed,
+                "num_workers": num_workers,
+            }
+        )
+        self._dataloaders: dict[str, StatefulDataLoader] = dict()
+        self._max_length = max_length
+        self._text_keys = text_keys
+        self._add_special_tokens = add_special_tokens
+        self._tokenizer = tokenizer
+        self.collate_fn = collate_fn if collate_fn is not None else CollateTokenizerOutput(self._tokenizer)
 
     def setup(self, stage: Literal["fit", "validate", "test", "predict"]) -> None:
         assert self._dataset is None, "Dataset is already set up"
@@ -109,9 +113,6 @@ class BaseHFDataModule(LightningDataModule):
             )
             .shuffle(buffer_size=1_024, seed=self.hparams["seed"])
         )
-        # Maybe for the future: implement state_dict and load_state_dict (TODO)
-        # self.state_dict = self._dataset.state_dict
-        # self.load_state_dict = self._dataset.load_state_dict
 
     def teardown(self, stage: Literal["fit", "validate", "test", "predict"]) -> None:
         self._dataset = None
