@@ -109,7 +109,7 @@ class TiteModule(LightningModule):
             trainer = Trainer(
                 logger=False,
                 precision=(self.trainer.precision if self.trainer is not None else "bf16-mixed"),
-                max_steps=10_000,
+                max_steps=5_000,
                 # callbacks=[EarlyStopping("MeanSquaredError", mode="min", patience=1)],
                 enable_checkpointing=False,
             )

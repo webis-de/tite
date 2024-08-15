@@ -49,5 +49,5 @@ class MSMARCOModule(LightningModule):
         self.validation_step(batch, *args, **kwargs)
 
     def configure_optimizers(self) -> torch.optim.Optimizer:
-        opt = torch.optim.AdamW(self.parameters(), lr=5e-5)
+        opt = torch.optim.AdamW(self.parameters(), lr=1e-5)
         return opt
