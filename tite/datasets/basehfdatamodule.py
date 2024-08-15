@@ -177,8 +177,8 @@ class BaseHFDataModule(LightningDataModule):
                 data_dir=self._data_dir,
                 data_files=self._data_files,
                 streaming=self._streaming,
-            ).map(self.apply_transformations, batched=True, batch_size=64)
-            # .map(self.tokenize, batched=True, batch_size=64)
+            ).map(self.apply_transformations, batched=True)
+            # .map(self.tokenize, batched=True)
             .shuffle(buffer_size=1_024, seed=self.hparams["seed"])
         )
 
