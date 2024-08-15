@@ -10,7 +10,7 @@ from transformers import PreTrainedTokenizerBase
 
 from .commons import seed_or_none
 
-SplitType = Literal["qrels", "triples"]
+SplitType = Literal["qrels", "triples", "scoreddocs"]
 SplitDescriptor = tuple[str, SplitType]
 
 
@@ -94,11 +94,18 @@ class IRDataset(IterableDataset):
             self._iter = self._dataset.docpairs_iter()
             self.map(self.__fetch_triple_text, batched=True)
             self._count = self._dataset.docpairs_count()
-        else:
+        elif type == "qrels":
             self._iter = self._dataset.qrels_iter()
             self.map(self.__fetch_qrel_text, batched=True)
             self._count = self._dataset.qrels_count()
+        elif type == "scoreddocs":
+            self._iter = self._dataset.scoreddocs_iter()
+            self.map(self.__fetch_scoreddocs_text, batched=True)
+            self._count = self._dataset.scoreddocs_count
+        else:
+            raise ValueError(f"Invalid split type: {type}")
         self._docstore = self._dataset.docs_store()
+        self._qrelstore = pd.DataFrame(self._dataset.qrels_iter()).set_index(["query_id", "doc_id"])
         self._qstore = pd.DataFrame(self._dataset.queries_iter()).set_index("query_id")
 
     def __get_many_queries(self, query_ids: Iterable[str]) -> Any:
@@ -121,6 +128,19 @@ class IRDataset(IterableDataset):
         return [
             (q, TokenizeMeSenpai(qt), p, TokenizeMeSenpai(pt), r, u)
             for q, qt, p, pt, r, u in zip(qids, qs, dids, ds, rels, unused)
+        ]
+
+    def __fetch_scoreddocs_text(
+        self, triple: list[tuple[str, str, float]]
+    ) -> list[tuple[str, str, str, str, float, int]]:
+        qids, dids, scores = zip(*triple)
+        qs = (q.text for q in self.__get_many_queries(qids))
+        ds = (d.text for _, d in self._docstore.get_many(dids).items())
+        index = pd.MultiIndex.from_tuples(list(zip(qids, dids)), names=["query_id", "doc_id"])
+        rel = self._qrelstore.reindex(index).fillna(0)["relevance"].values.astype(int)
+        return [
+            (q, TokenizeMeSenpai(qt), p, TokenizeMeSenpai(pt), s, r)
+            for q, qt, p, pt, s, r in zip(qids, qs, dids, ds, scores, rel)
         ]
 
     def map(self, fn: Callable, batched: bool = False, batchsize: int = 1000) -> "IRDataset":
@@ -174,7 +194,7 @@ class IRDatasetsDataModule(LightningDataModule):
                 "testset": testset,
                 "batch_size": batch_size,
                 "seed": seed,
-                "num_workers": num_workers,
+                "num_workers": 1,
             }
         )
         self._dataloaders: dict[str, DataLoader] = dict()

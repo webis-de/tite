@@ -56,7 +56,7 @@ class GlueModule(LightningModule):
         self._evaluation_metrics = torch.nn.ModuleList(METRICS_MAP[task])
 
     def training_step(self, batch) -> Tensor:
-        tokenized = {"input_ids": batch["input_ids"], "attention_mask": batch["attention_mask"]}
+        tokenized = {"input_ids": batch["teacher_input_ids"], "attention_mask": batch["teacher_attention_mask"]}
         output = self._model(**tokenized)
         # logits = self.classification_head(output.mean(1))
         logits = self.classification_head(output[:, 0])
@@ -65,7 +65,7 @@ class GlueModule(LightningModule):
         return loss
 
     def validation_step(self, batch, *args, **kwargs) -> None:
-        tokenized = {"input_ids": batch["input_ids"], "attention_mask": batch["attention_mask"]}
+        tokenized = {"input_ids": batch["teacher_input_ids"], "attention_mask": batch["teacher_attention_mask"]}
         output = self._model(**tokenized)
         # logits = self.classification_head(output.mean(1))
         logits = self.classification_head(output[:, 0])

@@ -3,6 +3,7 @@ from typing import Any
 
 import nltk
 import torch
+from nltk import PunktSentenceTokenizer
 from torch import LongTensor, Tensor
 from torch.nn import Module
 
@@ -127,8 +128,13 @@ class CharacterTransformation(StringTransformation):
 
 class SentenceTransformation(StringTransformation):
 
+    def __init__(self) -> None:
+        super().__init__()
+        self._tokenizer: PunktSentenceTokenizer = nltk.load("tokenizers/punkt/english.pickle")
+        assert isinstance(self._tokenizer, PunktSentenceTokenizer)
+
     def split(self, text: str) -> list[str]:
-        return nltk.sent_tokenize(text)
+        return self._tokenizer.tokenize(text)
 
 
 class CharacterDelete(CharacterTransformation):
@@ -144,10 +150,7 @@ class CharacterDelete(CharacterTransformation):
     #     return transformed
 
     def __call__(self, text: str) -> str:
-        transformed_text = ""
-        for char in text:
-            if random.random() > self._delete_prob:
-                transformed_text += char
+        transformed_text = "".join(char for char in text if random.random() > self._delete_prob)
         return transformed_text
 
 
@@ -170,11 +173,9 @@ class CharacterInsert(CharacterTransformation):
     #     return transformed
 
     def __call__(self, text: str) -> str:
-        transformed_text = ""
-        for char in text:
-            transformed_text += char
-            if random.random() < self._insert_prob:
-                transformed_text += random.choice(text)
+        transformed_text = "".join(
+            char if random.random() > self._insert_prob else char + random.choice(text) for char in text
+        )
         return transformed_text
 
 
@@ -193,42 +194,34 @@ class CharacterSwapNeighboring(CharacterTransformation):
     #     return transformed
 
     def __call__(self, text: str) -> str:
-        transformed_text = ""
-        i = 0
-        while True:
-            if i >= len(text):
-                break
-            if random.random() < self._swap_prob and i != len(text) - 1:
-                transformed_text += text[i + 1] + text[i]
-                i += 2
-            else:
-                transformed_text += text[i]
-                i += 1
-        return transformed_text
+        transformed_text = list(text)
+        num_swaps = int(torch.distributions.Binomial(len(text), self._swap_prob).sample().item())
+        for _ in range(num_swaps):
+            i = random.randint(0, len(text) - 2)
+            transformed_text[i], transformed_text[i + 1] = transformed_text[i + 1], transformed_text[i]
+        return "".join(transformed_text)
 
 
 class SentenceDelete(SentenceTransformation):
 
     def __init__(self, delete_prob: float = 0.3):
+        super().__init__()
         self._delete_prob = delete_prob
 
     def __call__(self, text: str) -> str:
         if not text:
             return text
         sentences = self.split(text)
-        transformed_sentences = []
         keep = [random.random() >= self._delete_prob for _ in range(len(sentences))]
         if not any(keep):
             keep[random.randint(0, len(keep) - 1)] = True
-        for sentence, keep_sentence in zip(sentences, keep):
-            if keep_sentence:
-                transformed_sentences.append(sentence)
-        return " ".join(transformed_sentences)
+        return " ".join(sentence for sentence, keep_sentence in zip(sentences, keep) if keep_sentence)
 
 
 class SentenceSwapNeighboring(SentenceTransformation):
 
     def __init__(self, swap_prob: float = 0.05):
+        super().__init__()
         self._swap_prob = swap_prob
 
     def __call__(self, text: str) -> str:

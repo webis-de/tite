@@ -134,7 +134,6 @@ class BaseHFDataModule(LightningDataModule):
 
     def apply_transformations(self, x: dict) -> dict:
         out = {}
-        assert self._text_keys[1] is None, "Not implemented yet"
         for name, transformations in (
             ("teacher", self._teacher_transformations),
             ("student", self._student_transformations),
@@ -149,9 +148,9 @@ class BaseHFDataModule(LightningDataModule):
                     if random.random() < prob:
                         text = transformation(text)
                 transformed_t1.append(text)
-            out[f"{name}_{self._text_keys[0]}_1"] = transformed_t1
+            out[f"{name}_text_1"] = transformed_t1
             if t2 is not None:
-                out[f"{name}_{self._text_keys[0]}_2"] = t2
+                out[f"{name}_text_2"] = t2
         return out
 
     def tokenize(self, x: dict) -> dict:
@@ -178,9 +177,8 @@ class BaseHFDataModule(LightningDataModule):
                 data_dir=self._data_dir,
                 data_files=self._data_files,
                 streaming=self._streaming,
-            )
-            .map(self.apply_transformations, batched=True)
-            # .map(self.tokenize, batched=True)
+            ).map(self.apply_transformations, batched=True, batch_size=64)
+            # .map(self.tokenize, batched=True, batch_size=64)
             .shuffle(buffer_size=1_024, seed=self.hparams["seed"])
         )
 

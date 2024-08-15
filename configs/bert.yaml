@@ -45,3 +45,4 @@ model:
       init_args:
         vocab_size: 30522
     max_length: 256
+    validate_on_glue: true
