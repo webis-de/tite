@@ -26,6 +26,7 @@ METRICS_MAP = {
     "mrpc": [
         torchmetrics.classification.BinaryF1Score(),
         torchmetrics.classification.MulticlassAccuracy(num_classes=2, average="micro"),
+        torchmetrics.MatthewsCorrCoef(num_classes=2, task="multiclass"),
     ],
     "stsb": [torchmetrics.PearsonCorrCoef()],
     "qqp": [
