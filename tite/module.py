@@ -143,7 +143,7 @@ class TiteModule(LightningModule):
         # JEPA will try to predict the original from the transformed input within the embedding space, i.e.,
         #   Loss(pred(student(studentinput), aux), teacher(teacherinput))
         jepa_loss, embs, embt = self._jepa(student_input, teacher_input, **aux)
-        num_tokens = batch["student_attention_mask"].sum() + batch["teacher_attention_mask"].sum() / 2
+        num_tokens = (batch["student_attention_mask"].sum() + batch["teacher_attention_mask"].sum()) / 2
         self._tokens_seen += num_tokens
         self.log("tokens_seen", self._tokens_seen, on_step=True, reduce_fx="max")  # We sum it up ourselves
         self.log_dict({"loss": jepa_loss}, prog_bar=True, on_step=True)
