@@ -26,13 +26,14 @@ model:
       dict_kwargs:
         model_max_length: 512
     student_transformations:
-      - class_path: tite.transformations.MLMMaskTokens
-        init_args:
-          vocab_size: 30522
-          mask_id: 103
-          cls_id: 101
-          sep_id: 102
-          mask_prob: 0.3
+      - - class_path: tite.transformations.MLMMaskTokens
+          init_args:
+            vocab_size: 30522
+            mask_id: 103
+            cls_id: 101
+            sep_id: 102
+            mask_prob: 0.3
+        - 1.0
     teacher_transformations: null
     predictor:
       class_path: tite.predictor.MLMDecoder

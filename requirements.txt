@@ -8,4 +8,5 @@ einops==0.8.0
 # torchdata@git+https://github.com/pytorch/data
 jsonargparse[signatures]>=4.27.7
 ir_datasets
-more_itertools
+more_itertools==10.4.0
+nltk==3.8.1

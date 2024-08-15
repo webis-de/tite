@@ -1,5 +1,7 @@
+import random
 from typing import Any
 
+import nltk
 import torch
 from torch import LongTensor, Tensor
 from torch.nn import Module
@@ -106,3 +108,142 @@ class InsertRandomTokens(Transformation):
         )
         new_input_ids[~new_attention_mask] = self._pad_id
         return {"input_ids": new_input_ids, "attention_mask": new_attention_mask}, {}
+
+
+class StringTransformation:
+
+    def __call__(self, text: str) -> str:
+        raise NotImplementedError
+
+
+class CharacterTransformation(StringTransformation):
+
+    def encode(self, text: str) -> Tensor:
+        return torch.tensor(bytearray(text.encode("utf-8")))
+
+    def decode(self, encoded: Tensor) -> str:
+        return bytes(bytearray(encoded.tolist())).decode("utf-8")
+
+
+class SentenceTransformation(StringTransformation):
+
+    def split(self, text: str) -> list[str]:
+        return nltk.sent_tokenize(text)
+
+
+class CharacterDelete(CharacterTransformation):
+
+    def __init__(self, delete_prob: float = 0.3):
+        self._delete_prob = delete_prob
+
+    # def __call__(self, text: str) -> str:
+    #     encoded = self.encode(text)
+    #     delete_mask = torch.rand(encoded.shape) < self._delete_prob
+    #     transformed_encoded = encoded[~delete_mask & (encoded <= 128)]
+    #     transformed = self.decode(transformed_encoded)
+    #     return transformed
+
+    def __call__(self, text: str) -> str:
+        transformed_text = ""
+        for char in text:
+            if random.random() > self._delete_prob:
+                transformed_text += char
+        return transformed_text
+
+
+class CharacterInsert(CharacterTransformation):
+
+    def __init__(self, insert_prob: float = 0.05):
+        self._insert_prob = insert_prob
+
+    # def __call__(self, text: str) -> str:
+    #     encoded = self.encode(text)
+    #     chars = encoded.unique()
+    #     insert_num = int(torch.distributions.Binomial(encoded.shape[0], self._insert_prob).sample().item())
+    #     transformed_encoded = torch.zeros(encoded.shape[0] + insert_num, dtype=encoded.dtype)
+    #     insert_idcs = torch.randperm(transformed_encoded.shape[0])[:insert_num]
+    #     idcs = torch.arange(transformed_encoded.shape[0])
+    #     orig_idcs = idcs[(idcs[:, None] != insert_idcs[None]).all(-1)]
+    #     transformed_encoded[insert_idcs] = torch.randint(chars.shape[0], (insert_num,))
+    #     transformed_encoded[orig_idcs] = encoded
+    #     transformed = self.decode(transformed_encoded)
+    #     return transformed
+
+    def __call__(self, text: str) -> str:
+        transformed_text = ""
+        for char in text:
+            transformed_text += char
+            if random.random() < self._insert_prob:
+                transformed_text += random.choice(text)
+        return transformed_text
+
+
+class CharacterSwapNeighboring(CharacterTransformation):
+
+    def __init__(self, swap_prob: float = 0.05):
+        self._swap_prob = swap_prob
+
+    # def __call__(self, text: str) -> str:
+    #     encoded = self.encode(text)
+    #     swap_mask = torch.rand(encoded.shape[0] - 1) < self._swap_prob
+    #     encoded_transformed = encoded.clone()
+    #     encoded_transformed[:-1][swap_mask] = encoded[1:][swap_mask]
+    #     encoded_transformed[1:][swap_mask] = encoded[:-1][swap_mask]
+    #     transformed = self.decode(encoded_transformed)
+    #     return transformed
+
+    def __call__(self, text: str) -> str:
+        transformed_text = ""
+        i = 0
+        while True:
+            if i >= len(text):
+                break
+            if random.random() < self._swap_prob and i != len(text) - 1:
+                transformed_text += text[i + 1] + text[i]
+                i += 2
+            else:
+                transformed_text += text[i]
+                i += 1
+        return transformed_text
+
+
+class SentenceDelete(SentenceTransformation):
+
+    def __init__(self, delete_prob: float = 0.3):
+        self._delete_prob = delete_prob
+
+    def __call__(self, text: str) -> str:
+        if not text:
+            return text
+        sentences = self.split(text)
+        transformed_sentences = []
+        keep = [random.random() >= self._delete_prob for _ in range(len(sentences))]
+        if not any(keep):
+            keep[random.randint(0, len(keep) - 1)] = True
+        for sentence, keep_sentence in zip(sentences, keep):
+            if keep_sentence:
+                transformed_sentences.append(sentence)
+        return " ".join(transformed_sentences)
+
+
+class SentenceSwapNeighboring(SentenceTransformation):
+
+    def __init__(self, swap_prob: float = 0.05):
+        self._swap_prob = swap_prob
+
+    def __call__(self, text: str) -> str:
+        if not text:
+            return text
+        sentences = self.split(text)
+        transformed_sentences = []
+        i = 0
+        while True:
+            if i >= len(sentences):
+                break
+            if random.random() < self._swap_prob and i != len(sentences) - 1:
+                sentences[i], sentences[i + 1] = sentences[i + 1], sentences[i]
+                i += 2
+            else:
+                transformed_sentences.append(sentences[i])
+                i += 1
+        return " ".join(transformed_sentences)

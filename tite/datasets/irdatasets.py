@@ -1,4 +1,3 @@
-import itertools
 from typing import Any, Callable, Iterable, Literal
 
 import ir_datasets

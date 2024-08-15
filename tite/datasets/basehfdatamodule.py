@@ -1,4 +1,5 @@
-from typing import Any, Callable, Literal, Mapping
+import random
+from typing import Any, Literal, Mapping
 
 import torch
 from datasets import load_dataset
@@ -9,32 +10,69 @@ from torch.utils.data import DataLoader
 from torch.utils.data import DataLoader as StatefulDataLoader
 from transformers import PreTrainedTokenizerBase
 
+from ..transformations import StringTransformation
 from .commons import seed_or_none
 
 
 class CollateTokenizerOutput:
 
-    def __init__(self, tokenizer: PreTrainedTokenizerBase) -> None:
+    def __init__(self, tokenizer: PreTrainedTokenizerBase, max_length: int | None, add_special_tokens: bool) -> None:
         self._tokenizer = tokenizer
+        self._max_length = max_length
+        self._add_special_tokens = add_special_tokens
+
+    # def __call__(self, batch: list[dict]) -> dict:
+    #     agg = {
+    #         "teacher_input_ids": [],
+    #         "teacher_attention_mask": [],
+    #         "student_input_ids": [],
+    #         "student_attention_mask": [],
+    #         "label": [],
+    #     }
+    #     for item in batch:
+    #         for key, value in item.items():
+    #             if key in agg:
+    #                 agg[key].append(value)
+    #     pad_ids = {"input_ids": self._tokenizer.pad_token_id, "attention_mask": 0, "label": None}
+    #     out = {}
+    #     for key, values in agg.items():
+    #         if not values:
+    #             continue
+    #         pad_id = pad_ids[key.replace("teacher_", "").replace("student_", "")]
+    #         if pad_id is None:
+    #             out[key] = torch.tensor(values)
+    #         else:
+    #             out[key] = torch.nn.utils.rnn.pad_sequence(
+    #                 [torch.tensor(value) for value in values], batch_first=True, padding_value=pad_id
+    #             )
+    #     return out
 
     def __call__(self, batch: list[dict]) -> dict:
-        agg = {"input_ids": [], "attention_mask": [], "label": []}
+        agg = {"teacher_text_1": [], "student_text_1": [], "teacher_text_2": [], "student_text_2": [], "label": []}
         for item in batch:
             for key, value in item.items():
                 if key in agg:
                     agg[key].append(value)
-        pad_ids = {"input_ids": self._tokenizer.pad_token_id, "attention_mask": 0, "label": None}
-        out = {}
-        for key, values in agg.items():
-            if not values:
-                continue
-            pad_id = pad_ids[key]
-            if pad_id is None:
-                out[key] = torch.tensor(values)
-            else:
-                out[key] = torch.nn.utils.rnn.pad_sequence(
-                    [torch.tensor(value) for value in values], batch_first=True, padding_value=pad_id
-                )
+        t1 = agg["teacher_text_1"] + agg["student_text_1"]
+        t2 = agg["teacher_text_2"] + agg["student_text_2"] if agg["teacher_text_2"] and agg["student_text_2"] else None
+        encoded = self._tokenizer(
+            t1,
+            t2,
+            truncation=True,
+            max_length=self._max_length,
+            return_token_type_ids=False,
+            add_special_tokens=self._add_special_tokens,
+            padding=True,
+            return_tensors="pt",
+        )
+        out = {
+            "teacher_input_ids": encoded["input_ids"][: len(agg["teacher_text_1"])],
+            "teacher_attention_mask": encoded["attention_mask"][: len(agg["teacher_text_1"])],
+            "student_input_ids": encoded["input_ids"][len(agg["teacher_text_1"]) :],
+            "student_attention_mask": encoded["attention_mask"][len(agg["teacher_text_1"]) :],
+        }
+        if agg["label"]:
+            out["label"] = torch.tensor(agg["label"])
         return out
 
 
@@ -42,7 +80,7 @@ class BaseHFDataModule(LightningDataModule):
     def __init__(
         self,
         path: str,
-        tokenizer: PreTrainedTokenizerBase | None,
+        tokenizer: PreTrainedTokenizerBase,
         name: str | None = None,
         data_dir: str | None = None,
         data_files: Mapping[str, str] | None = None,
@@ -53,7 +91,8 @@ class BaseHFDataModule(LightningDataModule):
         max_length: int | None = None,
         text_keys: tuple[str, str | None] = ("text", None),
         add_special_tokens: bool = True,
-        collate_fn: Callable[[dict], dict] | None = None,
+        student_transformations: list[tuple[StringTransformation, float]] | None = None,
+        teacher_transformations: list[tuple[StringTransformation, float]] | Literal["student"] | None = None,
     ) -> None:
         """
         Args:
@@ -87,11 +126,51 @@ class BaseHFDataModule(LightningDataModule):
         self._text_keys = text_keys
         self._add_special_tokens = add_special_tokens
         self._tokenizer = tokenizer
-        self.collate_fn = collate_fn if collate_fn is not None else CollateTokenizerOutput(self._tokenizer)
+        self.collate_fn = CollateTokenizerOutput(self._tokenizer, self._max_length, self._add_special_tokens)
+        self._student_transformations = student_transformations or []
+        self._teacher_transformations = (
+            student_transformations if teacher_transformations == "student" else teacher_transformations or []
+        )
+
+    def apply_transformations(self, x: dict) -> dict:
+        out = {}
+        assert self._text_keys[1] is None, "Not implemented yet"
+        for name, transformations in (
+            ("teacher", self._teacher_transformations),
+            ("student", self._student_transformations),
+        ):
+            t1, t2 = x[self._text_keys[0]], x[self._text_keys[1]] if self._text_keys[1] is not None else None
+            transformations = transformations or []
+            if transformations and t2 is not None:
+                raise ValueError("String transformations are not implemented for two texts")
+            transformed_t1 = []
+            for text in t1:
+                for transformation, prob in transformations:
+                    if random.random() < prob:
+                        text = transformation(text)
+                transformed_t1.append(text)
+            out[f"{name}_{self._text_keys[0]}_1"] = transformed_t1
+            if t2 is not None:
+                out[f"{name}_{self._text_keys[0]}_2"] = t2
+        return out
+
+    def tokenize(self, x: dict) -> dict:
+        out = {}
+        for text_type in ("teacher", "student"):
+            encoded = self._tokenizer(
+                x[f"{text_type}_text_1"],
+                x[f"{text_type}_text_2"] if f"{text_type}_text_2" in x else None,
+                truncation=True,
+                max_length=self._max_length,
+                return_token_type_ids=False,
+                add_special_tokens=self._add_special_tokens,
+            )
+            for key, value in encoded.items():
+                out[f"{text_type}_{key}"] = value
+        return out
 
     def setup(self, stage: Literal["fit", "validate", "test", "predict"]) -> None:
         assert self._dataset is None, "Dataset is already set up"
-        t1, t2 = self._text_keys
         self._dataset = (
             load_dataset(
                 path=self.hparams["path"],
@@ -100,17 +179,8 @@ class BaseHFDataModule(LightningDataModule):
                 data_files=self._data_files,
                 streaming=self._streaming,
             )
-            .map(
-                lambda x: self._tokenizer(
-                    x[t1],
-                    x[t2] if t2 is not None else None,
-                    truncation=True,
-                    max_length=self._max_length,
-                    return_token_type_ids=False,
-                    add_special_tokens=self._add_special_tokens,
-                ),
-                batched=True,
-            )
+            .map(self.apply_transformations, batched=True)
+            # .map(self.tokenize, batched=True)
             .shuffle(buffer_size=1_024, seed=self.hparams["seed"])
         )
 

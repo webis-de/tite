@@ -1,4 +1,5 @@
 import math
+import random
 from copy import deepcopy
 from pathlib import Path
 from typing import Any, Literal
@@ -42,8 +43,8 @@ class TiteModule(LightningModule):
         text_key: str = "text",
         max_length: int | None = None,
         detach_teacher_from_grad: bool = False,
-        student_transformations: list[Transformation] | None = None,
-        teacher_transformations: list[Transformation] | Literal["student"] | None = None,
+        student_transformations: list[tuple[Transformation, float]] | None = None,
+        teacher_transformations: list[tuple[Transformation, float]] | Literal["student"] | None = None,
     ) -> None:
         super().__init__()
         # ties weights for BERT models -- only works for teacher MLM and student BERT
@@ -94,21 +95,22 @@ class TiteModule(LightningModule):
         return
 
     def training_step(self, batch: dict[str, torch.Tensor]) -> Tensor:
-        student_input = batch
-        teacher_input = batch
+        student_input = {key[8:]: value for key, value in batch.items() if key.startswith("student_")}
+        teacher_input = {key[8:]: value for key, value in batch.items() if key.startswith("teacher_")}
         aux = {}
-        for transformation in self._student_transforms:
-            transformed = transformation(**student_input)
-            student_input = transformed[0]
-            aux = {**aux, **transformed[1]}
-        for transformation in self._teacher_transforms:
-            transformed = transformation(**teacher_input)
-            teacher_input = transformed[0]
+        for transformation, prob in self._student_transforms:
+            if random.random() < prob:
+                transformed = transformation(**student_input)
+                student_input = transformed[0]
+                aux = {**aux, **transformed[1]}
+        for transformation, prob in self._teacher_transforms:
+            if random.random() < prob:
+                transformed = transformation(**teacher_input)
+                teacher_input = transformed[0]
         # JEPA will try to predict the original from the transformed input within the embedding space, i.e.,
         #   Loss(pred(student(studentinput), aux), teacher(teacherinput))
         jepa_loss, embs, embt = self._jepa(student_input, teacher_input, **aux)
-        attention_mask = batch["attention_mask"]
-        num_tokens = attention_mask.sum() if attention_mask is not None else batch["input_ids"].numel()
+        num_tokens = batch["student_attention_mask"].sum() + batch["teacher_attention_mask"].sum() / 2
         self._tokens_seen += num_tokens
         self.log("tokens_seen", self._tokens_seen, on_step=True, reduce_fx="max")  # We sum it up ourselves
         self.log_dict({"loss": jepa_loss}, prog_bar=True, on_step=True)
