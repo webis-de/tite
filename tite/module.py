@@ -92,6 +92,7 @@ class TiteModule(LightningModule):
                     max_epochs=10,
                     # callbacks=[EarlyStopping(glue_module._evaluation_metrics[0].__class__.__name__, mode="max", patience=1)],
                     enable_checkpointing=False,
+                    num_sanity_val_steps=0,
                 )
                 trainer.fit(glue_module, glue)
                 metrics = trainer.logged_metrics
@@ -106,14 +107,20 @@ class TiteModule(LightningModule):
                 batch_size=32,
             )
             msmarco_module = MSMARCOModule(deepcopy(self._student).train(), self._tokenizer)
+            max_steps = 5_000
             trainer = Trainer(
                 logger=False,
                 precision=(self.trainer.precision if self.trainer is not None else "bf16-mixed"),
-                max_steps=5_000,
+                max_steps=max_steps,
                 # callbacks=[EarlyStopping("MeanSquaredError", mode="min", patience=1)],
                 enable_checkpointing=False,
+                num_sanity_val_steps=0,
+                val_check_interval=max_steps,
             )
             trainer.fit(msmarco_module, msmarco)
+            metrics = trainer.logged_metrics
+            for name, value in metrics.items():
+                self.log(f"trec-dl-2019/{name}", value, on_step=False, on_epoch=True)
 
     def validation_step(self, batch: dict[str, Any] | None) -> None:
         # Empty validation step to trick pytorch lightning into validating this model though validation is actually done
