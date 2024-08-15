@@ -210,9 +210,9 @@ class BaseHFDataModule(LightningDataModule):
         assert self._dataset is not None, "The dataset needs to be set up"
         return self.dataloader("test")
 
-    def state_dict(self) -> dict[str, dict[str, Any]]:
-        return {split: loader.state_dict() for split, loader in self._dataloaders.items()}
+    # def state_dict(self) -> dict[str, dict[str, Any]]:
+    #     return {split: loader.state_dict() for split, loader in self._dataloaders.items()}
 
-    def load_state_dict(self, state_dict: dict[str, dict[str, Any]]) -> None:
-        for split, state in state_dict.items():
-            self.dataloader(split).load_state_dict(state)
+    # def load_state_dict(self, state_dict: dict[str, dict[str, Any]]) -> None:
+    #     for split, state in state_dict.items():
+    #         self.dataloader(split).load_state_dict(state)
