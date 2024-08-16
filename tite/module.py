@@ -151,14 +151,18 @@ class TiteModule(LightningModule):
         # Log additional metrics for more insight into the training
         if self._log_additional_metrics:
             with torch.autocast(device_type="cuda", enabled=False):
-                cossim = normalize(embs[:, 0]) @ normalize(embt[:, 0]).T
+                # cossim = normalize(embs[:, 0]) @ normalize(embt[:, 0]).T
                 crossentropy = torch.nn.functional.cross_entropy(
                     (embs[:, 0] @ embt[:, 0].T) / math.sqrt(embs.shape[-1]),
                     torch.arange(embs.shape[0], device=self.device),
                 )
                 # Equivalent to above: -torch.diag(torch.log_softmax(embs[:, 0] @ embt[:, 0].T, dim=, -1)).mean()
-                crosscorr = normalize(embs[:, 0], dim=0).T @ normalize(embt[:, 0], dim=0) / embt.shape[0]
-            metrics = {"crossentropy": crossentropy, "pairwise-cossim": cossim, "crosscorrelation": crosscorr}
+                # crosscorr = normalize(embs[:, 0], dim=0).T @ normalize(embt[:, 0], dim=0) / embt.shape[0]
+            metrics = {
+                "crossentropy": crossentropy,
+                # "pairwise-cossim": cossim,
+                # "crosscorrelation": crosscorr,
+            }
             for metric_name, metric_value in metrics.items():
                 if metric_value.ndim > 1:
                     if self.logger is not None and (self.trainer.global_step + 1) % self.trainer.log_every_n_steps == 0:
