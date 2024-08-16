@@ -88,20 +88,20 @@ model:
       dict_kwargs:
         model_max_length: 512
     student_transformations:
-    # - - class_path: tite.transformations.MaskTokens
-    #     init_args:
-    #       mask_id: 103
-    #       cls_id: 101
-    #       sep_id: 102
-    #       mask_prob: 0.2
-    #   - 0.0
-    - - class_path: tite.transformations.DeleteTokens
+    - - class_path: tite.transformations.MaskTokens
         init_args:
-          pad_id: 0
+          mask_id: 103
           cls_id: 101
           sep_id: 102
-          delete_prob: 0.05
+          mask_prob: 0.24
       - 1.0
+    # - - class_path: tite.transformations.DeleteTokens
+    #     init_args:
+    #       pad_id: 0
+    #       cls_id: 101
+    #       sep_id: 102
+    #       delete_prob: 0.05
+    #   - 1.0
     # - - class_path: tite.transformations.InsertRandomTokens
     #     init_args:
     #       insert_prob: 0.05
