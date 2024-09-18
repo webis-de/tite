@@ -1,6 +1,7 @@
 import inspect
 from typing import Any, Callable, NamedTuple
 
+import torch
 from torch import Tensor
 from torch.nn import Module
 
@@ -42,7 +43,7 @@ class JEPA(Module):
         # TODO kwargs should contain the aux for the predictor if necessary
         embx = self._student(**input)
         if target is None:
-            emby = embx
+            emby = embx.detach()
         else:
             teacher_kwargs = parse_kwargs(aux, self._teacher)
             emby = self._teacher(**target, **teacher_kwargs)
