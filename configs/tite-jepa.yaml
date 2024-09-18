@@ -93,7 +93,6 @@ model:
       class_path: tite.predictor.BlockSentencePredictor
     loss:
       class_path: torch.nn.MSELoss
-    max_length: 256
     log_additional_metrics: true
     validate_on_glue: true
     validate_on_msmarco: true
