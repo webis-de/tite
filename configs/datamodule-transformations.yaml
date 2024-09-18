@@ -28,26 +28,26 @@ data:
       dict_kwargs:
         model_max_length: 512
     student_transformations:
-    - - class_path: tite.transformations.SentenceDelete
+    - class_path: tite.transformations.SentenceDelete
         init_args:
           delete_prob: 0.3
-      - 1.0
-    - - class_path: tite.transformations.SentenceSwapNeighboring
+          transformation_prob: 1.0
+    - class_path: tite.transformations.SentenceSwapNeighboring
         init_args:
           swap_prob: 0.3
-      - 1.0
-    - - class_path: tite.transformations.CharacterDelete
+          transformation_prob: 1.0
+    - class_path: tite.transformations.CharacterDelete
         init_args:
           delete_prob: 0.01
-      - 1.0
-    - - class_path: tite.transformations.CharacterSwapNeighboring
+          transformation_prob: 1.0
+    - class_path: tite.transformations.CharacterSwapNeighboring
         init_args:
           swap_prob: 0.01
-      - 1.0
-    - - class_path: tite.transformations.CharacterInsert
+          transformation_prob: 1.0
+    - class_path: tite.transformations.CharacterInsert
         init_args:
           insert_prob: 0.01
-      - 1.0
+          transformation_prob: 1.0
     teacher_transformations: student
   # init_args:
   #   path: parquet

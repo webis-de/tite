@@ -1,4 +1,6 @@
-from .basehfdatamodule import BaseHFDataModule
+from transformers import PreTrainedTokenizerBase
+
+from .basehfdatamodule import BaseHFDataModule, Collator
 
 TASK_COLUMN_NAMES = {
     "cola": ("sentence", None),
@@ -13,6 +15,9 @@ TASK_COLUMN_NAMES = {
 
 
 class GLUEDataModule(BaseHFDataModule):
-    def __init__(self, task: str, **kwargs) -> None:
-        kwargs["text_keys"] = TASK_COLUMN_NAMES[task]
-        super().__init__(path="glue", name=task, **kwargs)
+    def __init__(
+        self, task: str, tokenizer: PreTrainedTokenizerBase, add_special_tokens: bool = True, **kwargs
+    ) -> None:
+        text_keys = TASK_COLUMN_NAMES[task]
+        collator = Collator(tokenizer, text_keys, max_length=256, add_special_tokens=add_special_tokens)
+        super().__init__(path="glue", name=task, collator=collator, **kwargs)

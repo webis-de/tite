@@ -20,6 +20,7 @@ class BertConfig(TiteConfig):
         layer_norm_eps: float = 1e-12,
         pad_token_id: int = 0,
         hidden_act: str = "gelu_pytorch_tanh",
+        pooling: bool = False,
         **kwargs
     ):
         super().__init__(
@@ -38,6 +39,7 @@ class BertConfig(TiteConfig):
             hidden_act,
             **kwargs
         )
+        self.pooling = pooling
 
 
 class BertModel(TiteModel):
@@ -54,7 +56,10 @@ class BertModel(TiteModel):
         self._tie_or_clone_weights(output_embeddings, self.get_input_embeddings())
 
     def forward(self, input_ids: Tensor, attention_mask: Tensor | None = None) -> Tensor:
-        return super().forward(input_ids, attention_mask)
+        hidden_states = super().forward(input_ids, attention_mask)
+        if self.config.pooling:
+            return hidden_states[:, [0]]
+        return hidden_states
 
 
 class HFBertModel(Module):

@@ -13,7 +13,7 @@ from torch.nn.functional import normalize
 from transformers import PreTrainedTokenizerBase
 
 from .bert import BertModel
-from .datasets import GLUEDataModule, IRDatasetsDataModule
+from .datasets import Collator, GLUEDataModule, IRDatasetsDataModule
 from .glue_module import GlueModule
 from .jepa import JEPA, LossFn, Predictor
 from .msmarco_module import MSMARCOModule
@@ -41,11 +41,7 @@ class TiteModule(LightningModule):
         tokenizer: PreTrainedTokenizerBase,
         predictor: Predictor,
         loss: LossFn,
-        text_key: str = "text",
-        max_length: int | None = None,
         detach_teacher_from_grad: bool = False,
-        student_transformations: list[tuple[Transformation, float]] | None = None,
-        teacher_transformations: list[tuple[Transformation, float]] | Literal["student"] | None = None,
         log_additional_metrics: bool = False,
         validate_on_glue: bool = False,
         validate_on_msmarco: bool = False,
@@ -59,18 +55,12 @@ class TiteModule(LightningModule):
         self._student = student
         self._teacher = teacher
         self._tokenizer = tokenizer
-        self._student_transforms = student_transformations or []
-        self._teacher_transforms = (
-            self._student_transforms if teacher_transformations == "student" else (teacher_transformations or [])
-        )
         self._log_additional_metrics = log_additional_metrics
         self._validate_on_glue = validate_on_glue
         self._validate_on_msmarco = validate_on_msmarco
 
         self._predictor = predictor
         self._loss = loss
-        self._text_key = text_key
-        self._max_length = max_length
         if detach_teacher_from_grad:
             self._teacher = _DetachFromGrad(self._teacher)
         self._jepa = JEPA(self._student, self._teacher, predictor, loss, return_embeddings=True)
@@ -81,10 +71,10 @@ class TiteModule(LightningModule):
         if self.trainer is not None and self.trainer.limit_val_batches == 0:
             return
         # Train on GLUE
-        # for task in TASK_COLUMN_NAMES:
         if self._validate_on_glue:
+            # for task in TASK_COLUMN_NAMES:
             for task in ["mrpc"]:
-                glue = GLUEDataModule(task=task, batch_size=32, tokenizer=self._tokenizer)
+                glue = GLUEDataModule(task=task, tokenizer=self._tokenizer, batch_size=32)
                 glue_module = GlueModule(deepcopy(self._student).train(), self._tokenizer, glue.hparams.name)
                 trainer = Trainer(
                     logger=False,
@@ -128,22 +118,15 @@ class TiteModule(LightningModule):
         return
 
     def training_step(self, batch: dict[str, torch.Tensor]) -> Tensor:
-        student_input = {key[8:]: value for key, value in batch.items() if key.startswith("student_")}
-        teacher_input = {key[8:]: value for key, value in batch.items() if key.startswith("teacher_")}
-        aux = {}
-        for transformation, prob in self._student_transforms:
-            if random.random() < prob:
-                transformed = transformation(**student_input)
-                student_input = transformed[0]
-                aux = {**aux, **transformed[1]}
-        for transformation, prob in self._teacher_transforms:
-            if random.random() < prob:
-                transformed = transformation(**teacher_input)
-                teacher_input = transformed[0]
+        student_input = batch.pop("student_input")
+        teacher_input = batch.pop("teacher_input", None)
         # JEPA will try to predict the original from the transformed input within the embedding space, i.e.,
         #   Loss(pred(student(studentinput), aux), teacher(teacherinput))
-        jepa_loss, embs, embt = self._jepa(student_input, teacher_input, **aux)
-        num_tokens = max(batch["student_attention_mask"].sum().item(), batch["teacher_attention_mask"].sum().item())
+        jepa_loss, embs, embt = self._jepa(student_input, teacher_input, **batch)
+        num_tokens = max(
+            student_input["attention_mask"].sum().item(),
+            0 if teacher_input is None else teacher_input["attention_mask"].sum().item(),
+        )
         self._tokens_seen += num_tokens
         self.log("tokens_seen", self._tokens_seen, on_step=True, reduce_fx="max")  # We sum it up ourselves
         self.log_dict({"loss": jepa_loss}, prog_bar=True, on_step=True)

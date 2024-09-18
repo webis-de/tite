@@ -1,7 +1,6 @@
 model:
   class_path: tite.module.TiteModule
   init_args:
-    detach_teacher_from_grad: true
     student:
       class_path: tite.bert.BertModel
       init_args:
@@ -9,6 +8,7 @@ model:
           class_path: tite.bert.BertConfig
           init_args:
             num_hidden_layers: 12
+            pooling: true
     tokenizer:
       class_path: tite.tokenizer.TiteTokenizer
       init_args:
@@ -22,20 +22,11 @@ model:
         mask_token: '[MASK]'
       dict_kwargs:
         model_max_length: 512
-    transformations:
-      - class_path: tite.transformations.MLMMaskTokens
-        init_args:
-          vocab_size: 30522
-          maskid: 103
-          clsid: 101
-          sepid: 102
-          mask_prob: 0.3
+    teacher:
+      class_path: tite.teacher.Identity
     predictor:
-      class_path: tite.predictor.Identity
+      class_path: tite.predictor.BlockSentencePredictor
     loss:
-      class_path: tite.loss.ProjectedBarlowTwins
-      init_args:
-        lmbda: 0.005
-        embeddim: 768
-        sizes: [8192, 8192, 8192]
-    max_length: 256
+      class_path: torch.nn.MSELoss
+    validate_on_glue: true
+    validate_on_msmarco: true

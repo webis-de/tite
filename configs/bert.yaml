@@ -8,10 +8,6 @@ model:
           class_path: tite.bert.BertConfig
           init_args:
             num_hidden_layers: 12
-    teacher:
-      class_path: tite.teacher.MLMTeacher
-      init_args:
-        padid: 0
     tokenizer:
       class_path: tite.tokenizer.TiteTokenizer
       init_args:
@@ -25,16 +21,10 @@ model:
         mask_token: '[MASK]'
       dict_kwargs:
         model_max_length: 512
-    student_transformations:
-      - - class_path: tite.transformations.MLMMaskTokens
-          init_args:
-            vocab_size: 30522
-            mask_id: 103
-            cls_id: 101
-            sep_id: 102
-            mask_prob: 0.3
-        - 1.0
-    teacher_transformations: null
+    teacher:
+      class_path: tite.teacher.MLMTeacher
+      init_args:
+        padid: 0
     predictor:
       class_path: tite.predictor.MLMDecoder
       init_args:
@@ -44,5 +34,5 @@ model:
       class_path: tite.loss.mlm.MLMCrossEntropy
       init_args:
         vocab_size: 30522
-    max_length: 256
     validate_on_glue: true
+    validate_on_msmarco: true

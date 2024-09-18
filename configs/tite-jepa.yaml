@@ -87,36 +87,13 @@ model:
         mask_token: '[MASK]'
       dict_kwargs:
         model_max_length: 512
-    student_transformations:
-    - - class_path: tite.transformations.MaskTokens
-        init_args:
-          mask_id: 103
-          cls_id: 101
-          sep_id: 102
-          mask_prob: 0.24
-      - 1.0
-    # - - class_path: tite.transformations.DeleteTokens
-    #     init_args:
-    #       pad_id: 0
-    #       cls_id: 101
-    #       sep_id: 102
-    #       delete_prob: 0.05
-    #   - 1.0
-    # - - class_path: tite.transformations.InsertRandomTokens
-    #     init_args:
-    #       insert_prob: 0.05
-    #       pad_id: 0
-    #       vocab_size: 30522
-    #   - 1.0
-    teacher_transformations: student
+    teacher:
+      class_path: tite.teacher.Identity
     predictor:
-      class_path: tite.predictor.Identity
+      class_path: tite.predictor.BlockSentencePredictor
     loss:
-      class_path: tite.loss.ProjectedBarlowTwins
-      init_args:
-        lmbda: 0.005
-        embeddim: 768
-        sizes: [2048, 2048, 2048]
+      class_path: torch.nn.MSELoss
+    max_length: 256
     log_additional_metrics: true
     validate_on_glue: true
     validate_on_msmarco: true

@@ -284,7 +284,7 @@ class TiteSelfAttention(torch.nn.Module):
         if self.unpadding:
             indices = torch.nonzero(attention_mask.flatten()).flatten()
             qkv = repad(qkv, indices, batch_size, seq_len)
-        qkv = rearrange(qkv, f"b s (t h d) -> t b h s d", t=3, h=self.num_attention_heads, d=self.attention_head_size)
+        qkv = rearrange(qkv, "b s (t h d) -> t b h s d", t=3, h=self.num_attention_heads, d=self.attention_head_size)
 
         query, key, value = qkv.unbind(dim=0)
 
