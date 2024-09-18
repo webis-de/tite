@@ -68,13 +68,18 @@ class TiteModule(LightningModule):
         self._tokens_seen = 0.0
 
     def on_validation_start(self) -> None:
-        if self.trainer is not None and self.trainer.limit_val_batches == 0:
+        if self.trainer is None:
             return
+        if self.trainer.limit_val_batches == 0:
+            return
+        add_special_tokens = self.trainer.datamodule.collator._add_special_tokens
         # Train on GLUE
         if self._validate_on_glue:
             # for task in TASK_COLUMN_NAMES:
             for task in ["mrpc"]:
-                glue = GLUEDataModule(task=task, tokenizer=self._tokenizer, batch_size=32)
+                glue = GLUEDataModule(
+                    task=task, tokenizer=self._tokenizer, batch_size=32, add_special_tokens=add_special_tokens
+                )
                 glue_module = GlueModule(deepcopy(self._student).train(), self._tokenizer, glue.hparams.name)
                 trainer = Trainer(
                     logger=False,
@@ -92,6 +97,7 @@ class TiteModule(LightningModule):
             msmarco = IRDatasetsDataModule(
                 "msmarco-passage",
                 tokenizer=self._tokenizer,
+                add_special_tokens=add_special_tokens,
                 trainset=("train/triples-small", "triples"),
                 valset=("trec-dl-2019/judged", "scoreddocs"),
                 batch_size=32,
