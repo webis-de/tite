@@ -294,6 +294,7 @@ class SentenceBlock(SentenceTransformation):
     MIN_NUM_CHARS_IN_SENTENCE = 32
     MAX_NUM_SENTENCES_IN_BLOCK = 12
     MIN_NUM_SENTENCES_IN_BLOCK = 1
+    MAX_NUM_BLOCKS_PER_TEXT = 16
 
     def __init__(self, transformation_prob: float = 1) -> None:
         super().__init__(transformation_prob)
@@ -307,14 +308,17 @@ class SentenceBlock(SentenceTransformation):
                 merged_sentences.append(merged_sentence.strip())
                 merged_sentence = ""
         if merged_sentence:
-            merged_sentences.append(merged_sentence)
+            if len(merged_sentence) < self.MIN_NUM_CHARS_IN_SENTENCE:
+                merged_sentences[-1] += " " + merged_sentence
+            else:
+                merged_sentences.append(merged_sentence)
         return merged_sentences
 
     def _group_into_blocks(self, sentences: list[str]) -> list[str]:
         sentences = self._merge_short_sentences(sentences)
-        num_sentences = len(sentences)
         if len(sentences) < 2:
-            return [" ".join(sentences)]
+            sentences = [sentences[0][: len(sentences[0]) // 2], sentences[0][len(sentences[0]) // 2 :]]
+        num_sentences = len(sentences)
         max_num_sentences_in_block = min(self.MAX_NUM_SENTENCES_IN_BLOCK, num_sentences - 1)
         block_sizes = []
         while True:
@@ -329,7 +333,7 @@ class SentenceBlock(SentenceTransformation):
             blocked_sentences.append(" ".join(remaining_sentences[:block_size]))
             remaining_sentences = remaining_sentences[block_size:]
         assert not remaining_sentences
-        return blocked_sentences
+        return blocked_sentences[: self.MAX_NUM_BLOCKS_PER_TEXT]
 
     def _transform(self, text: str) -> list[str]:
         sentences = self.split(text)
