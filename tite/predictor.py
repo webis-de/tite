@@ -66,7 +66,7 @@ class BlockSentencePredictor(Module):
             self.layers.append(TiteLayer(config, idx))
 
     def forward(self, hidden_states: Tensor, student_batch_idcs: tuple[int], *args, **kwargs) -> Tensor:
-        batch_idcs = torch.tensor(student_batch_idcs)
+        batch_idcs = torch.tensor(student_batch_idcs, device=hidden_states.device)
         num_blocks = batch_idcs.bincount()
         assert hidden_states.shape[1] == 1
         pooled_hidden_states = hidden_states[:, 0]
