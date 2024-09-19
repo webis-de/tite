@@ -40,14 +40,14 @@ class TransformationCollator(Collator):
         elif teacher_string_transformations is False:
             self._teacher_string_transformations = None
         else:
-            self._teacher_string_transformations = []
+            self._teacher_string_transformations = teacher_string_transformations or []
         self._student_token_transformations = student_token_transformations or []
         if teacher_token_transformations == "student":
             self._teacher_token_transformations: list[TokenTransformation] | None = self._student_token_transformations
         elif teacher_token_transformations is False:
             self._teacher_token_transformations = None
         else:
-            self._teacher_token_transformations = []
+            self._teacher_token_transformations = teacher_token_transformations or []
 
     def apply_string_transformations(self, agg: dict) -> tuple[dict, dict]:
         transformed: dict[str, list] = {}
