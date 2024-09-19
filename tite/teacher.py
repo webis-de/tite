@@ -11,6 +11,18 @@ class Identity(Module):
         return input_ids
 
 
+class OrderTeacher(Module):
+    def __init__(self) -> None:
+        super().__init__()
+
+    def forward(self, input_ids: Tensor, student_batch_idcs: tuple[int], **kwargs) -> Tensor:
+        block_size = torch.bincount(torch.tensor(student_batch_idcs, device=input_ids.device))
+        targets = torch.nn.utils.rnn.pad_sequence(
+            [torch.arange(bs, device=input_ids.device) for bs in block_size], batch_first=True, padding_value=-100
+        )
+        return targets
+
+
 class MLMTeacher(Module):
     def __init__(self, padid: int) -> None:
         super().__init__()
