@@ -21,8 +21,8 @@ trainer:
       init_args:
         logging_interval: step
   max_steps: 70000
-  val_check_interval: 32000
-  accumulate_grad_batches: 32
+  val_check_interval: 64000
+  accumulate_grad_batches: 128
   gradient_clip_val: 10
   detect_anomaly: false
   inference_mode: false

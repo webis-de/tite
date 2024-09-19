@@ -89,11 +89,11 @@ model:
       dict_kwargs:
         model_max_length: 512
     teacher:
-      class_path: tite.teacher.Identity
+      class_path: tite.teacher.OrderTeacher
     predictor:
-      class_path: tite.predictor.BlockEmbeddingPredictor
+      class_path: tite.predictor.BlockOrderPredictor
     loss:
-      class_path: torch.nn.MSELoss
-    log_additional_metrics: true
+      class_path: tite.loss.ApproxOrderMSE
+    log_additional_metrics: false
     validate_on_glue: true
     validate_on_msmarco: true

@@ -8,7 +8,7 @@ data:
     # path: parquet
     # data_files:
     #   train: /mnt/ceph/storage/corpora/corpora-thirdparty/corpus-fineweb-edu/snapshots/5b89d1ea9319fe101b3cbdacd89a903aca1d6052/data/CC-MAIN-*/train-*.parquet
-    batch_size: 128
+    batch_size: 32
     num_workers: 8
     streaming: true
     collator:
