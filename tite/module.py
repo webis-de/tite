@@ -1,24 +1,22 @@
 import math
-import random
 from copy import deepcopy
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any
 
 import torch
 from lightning import LightningModule, Trainer
 from lightning.pytorch.callbacks.early_stopping import EarlyStopping
+from lightning.pytorch.utilities import grad_norm
 from torch import Tensor
 from torch.nn import Module
-from torch.nn.functional import normalize
 from transformers import PreTrainedTokenizerBase
 
 from .bert import BertModel
-from .datasets import Collator, GLUEDataModule, IRDatasetsDataModule
+from .datasets import GLUEDataModule, IRDatasetsDataModule
 from .glue_module import GlueModule
 from .jepa import JEPA, LossFn, Predictor
 from .msmarco_module import MSMARCOModule
 from .predictor import MLMDecoder
-from .transformations import Transformation
 
 
 class _DetachFromGrad(Module):
@@ -45,6 +43,7 @@ class TiteModule(LightningModule):
         log_additional_metrics: bool = False,
         validate_on_glue: bool = False,
         validate_on_msmarco: bool = False,
+        log_gradients: bool = False,
     ) -> None:
         super().__init__()
         # ties weights for BERT models -- only works for teacher MLM and student BERT
@@ -58,6 +57,7 @@ class TiteModule(LightningModule):
         self._log_additional_metrics = log_additional_metrics
         self._validate_on_glue = validate_on_glue
         self._validate_on_msmarco = validate_on_msmarco
+        self._log_gradients = log_gradients
 
         self._predictor = predictor
         self._loss = loss
@@ -117,6 +117,12 @@ class TiteModule(LightningModule):
             metrics = trainer.logged_metrics
             for name, value in metrics.items():
                 self.log(f"trec-dl-2019/{name}", value, on_step=False, on_epoch=True)
+
+    def on_before_optimizer_step(self, optimizer):
+        if not self._log_gradients:
+            return
+        norms = grad_norm(self._student, norm_type=2)
+        self.log_dict(norms)
 
     def validation_step(self, batch: dict[str, Any] | None) -> None:
         # Empty validation step to trick pytorch lightning into validating this model though validation is actually done
