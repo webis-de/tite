@@ -23,7 +23,7 @@ trainer:
   max_steps: 70000
   val_check_interval: 64000
   accumulate_grad_batches: 128
-  gradient_clip_val: 10
+  gradient_clip_val: 1
   detect_anomaly: false
   inference_mode: false
   num_sanity_val_steps: 0
