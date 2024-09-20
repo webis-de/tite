@@ -64,7 +64,9 @@ class BertModel(TiteModel):
 
 class HFBertModel(Module):
 
-    def __init__(self, model_name_or_path: str | None = None, config: HFBertConfig | None = None) -> None:
+    def __init__(
+        self, model_name_or_path: str | None = None, config: HFBertConfig | None = None, pooling: bool = False
+    ) -> None:
         super().__init__()
         if model_name_or_path is None:
             if config is None:
@@ -74,13 +76,17 @@ class HFBertModel(Module):
             self._model = HFBert.from_pretrained(model_name_or_path, config=config)
         self.config = self._model.config
         self.config.last_hidden_size = self.config.hidden_size
+        self.pooling = pooling
 
     def forward(
         self, input_ids: Tensor, attention_mask: Tensor | None = None, token_type_ids: Tensor | None = None
     ) -> Tensor:
-        return self._model(
+        hidden_states = self._model(
             input_ids, attention_mask=attention_mask, token_type_ids=token_type_ids, output_hidden_states=True
         ).last_hidden_state
+        if self.pooling:
+            hidden_states = hidden_states[:, [0]]
+        return hidden_states
 
     def save_pretrained(self, *args, **kwargs):
         self._model.save_pretrained(*args, **kwargs)
