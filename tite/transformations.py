@@ -339,3 +339,9 @@ class SentenceBlock(SentenceTransformation):
         sentences = self.split(text)
         blocked_sentences = self._group_into_blocks(sentences)
         return blocked_sentences
+
+    @staticmethod
+    def random_sum_to(n: int) -> list[int]:
+        """Computes n random numbers in the interval [0, n] such that their sum is exactly n."""
+        sel = sorted(random.randint(0, n) for _ in range(n - 1))
+        return [upper - lower for lower, upper in zip([0] + sel, sel + [n])]

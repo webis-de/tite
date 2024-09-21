@@ -21,7 +21,6 @@ class ApproxOrderMSE(torch.nn.Module):
         score_diff = scores[:, None] - scores[..., None]
         expanded_mask = mask[:, None] & mask[..., None]
         normalized_score_diff = torch.sigmoid(score_diff / temperature)
-        normalized_score_diff[~expanded_mask] = 0
-        approx_ranks = normalized_score_diff.sum(-1) + 0.5
+        approx_ranks = (normalized_score_diff * expanded_mask).sum(-1) + 0.5
         approx_ranks[~mask] = 0
         return approx_ranks

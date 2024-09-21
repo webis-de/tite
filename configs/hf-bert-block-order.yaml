@@ -26,5 +26,6 @@ model:
     loss:
       class_path: tite.loss.ApproxOrderMSE
     log_additional_metrics: false
+    log_gradients: true
     validate_on_glue: true
     validate_on_msmarco: false
