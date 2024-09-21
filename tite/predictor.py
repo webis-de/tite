@@ -167,4 +167,3 @@ class Identity(Module):
 
     def forward(self, input: Tensor, *args, **kwargs) -> Tensor:
         return input
-        return input
