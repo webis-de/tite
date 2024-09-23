@@ -75,6 +75,31 @@ class MaskTokens(TokenTransformation):
         return {"input_ids": input_ids, "attention_mask": attention_mask}, {}
 
 
+class ReplaceRandom(TokenTransformation):
+
+    def __init__(
+        self,
+        vocab_size: int,
+        cls_id: int,
+        sep_id: int,
+        replace_prob: float = 0.05,
+        transformation_prob: float = 1.0,
+    ):
+        super().__init__(transformation_prob)
+        self._vocab_size = vocab_size
+        self._cls_id = cls_id
+        self._sep_id = sep_id
+        self._replace_prob = replace_prob
+
+    def forward(self, input_ids: Tensor, attention_mask: LongTensor, **kwargs) -> tuple[dict, dict]:
+        transformation_mask = self.transformation_mask(input_ids.shape[0])
+        random_mask = torch.rand(attention_mask.shape, device=input_ids.device) < self._replace_prob
+        random_mask = random_mask.logical_and(input_ids != self._cls_id).logical_and(input_ids != self._sep_id)
+        random_mask = random_mask.logical_and(transformation_mask[:, None])
+        input_ids = torch.where(random_mask, torch.randint_like(input_ids, 0, self._vocab_size), input_ids)
+        return {"input_ids": input_ids, "attention_mask": attention_mask}, {}
+
+
 class DeleteTokens(TokenTransformation):
     def __init__(
         self, pad_id: int, cls_id: int, sep_id: int, delete_prob: float = 0.3, transformation_prob: float = 1.0
