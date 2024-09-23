@@ -100,7 +100,10 @@ class BaseHFDataModule(LightningDataModule):
             **self._data_kwargs,
             streaming=self._streaming,
         )
-        self._dataset = self._dataset.shuffle(buffer_size=1_024, seed=self.hparams["seed"])
+        kwargs = {}
+        if self._streaming:
+            kwargs["buffer_size"] = 1_024
+        self._dataset = self._dataset.shuffle(seed=self.hparams["seed"], **kwargs)
 
     def teardown(self, stage: str) -> None:
         self._dataset = None
