@@ -96,4 +96,4 @@ model:
       class_path: tite.loss.ApproxOrderMSE
     log_additional_metrics: false
     validate_on_glue: true
-    validate_on_msmarco: true
+    validate_on_msmarco: false
