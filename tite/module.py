@@ -78,7 +78,11 @@ class TiteModule(LightningModule):
             # for task in TASK_COLUMN_NAMES:
             for task in ["mrpc"]:
                 glue = GLUEDataModule(
-                    task=task, tokenizer=self._tokenizer, batch_size=32, add_special_tokens=add_special_tokens
+                    task=task,
+                    tokenizer=self._tokenizer,
+                    batch_size=32,
+                    add_special_tokens=add_special_tokens,
+                    streaming=False,
                 )
                 glue_module = GlueModule(deepcopy(self._student).train(), self._tokenizer, glue.hparams.name)
                 trainer = Trainer(
