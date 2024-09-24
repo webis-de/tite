@@ -1,9 +1,10 @@
 import inspect
 from typing import Any, Callable, NamedTuple
 
-import torch
 from torch import Tensor
 from torch.nn import Module
+
+from tite.teacher import CopyStudent
 
 
 class MaskCollatorBatch(NamedTuple):
@@ -13,8 +14,6 @@ class MaskCollatorBatch(NamedTuple):
     metadata: dict[str, Any]
 
 
-Encoder = Callable[[Any], Any]
-Predictor = Callable[[Any, Any], Any]
 LossFn = Callable[[Any, Any], Any]
 
 
@@ -26,29 +25,27 @@ def parse_kwargs(kwargs: dict[str, Any], module: Module) -> dict[str, Any]:
 class JEPA(Module):
     def __init__(
         self,
-        student: Encoder,
-        teacher: Encoder,
-        predictor: Predictor,
-        loss: LossFn,
-        return_embeddings: bool = False,
+        student: Module,
+        teachers: list[Module],
+        predictors: list[Module],
+        losses: list[LossFn],
     ) -> None:
         super().__init__()
         self._student = student
-        self._teacher = teacher
-        self._predictor = predictor
-        self._loss = loss
-        self._return_embeddings = return_embeddings
+        self._teachers = teachers
+        self._predictors = predictors
+        self._losses = losses
 
     def forward(self, input: dict, target: dict | None, **aux):
-        # TODO kwargs should contain the aux for the predictor if necessary
         embx = self._student(**input)
-        if target is None:
-            emby = embx.detach()
-        else:
-            teacher_kwargs = parse_kwargs(aux, self._teacher)
-            emby = self._teacher(**target, **teacher_kwargs)
-        predictor_kwargs = parse_kwargs(aux, self._predictor)
-        pred = self._predictor(embx, **predictor_kwargs)
-        if not self._return_embeddings:
-            return self._loss(pred, emby)
-        return self._loss(pred, emby), embx, emby
+        losses = {}
+        for teacher, predictor, loss in zip(self._teachers, self._predictors, self._losses):
+            if target is None or isinstance(teacher, CopyStudent):
+                emby = embx.detach()
+            else:
+                teacher_kwargs = parse_kwargs(aux, teacher)
+                emby = teacher(**target, **teacher_kwargs)
+            predictor_kwargs = parse_kwargs(aux, predictor)
+            pred = predictor(embx, **predictor_kwargs)
+            losses[loss.__class__.__name__] = loss(pred, emby)
+        return losses, embx

@@ -88,12 +88,15 @@ model:
         mask_token: '[MASK]'
       dict_kwargs:
         model_max_length: 512
-    teacher:
-      class_path: tite.teacher.OrderTeacher
-    predictor:
-      class_path: tite.predictor.BlockOrderPredictor
-    loss:
-      class_path: tite.loss.ApproxOrderMSE
+    teachers:
+      - class_path: tite.teacher.OrderTeacher
+      - class_path: tite.teacher.CopyStudent
+    predictors:
+      - class_path: tite.predictor.BlockOrderPredictor
+      - class_path: tite.predictor.BlockEmbeddingPredictor
+    losses:
+      - class_path: tite.loss.ApproxOrderMSE
+      - class_path: torch.nn.MSELoss
     log_additional_metrics: false
     validate_on_glue: true
     validate_on_msmarco: false

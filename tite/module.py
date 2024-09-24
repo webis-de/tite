@@ -14,7 +14,7 @@ from transformers import PreTrainedTokenizerBase
 from .bert import BertModel
 from .datasets import GLUEDataModule, IRDatasetsDataModule
 from .glue_module import GlueModule
-from .jepa import JEPA, LossFn, Predictor
+from .jepa import JEPA, LossFn
 from .msmarco_module import MSMARCOModule
 from .predictor import MLMDecoder
 
@@ -35,10 +35,10 @@ class TiteModule(LightningModule):
     def __init__(
         self,
         student: Module,
-        teacher: Module | None,
+        teachers: list[Module | None],
         tokenizer: PreTrainedTokenizerBase,
-        predictor: Predictor,
-        loss: LossFn,
+        predictors: list[Module],
+        losses: list[LossFn],
         detach_teacher_from_grad: bool = False,
         log_additional_metrics: bool = False,
         validate_on_glue: bool = False,
@@ -47,23 +47,21 @@ class TiteModule(LightningModule):
     ) -> None:
         super().__init__()
         # ties weights for BERT models -- only works for teacher MLM and student BERT
-        if isinstance(student, BertModel) and isinstance(predictor, MLMDecoder):
-            student.tie_decoder_weights(predictor.decoder)
-        if teacher is None:
-            teacher = student
+        if len(predictors) == 1 and isinstance(student, BertModel) and isinstance(predictors[0], MLMDecoder):
+            student.tie_decoder_weights(predictors[0].decoder)
         self._student = student
-        self._teacher = teacher
+        self._teachers = torch.nn.ModuleList([teacher if teacher is not None else student for teacher in teachers])
         self._tokenizer = tokenizer
         self._log_additional_metrics = log_additional_metrics
         self._validate_on_glue = validate_on_glue
         self._validate_on_msmarco = validate_on_msmarco
         self._log_gradients = log_gradients
 
-        self._predictor = predictor
-        self._loss = loss
+        self._predictors = torch.nn.ModuleList(predictors)
+        self._losses = torch.nn.ModuleList(losses)
         if detach_teacher_from_grad:
             self._teacher = _DetachFromGrad(self._teacher)
-        self._jepa = JEPA(self._student, self._teacher, predictor, loss, return_embeddings=True)
+        self._jepa = JEPA(self._student, self._teachers, self._predictors, self._losses)
 
         self._tokens_seen = 0.0
 
@@ -138,38 +136,39 @@ class TiteModule(LightningModule):
         teacher_input = batch.pop("teacher_input", None)
         # JEPA will try to predict the original from the transformed input within the embedding space, i.e.,
         #   Loss(pred(student(studentinput), aux), teacher(teacherinput))
-        jepa_loss, embs, embt = self._jepa(student_input, teacher_input, **batch)
+        losses, embs = self._jepa(student_input, teacher_input, **batch)
+        losses["total"] = sum(losses.values())
         num_tokens = max(
             student_input["attention_mask"].sum().item(),
             0 if teacher_input is None else teacher_input["attention_mask"].sum().item(),
         )
         self._tokens_seen += num_tokens
         self.log("tokens_seen", self._tokens_seen, on_step=True, reduce_fx="max")  # We sum it up ourselves
-        self.log_dict({"loss": jepa_loss}, prog_bar=True, on_step=True)
-        ####
-        # Log additional metrics for more insight into the training
-        if self._log_additional_metrics:
-            with torch.autocast(device_type="cuda", enabled=False):
-                # cossim = normalize(embs[:, 0]) @ normalize(embt[:, 0]).T
-                crossentropy = torch.nn.functional.cross_entropy(
-                    (embs[:, 0] @ embt[:, 0].T) / math.sqrt(embs.shape[-1]),
-                    torch.arange(embs.shape[0], device=self.device),
-                )
-                # Equivalent to above: -torch.diag(torch.log_softmax(embs[:, 0] @ embt[:, 0].T, dim=, -1)).mean()
-                # crosscorr = normalize(embs[:, 0], dim=0).T @ normalize(embt[:, 0], dim=0) / embt.shape[0]
-            metrics = {
-                "crossentropy": crossentropy,
-                # "pairwise-cossim": cossim,
-                # "crosscorrelation": crosscorr,
-            }
-            for metric_name, metric_value in metrics.items():
-                if metric_value.ndim > 1:
-                    if self.logger is not None and (self.trainer.global_step + 1) % self.trainer.log_every_n_steps == 0:
-                        self.logger.log_image(metric_name, [metric_value])
-                else:
-                    self.log(metric_name, metric_value)
-        ####
-        return jepa_loss
+        self.log_dict(losses)
+        # ####
+        # # Log additional metrics for more insight into the training
+        # if self._log_additional_metrics:
+        #     with torch.autocast(device_type="cuda", enabled=False):
+        #         # cossim = normalize(embs[:, 0]) @ normalize(embt[:, 0]).T
+        #         crossentropy = torch.nn.functional.cross_entropy(
+        #             (embs[:, 0] @ embt[:, 0].T) / math.sqrt(embs.shape[-1]),
+        #             torch.arange(embs.shape[0], device=self.device),
+        #         )
+        #         # Equivalent to above: -torch.diag(torch.log_softmax(embs[:, 0] @ embt[:, 0].T, dim=, -1)).mean()
+        #         # crosscorr = normalize(embs[:, 0], dim=0).T @ normalize(embt[:, 0], dim=0) / embt.shape[0]
+        #     metrics = {
+        #         "crossentropy": crossentropy,
+        #         # "pairwise-cossim": cossim,
+        #         # "crosscorrelation": crosscorr,
+        #     }
+        #     for metric_name, metric_value in metrics.items():
+        #         if metric_value.ndim > 1:
+        #             if self.logger is not None and (self.trainer.global_step + 1) % self.trainer.log_every_n_steps == 0:
+        #                 self.logger.log_image(metric_name, [metric_value])
+        #         else:
+        #             self.log(metric_name, metric_value)
+        # ####
+        return losses["total"]
 
     def save_pretrained(self, save_path: str | Path) -> None:
         self._student.save_pretrained(save_path)

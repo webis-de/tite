@@ -105,7 +105,7 @@ class BlockEmbeddingPredictor(BlockPredictor):
     def forward(self, hidden_states: Tensor, student_batch_idcs: tuple[int], *args, **kwargs) -> Tensor:
         batch_idcs = torch.tensor(student_batch_idcs, device=hidden_states.device)
         num_blocks = batch_idcs.bincount()
-        hidden_states, attention_mask = self.format_block_embeddings(hidden_states, student_batch_idcs)
+        hidden_states = self.format_block_embeddings(hidden_states, student_batch_idcs)
         hidden_states = hidden_states.repeat_interleave(num_blocks, dim=0)
         attention_mask = torch.cat(
             [

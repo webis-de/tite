@@ -1,6 +1,10 @@
+# lr_scheduler:
+#   class_path: LinearLRSchedulerWithLinearWarmup
+#   init_args:
+#     num_warmup_steps: 3000
+#     num_training_steps: 70000
+#     final_value: 0.02
 lr_scheduler:
-  class_path: LinearLRSchedulerWithLinearWarmup
+  class_path: ConstantLRSchedulerWithLinearWarmup
   init_args:
     num_warmup_steps: 3000
-    num_training_steps: 70000
-    final_value: 0.02
