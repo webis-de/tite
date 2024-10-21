@@ -37,15 +37,18 @@ class JEPA(Module):
         self._losses = losses
 
     def forward(self, input: dict, target: dict | None, **aux):
+        # TODO where is attn mask?!
+        student_aux = {k[8:]: v for k, v in aux.items() if k.startswith("student_")}
+        teacher_aux = {k[8:]: v for k, v in aux.items() if k.startswith("teacher_")}
         embx = self._student(**input)
         losses = {}
         for teacher, predictor, loss in zip(self._teachers, self._predictors, self._losses):
             if target is None or isinstance(teacher, CopyStudent):
                 emby = embx.detach()
             else:
-                teacher_kwargs = parse_kwargs(aux, teacher)
+                teacher_kwargs = parse_kwargs(teacher_aux, teacher)
                 emby = teacher(**target, **teacher_kwargs)
-            predictor_kwargs = parse_kwargs(aux, predictor)
+            predictor_kwargs = parse_kwargs({**student_aux, **teacher_aux, **(target or {})}, predictor)
             pred = predictor(embx, **predictor_kwargs)
             losses[loss.__class__.__name__] = loss(pred, emby)
         return losses, embx

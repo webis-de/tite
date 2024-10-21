@@ -93,11 +93,13 @@ class TransformationCollator(Collator):
             }
         for transformation in self._student_token_transformations:
             student_input, transform_aux = transformation(**student_input)
+            transform_aux = {f"student_{k}": v for k, v in transform_aux.items()}
             aux = {**aux, **transform_aux}
         out = {"student_input": student_input}
         if teacher_input is not None and self._teacher_token_transformations is not None:
             for transformation in self._teacher_token_transformations:
                 teacher_input, transform_aux = transformation(**teacher_input)
+                transform_aux = {f"teacher_{k}": v for k, v in transform_aux.items()}
                 aux = {**aux, **transform_aux}
             out["teacher_input"] = teacher_input
         return out, aux

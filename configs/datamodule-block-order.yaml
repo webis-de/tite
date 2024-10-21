@@ -4,7 +4,7 @@ data:
     # path: HuggingFaceFW/fineweb-edu
     path: arrow
     data_files:
-      train: /mnt/ceph/storage/data-tmp/current/fschlatt/.cache/huggingface/datasets/HuggingFaceFW___fineweb-edu/default/0.0.0/5b89d1ea9319fe101b3cbdacd89a903aca1d6052/fineweb-edu-train-*.arrow
+      train: /mnt/ceph/storage/corpora/corpora-thirdparty/corpus-fineweb-edu/default/0.0.0/5b89d1ea9319fe101b3cbdacd89a903aca1d6052/fineweb-edu-train-*.arrow
     # path: parquet
     # data_files:
     #   train: /mnt/ceph/storage/corpora/corpora-thirdparty/corpus-fineweb-edu/snapshots/5b89d1ea9319fe101b3cbdacd89a903aca1d6052/data/CC-MAIN-*/train-*.parquet

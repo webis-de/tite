@@ -16,7 +16,7 @@ from .datasets import GLUEDataModule, IRDatasetsDataModule
 from .glue_module import GlueModule
 from .jepa import JEPA, LossFn
 from .msmarco_module import MSMARCOModule
-from .predictor import MLMDecoder
+from .predictor import MAEDecoder, MLMDecoder
 
 
 class _DetachFromGrad(Module):
@@ -49,6 +49,8 @@ class TiteModule(LightningModule):
         # ties weights for BERT models -- only works for teacher MLM and student BERT
         if len(predictors) == 1 and isinstance(student, BertModel) and isinstance(predictors[0], MLMDecoder):
             student.tie_decoder_weights(predictors[0].decoder)
+            if isinstance(predictors[0], MAEDecoder):
+                predictors[0].embeddings.word_embeddings = student.get_input_embeddings()
         self._student = student
         self._teachers = torch.nn.ModuleList([teacher if teacher is not None else student for teacher in teachers])
         self._tokenizer = tokenizer

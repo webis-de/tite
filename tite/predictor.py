@@ -4,7 +4,7 @@ from torch.nn import Module
 from transformers import BertConfig, BertForMaskedLM
 from transformers.activations import ACT2FN
 
-from .model import TiteConfig, TiteLayer
+from .model import TiteConfig, TiteEmbeddings, TiteEncoder, TiteLayer
 
 
 class MLMDecoder(Module):
@@ -38,6 +38,48 @@ class HFMLMDecoder(MLMDecoder):
         for key, value in model.cls.state_dict().items():
             state_dict[key.replace("predictions.", "").replace("transform.", "")] = value
         self.load_state_dict(state_dict)
+
+
+class MAEDecoder(MLMDecoder):
+    def __init__(self, config: TiteConfig):
+        super().__init__(config.vocab_size, config.hidden_size[0], config.hidden_act)
+        self.config = config
+        self.embeddings = TiteEmbeddings(config)
+        self.encoder = TiteEncoder(config)
+
+        self.tie_or_clone_weights(self.embeddings.word_embeddings, self.decoder)
+
+    def tie_or_clone_weights(self, output_embeddings, input_embeddings):
+        """Tie or clone module weights depending of whether we are using TorchScript or not"""
+        if self.config.torchscript:
+            output_embeddings.weight = torch.nn.Parameter(input_embeddings.weight.clone())
+        else:
+            output_embeddings.weight = input_embeddings.weight
+
+        if getattr(output_embeddings, "bias", None) is not None:
+            output_embeddings.bias.data = torch.nn.functional.pad(
+                output_embeddings.bias.data,
+                (
+                    0,
+                    output_embeddings.weight.shape[0] - output_embeddings.bias.shape[0],
+                ),
+                "constant",
+                0,
+            )
+        if hasattr(output_embeddings, "out_features") and hasattr(input_embeddings, "num_embeddings"):
+            output_embeddings.out_features = input_embeddings.num_embeddings
+
+    def forward(self, embx: Tensor, input_ids: Tensor, attention_mask: Tensor, *args, **kwargs) -> Tensor:
+        # TODO pad input_ids with [CON] token
+        # copy embx into [CON] token slot
+        attention_mask = attention_mask.bool()
+        hidden_states = self.embeddings(input_ids, attention_mask)
+        expanded_hidden_states = torch.nn.functional.pad(hidden_states, (0, 0, 1, 0))
+        expanded_hidden_states[:, 0] = embx[:, 0]
+        expanded_attention_mask = torch.nn.functional.pad(attention_mask, (1, 0), value=True)
+        pred_hidden_states = self.encoder(expanded_hidden_states, expanded_attention_mask)
+        pred_hidden_states = pred_hidden_states[:, 1:]
+        return super().forward(pred_hidden_states)
 
 
 class BlockPredictor(Module):

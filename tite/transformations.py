@@ -67,12 +67,16 @@ class MaskTokens(TokenTransformation):
         self._mask_prob = mask_prob
 
     def forward(self, input_ids: Tensor, attention_mask: LongTensor, **kwargs) -> tuple[dict, dict]:
+        original_input_ids = input_ids.clone()
         transformation_mask = self.transformation_mask(input_ids.shape[0])
         mlm_mask = torch.rand(attention_mask.shape, device=input_ids.device) < self._mask_prob
         mlm_mask = mlm_mask.logical_and(input_ids != self._cls_id).logical_and(input_ids != self._sep_id)
         mlm_mask = mlm_mask.logical_and(transformation_mask[:, None])
         input_ids = torch.where(mlm_mask, self._mask_id, input_ids)
-        return {"input_ids": input_ids, "attention_mask": attention_mask}, {}
+        return {"input_ids": input_ids, "attention_mask": attention_mask}, {
+            "mlm_mask": mlm_mask,
+            "original_input_ids": original_input_ids,
+        }
 
 
 class ReplaceRandom(TokenTransformation):

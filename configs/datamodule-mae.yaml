@@ -8,7 +8,7 @@ data:
     # path: parquet
     # data_files:
     #   train: /mnt/ceph/storage/corpora/corpora-thirdparty/corpus-fineweb-edu/snapshots/5b89d1ea9319fe101b3cbdacd89a903aca1d6052/data/CC-MAIN-*/train-*.parquet
-    batch_size: 32
+    batch_size: 128
     num_workers: 8
     streaming: true
     collator:
@@ -31,8 +31,19 @@ data:
         - text
         - null
         max_length: 256
-        student_string_transformations:
-        - class_path: tite.transformations.SentenceBlock
-        teacher_string_transformations: false
-        student_token_transformations: null
-        teacher_token_transformations: false
+        student_string_transformations: null
+        teacher_string_transformations: null
+        student_token_transformations:
+        - class_path: tite.transformations.MaskTokens
+          init_args:
+            mask_id: 103
+            cls_id: 101
+            sep_id: 102
+            mask_prob: 0.0
+        teacher_token_transformations: 
+        - class_path: tite.transformations.MaskTokens
+          init_args:
+            mask_id: 103
+            cls_id: 101
+            sep_id: 102
+            mask_prob: 0.9

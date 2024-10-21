@@ -9,7 +9,7 @@ data:
   init_args:
     path: arrow
     data_files:
-      train: /mnt/ceph/storage/data-tmp/current/fschlatt/.cache/huggingface/datasets/HuggingFaceFW___fineweb-edu/default/0.0.0/5b89d1ea9319fe101b3cbdacd89a903aca1d6052/fineweb-edu-train-*.arrow
+      train: /mnt/ceph/storage/corpora/corpora-thirdparty/corpus-fineweb-edu/default/0.0.0/5b89d1ea9319fe101b3cbdacd89a903aca1d6052/fineweb-edu-train-*.arrow
     batch_size: 128
     num_workers: 8
     streaming: true
