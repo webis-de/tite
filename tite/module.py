@@ -145,6 +145,7 @@ class TiteModule(LightningModule):
         )
         self._tokens_seen += num_tokens
         self.log("tokens_seen", self._tokens_seen, on_step=True, reduce_fx="max")  # We sum it up ourselves
+        self.log("loss", losses["total"], prog_bar=True)
         self.log_dict(losses)
         # ####
         # # Log additional metrics for more insight into the training

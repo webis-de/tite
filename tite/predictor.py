@@ -62,17 +62,22 @@ class MAESelfAttention(TiteSelfAttention):
     ) -> torch.Tensor:
         batch_size, seq_len = attention_mask.shape
 
-        qkv = self.Wqkv(hidden_states)
+        extended_hidden_states = torch.nn.functional.pad(hidden_states, (0, 0, 1, 0))
+        extended_hidden_states[:, 0] = embx[:, 0]
+
+        qkv = self.Wqkv(extended_hidden_states)
         qkv = rearrange(qkv, "b s (t h d) -> t b h s d", t=3, h=self.num_attention_heads, d=self.attention_head_size)
         query, key, value = qkv.unbind(dim=0)
-        embx = rearrange(embx, "b 1 (h d) -> b h 1 d", h=self.num_attention_heads)
 
         if self.enhanced:
             # use embx as query + positional embeddings
             # embx at position x can attend to random tokens in the sequence but not to the original token at position x
-            query = repeat(embx, "b h 1 d -> b h s d", s=seq_len) + rearrange(
-                self.position_embeddings(torch.arange(seq_len, device=hidden_states.device)),
-                "s (h d) -> 1 h s d",
+            embx_query = repeat(embx, "b 1 d -> b s d", s=seq_len) + (
+                self.position_embeddings(torch.arange(seq_len, device=hidden_states.device))
+            )
+            query = rearrange(
+                embx_query,
+                "b s (h d) -> b h s d",
                 h=self.num_attention_heads,
                 d=self.attention_head_size,
             )
@@ -81,23 +86,21 @@ class MAESelfAttention(TiteSelfAttention):
             enhanced_decoding_mask = (
                 attention_mask.logical_and(~mlm_mask)[:, None].logical_and(decoding_mask).logical_and(diag_mask)
             )
+            enhanced_decoding_mask = torch.nn.functional.pad(enhanced_decoding_mask, (1, 0, 0, 0), value=True)
             attn_weight = repeat(
                 torch.where(enhanced_decoding_mask, 0, -10000.0),
                 "b s1 s2 -> b h s1 s2",
                 h=self.num_attention_heads,
             )
         else:
-            # append embx to the key and value
             # aggressively masked input can attend to embx and has to reconstruct original tokens
-            key = torch.nn.functional.pad(key, (0, 0, 1, 0))
-            value = torch.nn.functional.pad(value, (0, 0, 1, 0))
-            key[:, 0] = embx[:, 0]
-            value[:, 0] = embx[:, 0]
+            query = query[:, :, 1:]
+            extended_attention_mask = torch.nn.functional.pad(attention_mask, (1, 0), value=True)
             attn_weight = repeat(
                 torch.where(
                     einsum(
                         attention_mask,
-                        torch.nn.functional.pad(attention_mask, (1, 0), value=True),
+                        extended_attention_mask,
                         "b s1, b s2 -> b s1 s2",
                     ),
                     0,
