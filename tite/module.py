@@ -50,6 +50,8 @@ class TiteModule(LightningModule):
             student.tie_decoder_weights(predictors[0].decoder)
             if isinstance(predictors[0], MAEDecoder):
                 predictors[0].embeddings.word_embeddings = student.get_input_embeddings()
+                if student.embeddings.position_embeddings is not None:
+                    predictors[0].embeddings.position_embeddings = student.embeddings.position_embeddings
         self._student = student
         self._teachers = torch.nn.ModuleList([teacher if teacher is not None else student for teacher in teachers])
         self._tokenizer = tokenizer
