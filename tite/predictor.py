@@ -49,34 +49,54 @@ class HFMLMDecoder(MLMDecoder):
         self.load_state_dict(state_dict)
 
 
-class MAESelfAttention(TiteSelfAttention):
+class MAESelfAttention(torch.nn.Module):
 
     def __init__(self, config: TiteConfig, layer_idx: int, enhanced: bool = True, mask_prob: float = 0.0):
-        super().__init__(config, layer_idx)
+        super().__init__()
+
+        if config.hidden_size[layer_idx] % config.num_attention_heads[layer_idx] != 0:
+            raise ValueError(
+                f"The hidden size ({config.hidden_size}) is not a multiple of the "
+                f"number of attention heads ({config.num_attention_heads})"
+            )
+
+        hidden_size = config.hidden_size[layer_idx]
+        num_attention_heads = config.num_attention_heads[layer_idx]
+        self.num_attention_heads = num_attention_heads
+        self.attention_head_size = int(hidden_size / num_attention_heads)
+        self.all_head_size = self.num_attention_heads * self.attention_head_size
+
+        self.Wq = torch.nn.Linear(hidden_size, self.all_head_size)
+        self.Wkv = torch.nn.Linear(hidden_size, 2 * self.all_head_size)
+
+        self.dropout_prob = config.dropout_prob
+
         self.enhanced = enhanced
         self.mask_prob = mask_prob
-        self.position_embeddings = torch.nn.Embedding(config.max_position_embeddings, config.hidden_size[0])
 
     def forward(
-        self, hidden_states: torch.Tensor, attention_mask: torch.Tensor, embx: torch.Tensor, mlm_mask: torch.Tensor
+        self,
+        hidden_states: torch.Tensor,
+        attention_mask: torch.Tensor,
+        embx: torch.Tensor,
+        expanded_embx: torch.Tensor | None,
+        mlm_mask: torch.Tensor,
     ) -> torch.Tensor:
         batch_size, seq_len = attention_mask.shape
 
-        extended_hidden_states = torch.nn.functional.pad(hidden_states, (0, 0, 1, 0))
-        extended_hidden_states[:, 0] = embx[:, 0]
+        expanded_hidden_states = torch.cat([embx, hidden_states], dim=1)
 
-        qkv = self.Wqkv(extended_hidden_states)
-        qkv = rearrange(qkv, "b s (t h d) -> t b h s d", t=3, h=self.num_attention_heads, d=self.attention_head_size)
-        query, key, value = qkv.unbind(dim=0)
+        kv = self.Wkv(expanded_hidden_states)
+        kv = rearrange(kv, "b s (t h d) -> t b h s d", t=2, h=self.num_attention_heads, d=self.attention_head_size)
+        key, value = kv.unbind(dim=0)
 
         if self.enhanced:
             # use embx as query + positional embeddings
             # embx at position x can attend to random tokens in the sequence but not to the original token at position x
-            embx_query = repeat(embx, "b 1 d -> b s d", s=seq_len) + (
-                self.position_embeddings(torch.arange(seq_len, device=hidden_states.device))
-            )
+            assert expanded_embx is not None
+            query = self.Wq(expanded_embx)
             query = rearrange(
-                embx_query,
+                expanded_embx,
                 "b s (h d) -> b h s d",
                 h=self.num_attention_heads,
                 d=self.attention_head_size,
@@ -94,7 +114,9 @@ class MAESelfAttention(TiteSelfAttention):
             )
         else:
             # aggressively masked input can attend to embx and has to reconstruct original tokens
-            query = query[:, :, 1:]
+            query = rearrange(
+                self.Wq(hidden_states), "b s (h d) -> b h s d", h=self.num_attention_heads, d=self.attention_head_size
+            )
             extended_attention_mask = torch.nn.functional.pad(attention_mask, (1, 0), value=True)
             attn_weight = repeat(
                 torch.where(
@@ -126,11 +148,20 @@ class MAESelfAttention(TiteSelfAttention):
 
 class MAESelfOutput(TiteSelfOutput):
 
-    def forward(self, hidden_states: torch.Tensor, input_tensor: torch.Tensor) -> torch.Tensor:
+    def __init__(self, config: TiteConfig, layer_idx: int, enhanced: bool = True):
+        super().__init__(config, layer_idx)
+        self.enhanced = enhanced
+
+    def forward(
+        self, hidden_states: torch.Tensor, input_tensor: torch.Tensor, expanded_embx: torch.Tensor | None
+    ) -> torch.Tensor:
         hidden_states = self.dense(hidden_states)
         hidden_states = self.dropout(hidden_states)
-        # NOTE do not do skip connection because enhanced decoding applies it's own per token masking
-        # hidden_states = hidden_states + input_tensor
+        if self.enhanced:
+            assert expanded_embx is not None
+            hidden_states = hidden_states + expanded_embx
+        else:
+            hidden_states = hidden_states + input_tensor
         hidden_states = self.LayerNorm(hidden_states)
         return hidden_states
 
@@ -139,13 +170,18 @@ class MAEAttention(torch.nn.Module):
     def __init__(self, config: TiteConfig, layer_idx: int, enhanced: bool = True, mask_prob: float = 0.0):
         super().__init__()
         self.self = MAESelfAttention(config, layer_idx, enhanced, mask_prob)
-        self.output = MAESelfOutput(config, layer_idx)
+        self.output = MAESelfOutput(config, layer_idx, enhanced)
 
     def forward(
-        self, hidden_states: torch.Tensor, attention_mask: torch.Tensor, embx: torch.Tensor, mlm_mask: torch.Tensor
+        self,
+        hidden_states: torch.Tensor,
+        attention_mask: torch.Tensor,
+        embx: torch.Tensor,
+        expanded_embx: torch.Tensor | None,
+        mlm_mask: torch.Tensor,
     ) -> torch.Tensor:
-        self_outputs = self.self(hidden_states, attention_mask, embx, mlm_mask)
-        attn_output = self.output(self_outputs, hidden_states)
+        self_outputs = self.self(hidden_states, attention_mask, embx, expanded_embx, mlm_mask)
+        attn_output = self.output(self_outputs, hidden_states, expanded_embx)
         return attn_output
 
 
@@ -159,6 +195,7 @@ class MAEDecoder(PreTrainedModel):
         self.mlm_decoder = MLMDecoder(config.vocab_size, config.hidden_size[0], config.hidden_act)
         self.decoder = self.mlm_decoder.decoder
         self.bias = torch.nn.Parameter(torch.zeros(config.vocab_size))
+        self.enhanced = enhanced
 
         self.post_init()
 
@@ -173,8 +210,6 @@ class MAEDecoder(PreTrainedModel):
 
     def _tie_weights(self):
         self.mlm_decoder.decoder.bias = self.bias
-        assert self.embeddings.position_embeddings is not None
-        self.attention.self.position_embeddings.weight = self.embeddings.position_embeddings.weight
 
     def _init_weights(self, module):
         """Initialize the weights"""
@@ -194,14 +229,36 @@ class MAEDecoder(PreTrainedModel):
             module.weight.data.fill_(1.0)
 
     def forward(
-        self, embx: Tensor, input_ids: Tensor, attention_mask: Tensor, mlm_mask: Tensor, *args, **kwargs
+        self,
+        embx: Tensor,
+        input_ids: Tensor,
+        attention_mask: Tensor,
+        mlm_mask: Tensor,
+        special_tokens_mask: Tensor,
+        *args,
+        **kwargs,
     ) -> Tensor:
         attention_mask = attention_mask.bool()
+        # if special_tokens_mask.any():
+        #     assert special_tokens_mask.sum(-1).eq(2).all()
+        #     input_ids = input_ids[~special_tokens_mask].view(input_ids.shape[0], -1)
+        #     attention_mask = attention_mask[~special_tokens_mask].view(attention_mask.shape[0], -1)
+        #     mlm_mask = mlm_mask[~special_tokens_mask].view(mlm_mask.shape[0], -1)
         hidden_states = self.embeddings(input_ids, attention_mask)
-        attn_output = self.attention(hidden_states, attention_mask, embx, mlm_mask)
+        expanded_embx = None
+        if self.enhanced:
+            assert self.embeddings.position_embeddings is not None
+            seq_len = input_ids.shape[1]
+            expanded_embx = embx + (
+                self.embeddings.position_embeddings(torch.arange(seq_len, device=hidden_states.device))
+            )
+        attn_output = self.attention(hidden_states, attention_mask, embx, expanded_embx, mlm_mask)
         intermediate_output = self.intermediate(attn_output)
         hidden_states = self.output(intermediate_output, attn_output)
         logits = self.mlm_decoder(hidden_states)
+        # if special_tokens_mask.any():
+        #     assert special_tokens_mask.sum(-1).eq(2).all()
+        #     logits = torch.nn.functional.pad(logits, (0, 0, 1, 1), value=0.0)
         return logits
 
 
