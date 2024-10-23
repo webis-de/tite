@@ -11,7 +11,6 @@ from torch import Tensor
 from torch.nn import Module
 from transformers import PreTrainedTokenizerBase
 
-from .bert import BertModel
 from .datasets import GLUEDataModule, IRDatasetsDataModule
 from .glue_module import GlueModule
 from .jepa import JEPA, LossFn
@@ -47,7 +46,7 @@ class TiteModule(LightningModule):
     ) -> None:
         super().__init__()
         # ties weights for BERT models -- only works for teacher MLM and student BERT
-        if len(predictors) == 1 and isinstance(student, BertModel) and isinstance(predictors[0], MLMDecoder):
+        if len(predictors) == 1 and isinstance(predictors[0], (MLMDecoder, MAEDecoder)):
             student.tie_decoder_weights(predictors[0].decoder)
             if isinstance(predictors[0], MAEDecoder):
                 predictors[0].embeddings.word_embeddings = student.get_input_embeddings()

@@ -1,3 +1,5 @@
+from typing import Literal
+
 from torch import Tensor
 from torch.nn import Module
 from transformers import BertConfig as HFBertConfig
@@ -20,7 +22,9 @@ class BertConfig(TiteConfig):
         layer_norm_eps: float = 1e-12,
         pad_token_id: int = 0,
         hidden_act: str = "gelu_pytorch_tanh",
+        positional_embedding_type: Literal["absolute", "ALiBi"] = "ALiBi",
         pooling: bool = False,
+        unpadding: bool = False,
         **kwargs
     ):
         super().__init__(
@@ -37,6 +41,8 @@ class BertConfig(TiteConfig):
             layer_norm_eps,
             pad_token_id,
             hidden_act,
+            positional_embedding_type,
+            unpadding,
             **kwargs
         )
         self.pooling = pooling
@@ -45,15 +51,6 @@ class BertConfig(TiteConfig):
 class BertModel(TiteModel):
     def __init__(self, config: BertConfig):
         super().__init__(config)
-
-    def get_input_embeddings(self):
-        return self.embeddings.word_embeddings
-
-    def set_input_embeddings(self, value):
-        self.embeddings.word_embeddings = value
-
-    def tie_decoder_weights(self, output_embeddings: Module):
-        self._tie_or_clone_weights(output_embeddings, self.get_input_embeddings())
 
     def forward(self, input_ids: Tensor, attention_mask: Tensor | None = None) -> Tensor:
         hidden_states = super().forward(input_ids, attention_mask)

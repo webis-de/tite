@@ -46,4 +46,4 @@ data:
             mask_id: 103
             cls_id: 101
             sep_id: 102
-            mask_prob: 0.7
+            mask_prob: 0.0

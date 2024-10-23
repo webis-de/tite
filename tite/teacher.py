@@ -36,6 +36,15 @@ class MLMTeacher(Module):
         return targets
 
 
+class MAETeacher(MLMTeacher):
+
+    def forward(self, original_input_ids: Tensor, mlm_mask: Tensor, special_tokens_mask: Tensor, **kwargs) -> Tensor:
+        if not mlm_mask.any():
+            # enhanced decoding, predict every token
+            return torch.where(original_input_ids.eq(self._pad_id) | special_tokens_mask, -100, original_input_ids)
+        return super().forward(original_input_ids, mlm_mask, **kwargs)
+
+
 class CopyStudent(Module):
     def __init__(self) -> None:
         super().__init__()

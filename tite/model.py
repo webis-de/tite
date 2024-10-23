@@ -110,6 +110,15 @@ class TiteModel(PreTrainedModel):
 
         self.post_init()
 
+    def get_input_embeddings(self):
+        return self.embeddings.word_embeddings
+
+    def set_input_embeddings(self, value):
+        self.embeddings.word_embeddings = value
+
+    def tie_decoder_weights(self, output_embeddings: torch.nn.Module):
+        self._tie_or_clone_weights(output_embeddings, self.get_input_embeddings())
+
     def _init_weights(self, module):
         """Initialize the weights"""
         # https://github.com/huggingface/transformers/blob/3d7c2f9dea45338b7ebcd459b452e2fad7abfa1f/src/transformers/models/bert/modeling_bert.py#L835
@@ -296,8 +305,8 @@ class TiteSelfAttention(torch.nn.Module):
         new_seq_len = new_attention_mask.shape[1]
 
         attn_weight = repeat(
-            torch.where(einsum(attention_mask, new_attention_mask, "b s, b p -> b p s"), 0, -10000.0),
-            "b p s -> b h p s",
+            torch.where(einsum(new_attention_mask, attention_mask, "b s1, b s2 -> b s1 s2"), 0, -10000.0),
+            "b s1 s2 -> b h s1 s2",
             h=self.num_attention_heads,
         )
         if self.alibi is not None:
