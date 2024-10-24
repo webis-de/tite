@@ -14,6 +14,7 @@ from transformers import PreTrainedTokenizerBase
 from .datasets import GLUEDataModule, IRDatasetsDataModule
 from .glue_module import GlueModule
 from .jepa import JEPA, LossFn
+from .model import TiteModel
 from .msmarco_module import MSMARCOModule
 from .predictor import MAEDecoder, MLMDecoder
 
@@ -46,7 +47,11 @@ class TiteModule(LightningModule):
     ) -> None:
         super().__init__()
         # ties weights for BERT models -- only works for teacher MLM and student BERT
-        if len(predictors) == 1 and isinstance(predictors[0], (MLMDecoder, MAEDecoder)):
+        if (
+            len(predictors) == 1
+            and isinstance(predictors[0], (MLMDecoder, MAEDecoder))
+            and isinstance(student, TiteModel)
+        ):
             student.tie_decoder_weights(predictors[0].decoder)
             if isinstance(predictors[0], MAEDecoder):
                 predictors[0].embeddings.word_embeddings = student.get_input_embeddings()
@@ -85,7 +90,10 @@ class TiteModule(LightningModule):
                     add_special_tokens=add_special_tokens,
                     streaming=False,
                 )
-                glue_module = GlueModule(deepcopy(self._student).train(), self._tokenizer, glue.hparams.name)
+                copy_student = deepcopy(self._student).train()
+                if hasattr(copy_student, "pooling"):
+                    copy_student.pooling = True
+                glue_module = GlueModule(copy_student, self._tokenizer, glue.hparams.name)
                 trainer = Trainer(
                     logger=False,
                     precision=(self.trainer.precision if self.trainer is not None else "bf16-mixed"),
@@ -97,18 +105,23 @@ class TiteModule(LightningModule):
                 trainer.fit(glue_module, glue)
                 metrics = trainer.logged_metrics
                 for name, value in metrics.items():
+                    if "step" in name:
+                        continue
                     self.log(f"{glue.hparams.name}/{name}", value, on_step=False, on_epoch=True)
         if self._validate_on_msmarco:
             msmarco = IRDatasetsDataModule(
-                "msmarco-passage",
                 tokenizer=self._tokenizer,
                 add_special_tokens=add_special_tokens,
-                trainset=("train/triples-small", "triples"),
-                valset=("trec-dl-2019/judged", "scoreddocs"),
-                batch_size=32,
+                trainset=("msmarco-passage/train/triples-small", "triples"),
+                valset=("msmarco-passage/trec-dl-2019/judged", "scoreddocs"),
+                train_batch_size=32,
+                inference_batch_size=256,
             )
-            msmarco_module = MSMARCOModule(deepcopy(self._student).train(), self._tokenizer)
-            max_steps = 5_000
+            copy_student = deepcopy(self._student).train()
+            if hasattr(copy_student, "pooling"):
+                copy_student.pooling = True
+            msmarco_module = MSMARCOModule(copy_student, self._tokenizer)
+            max_steps = 1_000
             trainer = Trainer(
                 logger=False,
                 precision=(self.trainer.precision if self.trainer is not None else "bf16-mixed"),
@@ -121,6 +134,8 @@ class TiteModule(LightningModule):
             trainer.fit(msmarco_module, msmarco)
             metrics = trainer.logged_metrics
             for name, value in metrics.items():
+                if "step" in name:
+                    continue
                 self.log(f"trec-dl-2019/{name}", value, on_step=False, on_epoch=True)
 
     def on_before_optimizer_step(self, optimizer):
