@@ -98,15 +98,14 @@ model:
         config:
           class_path: tite.bert.BertConfig
           init_args:
-            num_hidden_layers: 1
+            num_hidden_layers: 3
             pooling: false
             unpadding: false
             positional_embedding_type: absolute
-        enhanced: false
     losses:
     - class_path: tite.loss.mlm.MLMCrossEntropy
       init_args:
         vocab_size: 30522
     log_additional_metrics: false
     validate_on_glue: true
-    validate_on_msmarco: false
+    validate_on_msmarco: true

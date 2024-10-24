@@ -18,16 +18,16 @@ model:
         mask_token: '[MASK]'
       dict_kwargs:
         model_max_length: 512
-    teacher:
-      class_path: tite.teacher.MLMTeacher
+    teachers:
+    - class_path: tite.teacher.MLMTeacher
       init_args:
         padid: 0
-    predictor:
-      class_path: tite.predictor.HFMLMDecoder
+    predictors:
+    - class_path: tite.predictor.HFMLMDecoder
       init_args:
         model_name_or_path: bert-base-uncased
-    loss:
-      class_path: tite.loss.mlm.MLMCrossEntropy
+    losses:
+    - class_path: tite.loss.mlm.MLMCrossEntropy
       init_args:
         vocab_size: 30522
     validate_on_glue: true

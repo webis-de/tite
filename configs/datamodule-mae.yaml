@@ -33,17 +33,17 @@ data:
         max_length: 256
         student_string_transformations: null
         teacher_string_transformations: null
-        student_token_transformations:
-        - class_path: tite.transformations.MaskTokens
-          init_args:
-            mask_id: 103
-            cls_id: 101
-            sep_id: 102
-            mask_prob: 0.3
+        student_token_transformations: null
+        # - class_path: tite.transformations.MaskTokens
+        #   init_args:
+        #     mask_id: 103
+        #     cls_id: 101
+        #     sep_id: 102
+        #     mask_prob: 0.3
         teacher_token_transformations: 
         - class_path: tite.transformations.MaskTokens
           init_args:
             mask_id: 103
             cls_id: 101
             sep_id: 102
-            mask_prob: 0.7
+            mask_prob: 0.5
