@@ -61,7 +61,7 @@ class GlueModule(LightningModule):
         # logits = self.classification_head(output.mean(1))
         logits = self.classification_head(output[:, 0])
         loss = self._loss_function(logits, batch["label"])
-        self.log("train_loss", loss, prog_bar=True)
+        self.log("train_loss", loss, prog_bar=True, on_epoch=True)
         return loss
 
     def validation_step(self, batch, *args, **kwargs) -> None:

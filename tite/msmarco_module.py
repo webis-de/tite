@@ -1,5 +1,7 @@
+from collections import defaultdict
 from typing import Any
 
+import ir_datasets
 import ir_measures
 import pandas as pd
 import torch
@@ -16,33 +18,39 @@ class MSMARCOModule(LightningModule):
         self._model = model
         self._tokenizer = tokenizer
         self._validation_step_outputs = []
+        self.ndcgs = []
 
     def training_step(self, batch) -> Tensor:
-        query_ids, query_encoding, pos_doc_ids, pos_doc_encoding, neg_doc_ids, neg_doc_encoding = batch
-        query_emb = self._model(**query_encoding)
-        pos_doc_emb = self._model(**pos_doc_encoding)
-        neg_doc_emb = self._model(**neg_doc_encoding)
+        query_emb = self._model(**batch["encoded_query"])
+        pos_doc_emb = self._model(**batch["encoded_pos_doc"])
+        neg_doc_emb = self._model(**batch["encoded_neg_doc"])
         pos_sim = (query_emb @ pos_doc_emb.transpose(-1, -2)).view(-1)
         neg_sim = (query_emb @ neg_doc_emb.transpose(-1, -2)).view(-1)
+        # pos_sim = torch.nn.functional.cosine_similarity(query_emb.squeeze(1), pos_doc_emb.squeeze(1))
+        # neg_sim = torch.nn.functional.cosine_similarity(query_emb.squeeze(1), neg_doc_emb.squeeze(1))
         margin = pos_sim - neg_sim
         loss = torch.nn.functional.binary_cross_entropy_with_logits(margin, torch.ones_like(margin))
-        self.log("train_loss", loss, prog_bar=True)
+        self.log("train_loss", loss, prog_bar=True, on_epoch=True)
         return loss
 
     def validation_step(self, batch, *args, **kwargs) -> None:
-        query_ids, query_encoding, doc_ids, doc_encoding, _, rel = batch
-        query_emb = self._model(**query_encoding)
-        doc_emb = self._model(**doc_encoding)
+        query_emb = self._model(**batch["encoded_query"])
+        doc_emb = self._model(**batch["encoded_doc"])
         sim = (query_emb @ doc_emb.transpose(-1, -2)).view(-1)
-        self._validation_step_outputs.extend(zip(query_ids, doc_ids, sim.tolist(), rel))
+        self._validation_step_outputs.extend(zip(batch["query_id"], batch["doc_id"], sim.tolist(), batch["dataset_id"]))
         # logits = self.classification_head(output.mean(1))
 
     def on_validation_epoch_end(self) -> None:
-        qid, did, sim, rel = zip(*self._validation_step_outputs)
-        qrels = pd.DataFrame({"query_id": qid, "doc_id": did, "relevance": rel})
-        run = pd.DataFrame({"query_id": qid, "doc_id": did, "score": sim})
+        df = pd.DataFrame(self._validation_step_outputs, columns=["query_id", "doc_id", "score", "dataset_id"])
+        self._validation_step_outputs.clear()
+        assert df["dataset_id"].drop_duplicates().count() == 1
+        dataset_id = df["dataset_id"].iloc[0]
+        run = df.drop(columns=["dataset_id"])
+        dataset = ir_datasets.load(dataset_id)
+        qrels = pd.DataFrame(dataset.qrels_iter())
         measure = ir_measures.parse_measure("nDCG@10")
         value = measure.calc_aggregate(qrels, run)
+        self.ndcgs.append(value)
         self.log("nDCG@10", value)
 
     def test_step(self, batch: dict[str, Any], *args, **kwargs) -> None:

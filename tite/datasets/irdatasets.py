@@ -1,10 +1,10 @@
-from typing import Any, Callable, Iterable, Literal
+from collections import defaultdict
+from typing import Literal
 
 import ir_datasets
 import pandas as pd
 import torch
 from lightning import LightningDataModule
-from more_itertools import batched as mit_batched
 from torch.utils.data import DataLoader, IterableDataset
 from transformers import PreTrainedTokenizerBase
 
@@ -14,237 +14,141 @@ SplitType = Literal["qrels", "triples", "scoreddocs"]
 SplitDescriptor = tuple[str, SplitType]
 
 
-def unbatch(batches: Iterable[Iterable]) -> Iterable:
-    for b in batches:
-        yield from b
+class Collator:
 
-
-class TokenizeMeSenpai:
-    def __init__(self, text: str) -> None:
-        self.text = text
-
-    def __str__(self) -> str:
-        return self.text
-
-
-class ApplyTokenizerTransform:
-    def __init__(self, tokenizer: PreTrainedTokenizerBase, **kwargs) -> None:
+    def __init__(
+        self,
+        tokenizer: PreTrainedTokenizerBase,
+        max_length: int | None = None,
+        add_special_tokens: bool = True,
+    ) -> None:
         self._tokenizer = tokenizer
-        self._kwargs = kwargs
+        self._max_length = max_length
+        self._add_special_tokens = add_special_tokens
 
-    def __apply_tokenizer(self, batch: list[str]) -> list[dict]:
-        tokenized = self._tokenizer(batch, **self._kwargs)
-        input_ids = tokenized["input_ids"]
-        attention_mask = tokenized["attention_mask"]
-        return [{"input_ids": i, "attention_mask": a} for i, a in zip(input_ids, attention_mask)]
+    def aggregate(self, batch: list[dict]) -> dict:
+        agg = defaultdict(list)
+        for x in batch:
+            for key, value in x.items():
+                agg[key].append(value)
+        return dict(agg)
 
-    def __apply(self, val: Iterable[Any]) -> Iterable[Any]:
-        val = list(val)
-        if isinstance(val[0], TokenizeMeSenpai):
-            return self.__apply_tokenizer([str(v) for v in val])
-        return val
-
-    def __call__(self, batch: list[tuple[Any, ...]]) -> Iterable[tuple[dict, dict, dict]]:
-        tuples = zip(*batch)
-        return list(zip(*map(self.__apply, tuples)))
-
-
-class CollateTokenizerOutput:
-
-    def __init__(self, tokenizer: PreTrainedTokenizerBase) -> None:
-        self._tokenizer = tokenizer
-
-    def __collate_tokens(self, batch: list[dict]) -> dict:
-        agg = {"input_ids": [], "attention_mask": []}
-        for item in batch:
-            for key, value in item.items():
-                if key in agg:
-                    agg[key].append(value)
-        pad_ids = {"input_ids": self._tokenizer.pad_token_id, "attention_mask": 0}
-        out = {}
-        for key, values in agg.items():
-            if not values:
+    def tokenize(self, agg: dict) -> dict:
+        for key, value in list(agg.items()):
+            if key.endswith("id"):
                 continue
-            pad_id = pad_ids[key]
-            if pad_id is None:
-                out[key] = torch.tensor(values)
-            else:
-                out[key] = torch.nn.utils.rnn.pad_sequence(
-                    [torch.tensor(value) for value in values], batch_first=True, padding_value=pad_id
-                )
+            agg[f"encoded_{key}"] = self._tokenizer(
+                value,
+                truncation=True,
+                max_length=self._max_length,
+                return_token_type_ids=False,
+                add_special_tokens=self._add_special_tokens,
+                padding=True,
+                return_tensors="pt",
+            )
+        return agg
+
+    def __call__(self, batch: list[dict]) -> dict:
+        agg = self.aggregate(batch)
+        out = self.tokenize(agg)
         return out
 
-    def __collate(self, vals: Iterable[Any]) -> Any:
-        vals = list(vals)
-        if isinstance(vals[0], dict) and "input_ids" in vals[0] and "attention_mask" in vals[0]:
-            return self.__collate_tokens(vals)
-        return vals
 
-    def __call__(self, batch: list[tuple[Any, ...]]) -> tuple[Any, ...]:
-        tuples = zip(*batch)
-        return tuple(map(self.__collate, tuples))
+class IRDataset:
+
+    def __init__(self, dataset_id: str) -> None:
+        self._dataset = ir_datasets.load(dataset_id)
+        self._doc_store = self._dataset.docs_store()
+        self._queries = pd.DataFrame(self._dataset.queries_iter()).set_index("query_id")["text"]
 
 
-class IRDataset(IterableDataset):
-    def __init__(self, datasetname: str, type: SplitType) -> None:
-        super().__init__()
-        self._transforms = []
-        self._dataset = ir_datasets.load(datasetname)
-        if type == "triples":
-            self._iter = self._dataset.docpairs_iter()
-            self.map(self.__fetch_triple_text, batched=True)
-            self._count = self._dataset.docpairs_count()
-        elif type == "qrels":
-            self._iter = self._dataset.qrels_iter()
-            self.map(self.__fetch_qrel_text, batched=True)
-            self._count = self._dataset.qrels_count()
-        elif type == "scoreddocs":
-            self._iter = self._dataset.scoreddocs_iter()
-            self.map(self.__fetch_scoreddocs_text, batched=True)
-            self._count = self._dataset.scoreddocs_count
-        else:
-            raise ValueError(f"Invalid split type: {type}")
-        self._docstore = self._dataset.docs_store()
-        self._qrelstore = pd.DataFrame(self._dataset.qrels_iter()).set_index(["query_id", "doc_id"])
-        self._qstore = pd.DataFrame(self._dataset.queries_iter()).set_index("query_id")
+class TripleDataset(IRDataset, IterableDataset):
 
-    def __get_many_queries(self, query_ids: Iterable[str]) -> Any:
-        return self._qstore.loc[list(query_ids)].itertuples()
-
-    def __fetch_triple_text(self, triple: list[tuple[str, str, str]]) -> list[tuple[str, str, str, str, str, str]]:
-        qids, posdids, negdids = zip(*triple)
-        qs = (q.text for q in self.__get_many_queries(qids))
-        posdocs = (d.text for _, d in self._docstore.get_many(posdids).items())
-        negdocs = (d.text for _, d in self._docstore.get_many(negdids).items())
-        return [
-            (q, TokenizeMeSenpai(qt), p, TokenizeMeSenpai(pt), n, TokenizeMeSenpai(nt))
-            for q, qt, p, pt, n, nt in zip(qids, qs, posdids, posdocs, negdids, negdocs)
-        ]
-
-    def __fetch_qrel_text(self, triple: list[tuple[str, str, int, str]]) -> list[tuple[str, str, str, str, int, str]]:
-        qids, dids, rels, unused = zip(*triple)
-        qs = (q.text for q in self.__get_many_queries(qids))
-        ds = (d.text for _, d in self._docstore.get_many(dids).items())
-        return [
-            (q, TokenizeMeSenpai(qt), p, TokenizeMeSenpai(pt), r, u)
-            for q, qt, p, pt, r, u in zip(qids, qs, dids, ds, rels, unused)
-        ]
-
-    def __fetch_scoreddocs_text(
-        self, triple: list[tuple[str, str, float]]
-    ) -> list[tuple[str, str, str, str, float, int]]:
-        qids, dids, scores = zip(*triple)
-        qs = (q.text for q in self.__get_many_queries(qids))
-        ds = (d.text for _, d in self._docstore.get_many(dids).items())
-        index = pd.MultiIndex.from_tuples(list(zip(qids, dids)), names=["query_id", "doc_id"])
-        rel = self._qrelstore.reindex(index).fillna(0)["relevance"].values.astype(int)
-        return [
-            (q, TokenizeMeSenpai(qt), p, TokenizeMeSenpai(pt), s, r)
-            for q, qt, p, pt, s, r in zip(qids, qs, dids, ds, scores, rel)
-        ]
-
-    def map(self, fn: Callable, batched: bool = False, batchsize: int = 1000) -> "IRDataset":
-        if not batched:
-            self._iter = map(fn, self._iter)
-        else:
-            self._iter = unbatch(map(fn, mit_batched(self._iter, batchsize)))
-        return self
-
-    def shuffle(self, buffer_size: int, seed: int, **kwargs) -> "IRDataset":
-        # raise NotImplementedError
-        return self
-
-    def __len__(self):
-        return self._count
+    def __init__(self, dataset_id: str) -> None:
+        super().__init__(dataset_id)
 
     def __iter__(self):
-        return self._iter
+        for docpair in self._dataset.docpairs_iter():
+            query = self._queries.loc[docpair.query_id]
+            pos_doc = self._doc_store.get(docpair.doc_id_a).default_text()
+            neg_doc = self._doc_store.get(docpair.doc_id_b).default_text()
+            yield {
+                "query_id": docpair.query_id,
+                "pos_doc_id": docpair.doc_id_a,
+                "neg_doc_id": docpair.doc_id_b,
+                "query": query,
+                "pos_doc": pos_doc,
+                "neg_doc": neg_doc,
+            }
+
+
+class ScoredDocsDataset(IRDataset, IterableDataset):
+    def __init__(self, dataset_id: str) -> None:
+        super().__init__(dataset_id)
+
+    def __iter__(self):
+        for scoreddoc in iter(self._dataset.scoreddocs_iter()):
+            query = self._queries.loc[scoreddoc.query_id]
+            doc = self._doc_store.get(scoreddoc.doc_id).default_text()
+            yield {
+                "query_id": scoreddoc.query_id,
+                "doc_id": scoreddoc.doc_id,
+                "query": query,
+                "doc": doc,
+                "dataset_id": self._dataset.dataset_id(),
+            }
+
+
+SPLIT_TYPE_TO_DATASET = {
+    "triples": TripleDataset,
+    "scoreddocs": ScoredDocsDataset,
+}
 
 
 class IRDatasetsDataModule(LightningDataModule):
     def __init__(
         self,
-        path: str,
         tokenizer: PreTrainedTokenizerBase,
+        add_special_tokens: bool = True,
         trainset: SplitDescriptor | None = None,
         valset: SplitDescriptor | None = None,
         testset: SplitDescriptor | None = None,
-        data_dir: str | None = None,
-        data_files: Callable[[str], str] | None = None,
-        batch_size: int | None = None,
+        train_batch_size: int = 32,
+        inference_batch_size: int = 256,
         seed: int | None = None,
-        num_workers: int = 0,
-        streaming: bool = True,
-        max_length: int | None = None,
-        add_special_tokens: bool = True,
-        collate_fn: Callable[[dict], dict] | None = None,
-        transform: Callable | None = None,
     ) -> None:
         super().__init__()
-        self._data_dir = data_dir
-        self._data_files = data_files
-        self._streaming = streaming
-        self._tokenizer = tokenizer
         seed = seed_or_none(seed)
-        self.save_hyperparameters(
-            {
-                "path": path,
-                "trainset": trainset,
-                "valset": valset,
-                "testset": testset,
-                "batch_size": batch_size,
-                "seed": seed,
-                "num_workers": 1,
-            }
-        )
-        self._dataloaders: dict[str, DataLoader] = dict()
-        self.collate_fn = collate_fn if collate_fn is not None else CollateTokenizerOutput(self._tokenizer)
-        self._transform = (
-            transform
-            if transform is not None
-            else ApplyTokenizerTransform(self._tokenizer, max_length=max_length, add_special_tokens=add_special_tokens)
-        )
-
-    def setup(self, stage: Literal["fit", "validate", "test", "predict"]) -> None:
-        pass
-
-    def __dataloader(self, split: SplitDescriptor) -> DataLoader:
-        if (x := self._dataloaders.get(split, None)) is not None:
-            return x
-        path = self.hparams["path"]
-        splitname, splittype = split
-        dataset = (
-            IRDataset(f"{path}/{splitname}", splittype)
-            .map(
-                self._transform,
-                batched=True,
-            )
-            .shuffle(buffer_size=1_024, seed=self.hparams["seed"])
-        )
-        loader = DataLoader(
-            dataset,
-            batch_size=self.hparams["batch_size"],
-            num_workers=self.hparams["num_workers"],
-            collate_fn=self.collate_fn,
-            prefetch_factor=16 if self.hparams["num_workers"] > 0 else None,
-        )
-        self._dataloaders[split] = loader
-        return loader
-
-    def teardown(self, stage: Literal["fit", "validate", "test", "predict"]) -> None:
-        pass
+        self.trainset = trainset
+        self.valset = valset
+        self.testset = testset
+        self.train_batch_size = train_batch_size
+        self.inference_batch_size = inference_batch_size
+        self.collator = Collator(tokenizer, max_length=256, add_special_tokens=add_special_tokens)
 
     def train_dataloader(self) -> DataLoader:
-        return self.__dataloader(self.hparams["trainset"])
+        if self.trainset is None:
+            raise ValueError("No training set provided")
+        return DataLoader(
+            SPLIT_TYPE_TO_DATASET[self.trainset[1]](self.trainset[0]),
+            batch_size=self.train_batch_size,
+            collate_fn=self.collator,
+        )
 
     def val_dataloader(self) -> DataLoader | list[DataLoader]:
-        return self.__dataloader(self.hparams["valset"])
+        if self.valset is None:
+            raise ValueError("No validation set provided")
+        return DataLoader(
+            SPLIT_TYPE_TO_DATASET[self.valset[1]](self.valset[0]),
+            batch_size=self.inference_batch_size,
+            collate_fn=self.collator,
+        )
 
     def test_dataloader(self) -> DataLoader:
-        return self.__dataloader(self.hparams["testset"])
-
-    def state_dict(self) -> dict[str, dict[str, Any]]:
-        raise NotImplementedError
-
-    def load_state_dict(self, state_dict: dict[str, dict[str, Any]]) -> None:
-        raise NotImplementedError
+        if self.testset is None:
+            raise ValueError("No test set provided")
+        return DataLoader(
+            SPLIT_TYPE_TO_DATASET[self.testset[1]](self.testset[0]),
+            batch_size=self.inference_batch_size,
+            collate_fn=self.collator,
+        )
