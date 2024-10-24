@@ -2,9 +2,11 @@ import torch
 from einops import einsum, rearrange, repeat
 from torch import Tensor
 from torch.nn import Module
-from transformers import BertConfig, BertForMaskedLM, PreTrainedModel
+from transformers import BertConfig as OriginalBertConfig
+from transformers import BertForMaskedLM, PreTrainedModel
 from transformers.activations import ACT2FN
 
+from .bert import BertConfig, BertModel
 from .model import (
     TiteConfig,
     TiteEmbeddings,
@@ -40,7 +42,7 @@ class MLMDecoder(Module):
 class HFMLMDecoder(MLMDecoder):
 
     def __init__(self, model_name_or_path: str):
-        config = BertConfig.from_pretrained(model_name_or_path)
+        config = OriginalBertConfig.from_pretrained(model_name_or_path)
         super().__init__(config.vocab_size, config.hidden_size, config.hidden_act)
         model = BertForMaskedLM.from_pretrained(model_name_or_path)
         state_dict = {}
@@ -185,80 +187,22 @@ class MAEAttention(torch.nn.Module):
         return attn_output
 
 
-class MAEDecoder(PreTrainedModel):
-    def __init__(self, config: TiteConfig, enhanced: bool = True, mask_prob: float = 0.0):
+class MAEDecoder(BertModel):
+    def __init__(self, config: BertConfig):
         super().__init__(config)
-        self.embeddings = TiteEmbeddings(config)
-        self.attention = MAEAttention(config, 0, enhanced, mask_prob)
-        self.intermediate = TiteIntermediate(config, 0)
-        self.output = TiteOutput(config, 0)
         self.mlm_decoder = MLMDecoder(config.vocab_size, config.hidden_size[0], config.hidden_act)
         self.decoder = self.mlm_decoder.decoder
-        self.bias = torch.nn.Parameter(torch.zeros(config.vocab_size))
-        self.enhanced = enhanced
 
         self.post_init()
 
-    def get_input_embeddings(self):
-        return self.embeddings.word_embeddings
-
-    def set_input_embeddings(self, value):
-        self.embeddings.word_embeddings = value
-
-    def tie_decoder_weights(self, output_embeddings: Module):
-        self._tie_or_clone_weights(output_embeddings, self.get_input_embeddings())
-
-    def _tie_weights(self):
-        self.mlm_decoder.decoder.bias = self.bias
-
-    def _init_weights(self, module):
-        """Initialize the weights"""
-        # https://github.com/huggingface/transformers/blob/3d7c2f9dea45338b7ebcd459b452e2fad7abfa1f/src/transformers/models/bert/modeling_bert.py#L835
-        if isinstance(module, torch.nn.Linear):
-            # Slightly different from the TF version which uses truncated_normal for initialization
-            # cf https://github.com/pytorch/pytorch/pull/5617
-            module.weight.data.normal_(mean=0.0, std=self.config.initializer_range)
-            if module.bias is not None:
-                module.bias.data.zero_()
-        elif isinstance(module, torch.nn.Embedding):
-            module.weight.data.normal_(mean=0.0, std=self.config.initializer_range)
-            if module.padding_idx is not None:
-                module.weight.data[module.padding_idx].zero_()
-        elif isinstance(module, torch.nn.LayerNorm):
-            module.bias.data.zero_()
-            module.weight.data.fill_(1.0)
-
-    def forward(
-        self,
-        embx: Tensor,
-        input_ids: Tensor,
-        attention_mask: Tensor,
-        mlm_mask: Tensor,
-        special_tokens_mask: Tensor,
-        *args,
-        **kwargs,
-    ) -> Tensor:
+    def forward(self, embx: Tensor, input_ids: Tensor, attention_mask: Tensor, *args, **kwargs) -> Tensor:
         attention_mask = attention_mask.bool()
-        # if special_tokens_mask.any():
-        #     assert special_tokens_mask.sum(-1).eq(2).all()
-        #     input_ids = input_ids[~special_tokens_mask].view(input_ids.shape[0], -1)
-        #     attention_mask = attention_mask[~special_tokens_mask].view(attention_mask.shape[0], -1)
-        #     mlm_mask = mlm_mask[~special_tokens_mask].view(mlm_mask.shape[0], -1)
         hidden_states = self.embeddings(input_ids, attention_mask)
-        expanded_embx = None
-        if self.enhanced:
-            assert self.embeddings.position_embeddings is not None
-            seq_len = input_ids.shape[1]
-            expanded_embx = embx + (
-                self.embeddings.position_embeddings(torch.arange(seq_len, device=hidden_states.device))
-            )
-        attn_output = self.attention(hidden_states, attention_mask, embx, expanded_embx, mlm_mask)
-        intermediate_output = self.intermediate(attn_output)
-        hidden_states = self.output(intermediate_output, attn_output)
+        hidden_states = torch.cat([embx, hidden_states], dim=1)
+        attention_mask = torch.nn.functional.pad(attention_mask, (1, 0), value=True)
+        hidden_states = self.encoder(hidden_states, attention_mask)
+        hidden_states = hidden_states[:, 1:]
         logits = self.mlm_decoder(hidden_states)
-        # if special_tokens_mask.any():
-        #     assert special_tokens_mask.sum(-1).eq(2).all()
-        #     logits = torch.nn.functional.pad(logits, (0, 0, 1, 1), value=0.0)
         return logits
 
 
