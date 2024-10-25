@@ -143,6 +143,8 @@ class TiteModule(LightningModule):
             return
         norms = grad_norm(self._student, norm_type=2)
         self.log_dict(norms)
+        if norms["grad_2.0_norm_total"] > 100:
+            self._student.zero_grad()
 
     def validation_step(self, batch: dict[str, Any] | None) -> None:
         # Empty validation step to trick pytorch lightning into validating this model though validation is actually done
