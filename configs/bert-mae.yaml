@@ -44,3 +44,4 @@ model:
     log_additional_metrics: false
     validate_on_glue: true
     validate_on_msmarco: true
+    log_gradients: true
