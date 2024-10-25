@@ -405,6 +405,18 @@ class TiteOutput(torch.nn.Module):
         return hidden_states
 
 
+class TiteUpscale(torch.nn.Module):
+    def __init__(self, config: TiteConfig, layer_idx: int):
+        super().__init__()
+        hidden_size = config.hidden_size[layer_idx]
+        old_hidden_size = config.hidden_size[max(0, layer_idx - 1)]
+        self.upscale_layer = torch.nn.Linear(old_hidden_size, hidden_size)
+
+    def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
+        hidden_states = self.upscale_layer(hidden_states)
+        return hidden_states
+
+
 class TiteLayer(torch.nn.Module):
     def __init__(self, config: TiteConfig, layer_idx: int):
         super().__init__()
@@ -414,9 +426,17 @@ class TiteLayer(torch.nn.Module):
         self.intermediate = TiteIntermediate(config, layer_idx)
         self.output = TiteOutput(config, layer_idx)
 
+        hidden_size = config.hidden_size[layer_idx]
+        old_hidden_size = config.hidden_size[max(0, layer_idx - 1)]
+        self.upscale_layer = None
+        if old_hidden_size != hidden_size:
+            self.upscale_layer = TiteUpscale(config, layer_idx)
+
     def forward(
         self, hidden_states: torch.Tensor, attention_mask: torch.BoolTensor
     ) -> Tuple[torch.Tensor, torch.Tensor]:
+        if self.upscale_layer is not None:
+            hidden_states = self.upscale_layer(hidden_states)
         attn_output, attention_mask = self.attention(hidden_states, attention_mask)
         intermediate_output = self.intermediate(attn_output)
         layer_output = self.output(intermediate_output, attn_output)

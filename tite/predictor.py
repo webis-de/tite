@@ -198,10 +198,12 @@ class MAEDecoder(BertModel):
     def forward(self, embx: Tensor, input_ids: Tensor, attention_mask: Tensor, *args, **kwargs) -> Tensor:
         attention_mask = attention_mask.bool()
         hidden_states = self.embeddings(input_ids, attention_mask)
+        num_sub_vectors = embx.shape[-1] // hidden_states.shape[-1]
+        embx = embx.view(embx.shape[0], num_sub_vectors, hidden_states.shape[-1])
         hidden_states = torch.cat([embx, hidden_states], dim=1)
         attention_mask = torch.nn.functional.pad(attention_mask, (1, 0), value=True)
         hidden_states = self.encoder(hidden_states, attention_mask)
-        hidden_states = hidden_states[:, 1:]
+        hidden_states = hidden_states[:, num_sub_vectors:]
         logits = self.mlm_decoder(hidden_states)
         return logits
 
