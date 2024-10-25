@@ -139,8 +139,6 @@ class TiteModule(LightningModule):
                 self.log(f"trec-dl-2019/{name}", value, on_step=False, on_epoch=True)
 
     def on_before_optimizer_step(self, optimizer):
-        if not self._log_gradients:
-            return
         for name, module in (
             [("student", self._student)]
             + [(f"teacher_{idx}", teacher) for idx, teacher in enumerate(self._teachers)]
@@ -151,7 +149,8 @@ class TiteModule(LightningModule):
                 continue
             total_norm = norms["grad_2.0_norm_total"]
             module_norms = {f"{name}_grad_2.0_norm_total": total_norm}
-            self.log_dict(module_norms)
+            if self._log_gradients:
+                self.log_dict(module_norms)
             if total_norm > 100:
                 module.zero_grad()
 
