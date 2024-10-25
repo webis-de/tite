@@ -141,10 +141,19 @@ class TiteModule(LightningModule):
     def on_before_optimizer_step(self, optimizer):
         if not self._log_gradients:
             return
-        norms = grad_norm(self._student, norm_type=2)
-        self.log_dict(norms)
-        if norms["grad_2.0_norm_total"] > 100:
-            self._student.zero_grad()
+        for name, module in (
+            [("student", self._student)]
+            + [(f"teacher_{idx}", teacher) for idx, teacher in enumerate(self._teachers)]
+            + [(f"predictor_{idx}", predictor) for idx, predictor in enumerate(self._predictors)]
+        ):
+            norms = grad_norm(module, norm_type=2)
+            if not norms:
+                continue
+            total_norm = norms["grad_2.0_norm_total"]
+            module_norms = {f"{name}_grad_2.0_norm_total": total_norm}
+            self.log_dict(module_norms)
+            if total_norm > 100:
+                module.zero_grad()
 
     def validation_step(self, batch: dict[str, Any] | None) -> None:
         # Empty validation step to trick pytorch lightning into validating this model though validation is actually done
