@@ -23,7 +23,7 @@ class BertConfig(TiteConfig):
         pad_token_id: int = 0,
         hidden_act: str = "gelu_pytorch_tanh",
         positional_embedding_type: Literal["absolute", "ALiBi"] = "ALiBi",
-        pooling: bool = False,
+        pooling: Literal["mean", "first"] | None = None,
         unpadding: bool = False,
         **kwargs
     ):
@@ -54,15 +54,20 @@ class BertModel(TiteModel):
 
     def forward(self, input_ids: Tensor, attention_mask: Tensor | None = None) -> Tensor:
         hidden_states = super().forward(input_ids, attention_mask)
-        if self.config.pooling:
+        if self.config.pooling == "first":
             return hidden_states[:, [0]]
+        elif self.config.pooling == "mean":
+            return hidden_states.mean(dim=1, keepdim=True)
         return hidden_states
 
 
 class HFBertModel(Module):
 
     def __init__(
-        self, model_name_or_path: str | None = None, config: HFBertConfig | None = None, pooling: bool = False
+        self,
+        model_name_or_path: str | None = None,
+        config: HFBertConfig | None = None,
+        pooling: Literal["mean", "first"] | None = None,
     ) -> None:
         super().__init__()
         if model_name_or_path is None:
@@ -81,8 +86,10 @@ class HFBertModel(Module):
         hidden_states = self._model(
             input_ids, attention_mask=attention_mask, token_type_ids=token_type_ids, output_hidden_states=True
         ).last_hidden_state
-        if self.pooling:
-            hidden_states = hidden_states[:, [0]]
+        if self.pooling == "first":
+            return hidden_states[:, [0]]
+        elif self.pooling == "mean":
+            return hidden_states.mean(dim=1, keepdim=True)
         return hidden_states
 
     def save_pretrained(self, *args, **kwargs):
