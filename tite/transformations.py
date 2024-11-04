@@ -314,7 +314,8 @@ class SentenceSwapNeighboring(SentenceTransformation):
             if i >= len(sentences):
                 break
             if random.random() < self._swap_prob and i != len(sentences) - 1:
-                sentences[i], sentences[i + 1] = sentences[i + 1], sentences[i]
+                transformed_sentences.append(sentences[i + 1])
+                transformed_sentences.append(sentences[i])
                 i += 2
             else:
                 transformed_sentences.append(sentences[i])
