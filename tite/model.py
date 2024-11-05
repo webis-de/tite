@@ -284,9 +284,7 @@ class TiteSelfAttention(torch.nn.Module):
 
         return alibi
 
-    def forward(
-        self, hidden_states: torch.Tensor, attention_mask: torch.Tensor
-    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor | None]:
+    def forward(self, hidden_states: torch.Tensor, attention_mask: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         batch_size, seq_len = attention_mask.shape
         qkv = self.Wqkv(hidden_states)
 
@@ -327,19 +325,7 @@ class TiteSelfAttention(torch.nn.Module):
             if attention_mask.shape != new_attention_mask.shape:
                 indices = torch.nonzero(new_attention_mask.flatten()).flatten()
             attn_output = unpad(attn_output, indices)
-        residual_query = None
-        if self.pooling is not None:
-            residual_query = rearrange(
-                query,
-                f"b h s d -> b s (h d)",
-                b=batch_size,
-                h=self.num_attention_heads,
-                s=new_seq_len,
-                d=self.attention_head_size,
-            )
-            if self.unpadding:
-                residual_query = unpad(residual_query, indices)
-        return attn_output, new_attention_mask, residual_query
+        return attn_output, new_attention_mask
 
 
 class TiteSelfOutput(torch.nn.Module):
@@ -350,15 +336,21 @@ class TiteSelfOutput(torch.nn.Module):
         self.LayerNorm = torch.nn.LayerNorm(hidden_size, eps=config.layer_norm_eps)
         self.dropout = torch.nn.Dropout(config.dropout_prob)
 
+        kernel_size = config.kernel_size[layer_idx]
+        stride = config.stride[layer_idx]
+        self.pooling = None
+        if kernel_size is not None and stride is not None:
+            self.pooling = MaskedAvgPool1d(kernel_size, stride)
+
     def forward(
-        self, hidden_states: torch.Tensor, input_tensor: torch.Tensor, residual_query: torch.Tensor | None
+        self, hidden_states: torch.Tensor, attention_mask: torch.Tensor, input_tensor: torch.Tensor
     ) -> torch.Tensor:
         hidden_states = self.dense(hidden_states)
         hidden_states = self.dropout(hidden_states)
+        if self.pooling is not None:
+            input_tensor, _ = self.pooling(input_tensor, attention_mask)
         if hidden_states.shape == input_tensor.shape:
             hidden_states = hidden_states + input_tensor
-        else:
-            hidden_states = hidden_states + residual_query
         hidden_states = self.LayerNorm(hidden_states)
         return hidden_states
 
@@ -370,9 +362,9 @@ class TiteAttention(torch.nn.Module):
         self.output = TiteSelfOutput(config, layer_idx)
 
     def forward(self, hidden_states: torch.Tensor, attention_mask: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
-        self_outputs, attention_mask, residual_query = self.self(hidden_states, attention_mask)
-        attn_output = self.output(self_outputs, hidden_states, residual_query)
-        return attn_output, attention_mask
+        self_outputs, new_attention_mask = self.self(hidden_states, attention_mask)
+        attn_output = self.output(self_outputs, attention_mask, hidden_states)
+        return attn_output, new_attention_mask
 
 
 class TiteIntermediate(torch.nn.Module):
