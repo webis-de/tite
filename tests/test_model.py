@@ -12,9 +12,9 @@ def config() -> TiteConfig:
     config = TiteConfig(
         vocab_size=32,
         num_hidden_layers=2,
-        hidden_size=(4, 4),
+        hidden_size=(4, 6),
         num_attention_heads=(2, 2),
-        intermediate_size=(8, 8),
+        intermediate_size=(8, 12),
         kernel_size=(8, 8),
         stride=(2, 1),
         max_position_embeddings=16,
