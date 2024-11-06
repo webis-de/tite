@@ -80,7 +80,7 @@ class TiteModule(LightningModule):
             return
         if self.trainer.limit_val_batches == 0:
             return
-        add_special_tokens = self.trainer.datamodule.collator._add_special_tokens
+        add_special_tokens = self.trainer.datamodule.collator.add_special_tokens
         # Train on GLUE
         if self.validate_on_glue:
             # for task in TASK_COLUMN_NAMES:
