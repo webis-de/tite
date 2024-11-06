@@ -9,9 +9,9 @@ model:
           init_args:
             vocab_size: 30522
             num_hidden_layers: 12
-            # hidden_size: [768, 768, 768, 768, 768, 768, 768, 768, 768, 768, 768, 768]
-            # num_attention_heads: [12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12]
-            # intermediate_size: [3072, 3072, 3072, 3072, 3072, 3072, 3072, 3072, 3072, 3072, 3072, 3072]
+            hidden_size: [768, 768, 768, 768, 768, 768, 768, 768, 768, 768, 768, 768]
+            num_attention_heads: [12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12]
+            intermediate_size: [3072, 3072, 3072, 3072, 3072, 3072, 3072, 3072, 3072, 3072, 3072, 3072]
             # kernel_size: [null, null, null, null, null, null, 3, 3, 3, 3, 3, 3]
             # stride: [null, null, null, null, null, null, 3, 3, 3, 3, 3, 3]
             # kernel_size: [null, 3, null, 3, null, 3, null, 3, null, 3, null, 3]
@@ -19,9 +19,9 @@ model:
             # hidden_size: [768, 768, 768, 1024, 1024, 1024, 1280, 1280, 1280, 1536, 1536, 1536]
             # num_attention_heads: [12, 12, 12, 16, 16, 16, 20, 20, 20, 24, 24, 24]
             # intermediate_size: [3072, 3072, 3072, 4096, 4096, 4096, 5120, 5120, 5120, 6144, 6144, 6144]
-            hidden_size: [768, 768, 768, 1024, 1280, 1536, 1792, 2048, 2304, 2560, 2816, 3072]
-            num_attention_heads: [12, 12, 12, 16, 20, 24, 28, 32, 36, 40, 44, 48]
-            intermediate_size: [3072, 3072, 3072, 4096, 5120, 6144, 7168, 8192, 9216, 10240, 11264, 12288]
+            # hidden_size: [768, 768, 768, 1024, 1280, 1536, 1792, 2048, 2304, 2560, 2816, 3072]
+            # num_attention_heads: [12, 12, 12, 16, 20, 24, 28, 32, 36, 40, 44, 48]
+            # intermediate_size: [3072, 3072, 3072, 4096, 5120, 6144, 7168, 8192, 9216, 10240, 11264, 12288]
             kernel_size: [null, null, null, 3, 3, 3, 3, 3, 3, 3, 3, 3]
             stride: [null, null, null, 2, 2, 2, 2, 2, 2, 2, 2, 2]
             unpadding: false
@@ -39,23 +39,16 @@ model:
       dict_kwargs:
         model_max_length: 512
     teachers:
-    - class_path: tite.teacher.MAETeacher
-      init_args:
-        padid: 0
+    - null # corresponds to student
     predictors:
-    - class_path: tite.predictor.MAEDecoder
-      init_args:
-        config:
-          class_path: tite.bert.BertConfig
-          init_args:
-            num_hidden_layers: 3
-            pooling: null
-            unpadding: false
-            positional_embedding_type: absolute
+    - class_path: tite.predictor.Identity
     losses:
-    - class_path: tite.loss.mlm.MLMCrossEntropy
+    - class_path: tite.loss.BarlowTwins
+    # - class_path: tite.loss.ProjectedBarlowTwins
       init_args:
-        vocab_size: 30522
+        lmbda: 0.005
+        embeddim: 768
+      #   sizes: [2048, 2048, 2048]
     log_additional_metrics: false
     validate_on_glue: true
     validate_on_msmarco: true

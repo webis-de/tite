@@ -1,6 +1,8 @@
+import math
 from abc import ABC, abstractmethod
 
 import torch
+from torch.optim.optimizer import Optimizer as Optimizer
 
 
 class LambdaWarmupScheduler(ABC):
@@ -82,6 +84,37 @@ class WarmupLRScheduler(LambdaWarmupScheduler, torch.optim.lr_scheduler.LambdaLR
         )
 
 
+class LARSScheduler(WarmupLRScheduler):
+
+    def __init__(
+        self,
+        optimizer: Optimizer,
+        num_warmup_steps: int,
+        num_training_steps: int,
+        batch_size: int,
+        *args,
+        verbose: bool = False,
+        **kwargs,
+    ) -> None:
+        self.num_training_steps = num_training_steps
+        self.batch_size = batch_size
+        super().__init__(optimizer, num_warmup_steps, *args, verbose=verbose, **kwargs)
+
+    def value_lambda(self, current_step: int) -> float:
+        max_steps = self.num_training_steps
+        warmup_steps = self.num_warmup_steps
+        base_factor = self.batch_size / 256
+        if current_step < warmup_steps:
+            factor = base_factor * current_step / warmup_steps
+        else:
+            current_step -= warmup_steps
+            max_steps -= warmup_steps
+            q = 0.5 * (1 + math.cos(math.pi * current_step / max_steps))
+            end_factor = base_factor * 0.001
+            factor = base_factor * q + end_factor * (1 - q)
+        return factor
+
+
 class LinearLRSchedulerWithLinearWarmup(WarmupLRScheduler, LinearSchedulerWithLinearWarmup):
     pass
 
@@ -90,4 +123,4 @@ class ConstantLRSchedulerWithLinearWarmup(WarmupLRScheduler, ConstantSchedulerWi
     pass
 
 
-LR_SCHEDULERS = [LinearLRSchedulerWithLinearWarmup, ConstantLRSchedulerWithLinearWarmup]
+LR_SCHEDULERS = [LinearLRSchedulerWithLinearWarmup, ConstantLRSchedulerWithLinearWarmup, LARSScheduler]

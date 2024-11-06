@@ -31,17 +31,17 @@ class JEPA(Module):
         losses: list[LossFn],
     ) -> None:
         super().__init__()
-        self._student = student
-        self._teachers = teachers
-        self._predictors = predictors
-        self._losses = losses
+        self.student = student
+        self.teachers = teachers
+        self.predictors = predictors
+        self.losses = losses
 
     def forward(self, input: dict, target: dict | None, **aux):
         student_aux = {k[8:]: v for k, v in aux.items() if k.startswith("student_")}
         teacher_aux = {k[8:]: v for k, v in aux.items() if k.startswith("teacher_")}
-        embx = self._student(**input)
+        embx = self.student(**input)
         losses = {}
-        for teacher, predictor, loss in zip(self._teachers, self._predictors, self._losses):
+        for teacher, predictor, loss in zip(self.teachers, self.predictors, self.losses):
             if target is None or isinstance(teacher, CopyStudent):
                 emby = embx.detach()
             else:

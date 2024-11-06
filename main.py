@@ -84,7 +84,17 @@ class CustomLightningCLI(LightningCLI):
         return [optimizer], [{"scheduler": lr_scheduler, "interval": lr_scheduler.interval}]
 
     def add_arguments_to_parser(self, parser):
+
+        def compute_global_batch_size(accumulate_grad_batches: int, batch_size: int) -> int:
+            return accumulate_grad_batches * batch_size
+
         parser.add_lr_scheduler_args(tuple(LR_SCHEDULERS))
+        parser.link_arguments("trainer.max_steps", "lr_scheduler.init_args.num_training_steps")
+        parser.link_arguments(
+            ("trainer.accumulate_grad_batches", "data.init_args.batch_size"),
+            "lr_scheduler.init_args.batch_size",
+            compute_fn=compute_global_batch_size,
+        )
 
 
 class DummyTite(PreTrainedModel):

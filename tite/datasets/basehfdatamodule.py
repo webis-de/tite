@@ -18,13 +18,13 @@ class Collator:
         max_length: int | None = None,
         add_special_tokens: bool = True,
     ) -> None:
-        self._tokenizer = tokenizer
-        self._max_length = max_length
-        self._add_special_tokens = add_special_tokens
-        self._text_keys = text_keys
+        self.tokenizer = tokenizer
+        self.max_length = max_length
+        self.add_special_tokens = add_special_tokens
+        self.text_keys = text_keys
 
     def aggregate(self, batch: list[dict]) -> dict:
-        agg: dict[str, list] = {key: [] for key in self._text_keys if key is not None}
+        agg: dict[str, list] = {key: [] for key in self.text_keys if key is not None}
         agg["label"] = []
         for x in batch:
             for key, value in x.items():
@@ -35,17 +35,17 @@ class Collator:
         return agg
 
     def tokenize(self, agg: dict) -> dict:
-        t1 = agg[self._text_keys[0]]
+        t1 = agg[self.text_keys[0]]
         t2 = None
-        if self._text_keys[1] is not None:
-            t2 = agg[self._text_keys[1]]
-        encoded = self._tokenizer(
+        if self.text_keys[1] is not None:
+            t2 = agg[self.text_keys[1]]
+        encoded = self.tokenizer(
             t1,
             t2,
             truncation=True,
-            max_length=self._max_length,
+            max_length=self.max_length,
             return_token_type_ids=False,
-            add_special_tokens=self._add_special_tokens,
+            add_special_tokens=self.add_special_tokens,
             padding=True,
             return_tensors="pt",
         )
@@ -73,13 +73,13 @@ class BaseHFDataModule(LightningDataModule):
         streaming: bool = True,
     ) -> None:
         super().__init__()
-        self._data_kwargs: dict[str, Any] = {}
+        self.data_kwargs: dict[str, Any] = {}
         if data_dir is not None:
-            self._data_kwargs["data_dir"] = data_dir
+            self.data_kwargs["data_dir"] = data_dir
         if data_files is not None:
-            self._data_kwargs["data_files"] = data_files
-        self._streaming = streaming
-        self._dataset: DatasetDict | Dataset | IterableDatasetDict | IterableDataset | None = None
+            self.data_kwargs["data_files"] = data_files
+        self.streaming = streaming
+        self.dataset: DatasetDict | Dataset | IterableDatasetDict | IterableDataset | None = None
         self.collator = collator
         seed = seed_or_none(seed)
         self.save_hyperparameters(
@@ -93,24 +93,24 @@ class BaseHFDataModule(LightningDataModule):
         )
 
     def setup(self, stage: str) -> None:
-        assert self._dataset is None, "Dataset is already set up"
-        self._dataset = load_dataset(
+        assert self.dataset is None, "Dataset is already set up"
+        self.dataset = load_dataset(
             path=self.hparams["path"],
             name=self.hparams["name"],
-            **self._data_kwargs,
-            streaming=self._streaming,
+            **self.data_kwargs,
+            streaming=self.streaming,
         )
         kwargs = {}
-        if self._streaming:
+        if self.streaming:
             kwargs["buffer_size"] = 1_024
-        self._dataset = self._dataset.shuffle(seed=self.hparams["seed"], **kwargs)
+        self.dataset = self.dataset.shuffle(seed=self.hparams["seed"], **kwargs)
 
     def teardown(self, stage: str) -> None:
-        self._dataset = None
+        self.dataset = None
 
     def dataloader(self, split: str) -> DataLoader:
         loader = DataLoader(
-            self._dataset[split],
+            self.dataset[split],
             batch_size=self.hparams["batch_size"],
             num_workers=self.hparams["num_workers"],
             collate_fn=self.collator,
@@ -119,19 +119,19 @@ class BaseHFDataModule(LightningDataModule):
         return loader
 
     def train_dataloader(self) -> DataLoader:
-        assert self._dataset is not None, "The dataset needs to be set up"
+        assert self.dataset is not None, "The dataset needs to be set up"
         return self.dataloader("train")
 
     def val_dataloader(self) -> DataLoader | list[DataLoader]:
-        assert self._dataset is not None, "The dataset needs to be set up"
+        assert self.dataset is not None, "The dataset needs to be set up"
         return self.dataloader("validation")
 
     def test_dataloader(self) -> DataLoader:
-        assert self._dataset is not None, "The dataset needs to be set up"
+        assert self.dataset is not None, "The dataset needs to be set up"
         return self.dataloader("test")
 
     # def state_dict(self) -> dict[str, dict[str, Any]]:
-    #     return {split: loader.state_dict() for split, loader in self._dataloaders.items()}
+    #     return {split: loader.state_dict() for split, loader in self.dataloaders.items()}
 
     # def load_state_dict(self, state_dict: dict[str, dict[str, Any]]) -> None:
     #     for split, state in state_dict.items():

@@ -1,10 +1,6 @@
 # lightning.pytorch==2.2.0.post0
 seed_everything: 42
 trainer:
-  accelerator: auto
-  strategy: auto
-  devices: auto
-  num_nodes: 1
   precision: bf16-mixed
   logger:
     class_path: CustomWandbLogger
@@ -21,9 +17,5 @@ trainer:
       init_args:
         logging_interval: step
   max_steps: 70000
-  val_check_interval: 64000
-  accumulate_grad_batches: 128
-  gradient_clip_val: 1
-  detect_anomaly: false
-  inference_mode: false
+  enable_progress_bar: false
   num_sanity_val_steps: 0

@@ -42,35 +42,35 @@ METRICS_MAP = {
 class GlueModule(LightningModule):
     def __init__(self, model: TiteModel, tokenizer: PreTrainedTokenizerBase, task: str) -> None:
         super().__init__()
-        self._model = model
-        self._tokenizer = tokenizer
-        self._task = task
+        self.model = model
+        self.tokenizer = tokenizer
+        self.task = task
         self.num_classes = NUM_CLASSES_MAP[task]
         self.classification_head = torch.nn.Sequential(
             torch.nn.Dropout(0.1),
             torch.nn.Linear(model.config.last_hidden_size, self.num_classes),
         )
         if self.num_classes == 1:
-            self._loss_function = torch.nn.MSELoss()
+            self.loss_function = torch.nn.MSELoss()
         else:
-            self._loss_function = torch.nn.CrossEntropyLoss()
-        self._evaluation_metrics = torch.nn.ModuleList(METRICS_MAP[task])
+            self.loss_function = torch.nn.CrossEntropyLoss()
+        self.evaluation_metrics = torch.nn.ModuleList(METRICS_MAP[task])
 
     def training_step(self, batch) -> Tensor:
-        output = self._model(batch["input_ids"], batch["attention_mask"])
+        output = self.model(batch["input_ids"], batch["attention_mask"])
         # logits = self.classification_head(output.mean(1))
         logits = self.classification_head(output[:, 0])
-        loss = self._loss_function(logits, batch["label"])
+        loss = self.loss_function(logits, batch["label"])
         self.log("train_loss", loss, prog_bar=True, on_epoch=True)
         return loss
 
     def validation_step(self, batch, *args, **kwargs) -> None:
-        output = self._model(batch["input_ids"], batch["attention_mask"])
+        output = self.model(batch["input_ids"], batch["attention_mask"])
         # logits = self.classification_head(output.mean(1))
         logits = self.classification_head(output[:, 0])
         if self.num_classes > 1:
             logits = logits.argmax(-1)
-        for validation_metric in self._evaluation_metrics:
+        for validation_metric in self.evaluation_metrics:
             metric = validation_metric(logits, batch["label"])
             self.log(validation_metric.__class__.__name__, metric)
 

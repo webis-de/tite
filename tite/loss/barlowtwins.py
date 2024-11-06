@@ -1,15 +1,20 @@
-from math import sqrt
-
 import torch
-import torch.nn as nn
-import torch.nn.functional as F
 from torch import Tensor
 
 
-class BarlowTwins(nn.Module):
+def off_diagonal(x):
+    # return a flattened view of the off-diagonal elements of a square matrix
+    n, m = x.shape
+    assert n == m
+    return x.flatten()[:-1].view(n - 1, n + 1)[:, 1:].flatten()
+
+
+class BarlowTwins(torch.nn.Module):
     """Computes the "Barlow Twins" objective as proposed in "Barlow Twins: Self-Supervised Learning via Redundancy
     Reduction".
     """
+
+    # https://github.com/facebookresearch/barlowtwins/blob/8e8d284ca0bc02f88b92328e53f9b901e86b4a3c/main.py#L207
 
     def __init__(self, lmbda: float, embeddim: int) -> None:
         """
@@ -18,30 +23,23 @@ class BarlowTwins(nn.Module):
             embeddim (int): The embedding dimensionality
         """
         super().__init__()
-        self._alpha = sqrt(lmbda)
-        self.batchnorm = nn.BatchNorm1d(embeddim, affine=False)
-        self.register_buffer(
-            "weights", torch.where(torch.eye(embeddim, dtype=torch.bool), 1, self._alpha), persistent=False
-        )
+        self.lmbda = lmbda
+        self.batch_norm = torch.nn.BatchNorm1d(embeddim, affine=False)
 
     @torch.autocast(device_type="cuda", enabled=False)
     def forward(self, features1: Tensor, features2: Tensor) -> Tensor:
         features1 = features1.view(-1, features1.shape[-1])
         features2 = features2.view(-1, features2.shape[-1])
-        N, D = features1.shape  # N is batchsize*num features and D is embeddim
-        assert list(features2.shape) == [
-            N,
-            D,
-        ], f"Both embeddings must have the same shape, got {features1.shape} and {features2.shape}"
-        normed1 = self.batchnorm(features1)
-        normed2 = self.batchnorm(features2)
-        crosscorr = normed1.T @ normed2 / N
+        # empirical cross-correlation matrix
+        c = (self.batch_norm(features1).T @ self.batch_norm(features2)) / features1.shape[0]
 
-        assert crosscorr.shape == self.weights.shape
-        return F.mse_loss(crosscorr * self.weights, torch.eye(D, device=crosscorr.device), reduction="sum") / D
+        on_diag = torch.diagonal(c).add_(-1).pow_(2).sum()
+        off_diag = off_diagonal(c).pow_(2).sum()
+        loss = on_diag + self.lmbda * off_diag
+        return loss
 
 
-class ProjectedBarlowTwins(nn.Module):
+class ProjectedBarlowTwins(torch.nn.Module):
 
     def __init__(self, lmbda: float, embeddim: int, sizes: tuple[int, ...] = (8192,) * 3) -> None:
         """
@@ -55,9 +53,15 @@ class ProjectedBarlowTwins(nn.Module):
         sizes = [embeddim] + list(sizes)
         layers = []
         for i in range(len(sizes) - 2):
-            layers.extend([nn.Linear(sizes[i], sizes[i + 1], bias=False), nn.BatchNorm1d(sizes[i + 1]), nn.ReLU()])
-        layers.append(nn.Linear(sizes[-2], sizes[-1]))
-        self.projector = nn.Sequential(*layers)
+            layers.extend(
+                [
+                    torch.nn.Linear(sizes[i], sizes[i + 1], bias=False),
+                    torch.nn.BatchNorm1d(sizes[i + 1]),
+                    torch.nn.ReLU(),
+                ]
+            )
+        layers.append(torch.nn.Linear(sizes[-2], sizes[-1]))
+        self.projector = torch.nn.Sequential(*layers)
         # BarlowTwins
         self.bt = BarlowTwins(lmbda=lmbda, embeddim=sizes[-1])
 

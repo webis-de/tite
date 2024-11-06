@@ -26,13 +26,13 @@ class OrderTeacher(Module):
 class MLMTeacher(Module):
     def __init__(self, padid: int) -> None:
         super().__init__()
-        self._pad_id = padid
+        self.pad_id = padid
 
     def forward(self, original_input_ids: Tensor, mlm_mask: Tensor, **kwargs) -> Tensor:
         # Everything that is masked out (mlm_mask == True) should be predicted... except for padding tokens.
         # Note that in MaskTokens (transformations.py) does not mask out [CLS] and [SEP] so we don't need to consider
         # them here.
-        targets = torch.where(original_input_ids.eq(self._pad_id) | ~mlm_mask, -100, original_input_ids)
+        targets = torch.where(original_input_ids.eq(self.pad_id) | ~mlm_mask, -100, original_input_ids)
         return targets
 
 
@@ -41,7 +41,7 @@ class MAETeacher(MLMTeacher):
     def forward(self, original_input_ids: Tensor, mlm_mask: Tensor, special_tokens_mask: Tensor, **kwargs) -> Tensor:
         if not mlm_mask.any():
             # enhanced decoding, predict every token
-            return torch.where(original_input_ids.eq(self._pad_id) | special_tokens_mask, -100, original_input_ids)
+            return torch.where(original_input_ids.eq(self.pad_id) | special_tokens_mask, -100, original_input_ids)
         return super().forward(original_input_ids, mlm_mask, **kwargs)
 
 

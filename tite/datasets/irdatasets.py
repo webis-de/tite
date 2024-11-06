@@ -22,9 +22,9 @@ class Collator:
         max_length: int | None = None,
         add_special_tokens: bool = True,
     ) -> None:
-        self._tokenizer = tokenizer
-        self._max_length = max_length
-        self._add_special_tokens = add_special_tokens
+        self.tokenizer = tokenizer
+        self.max_length = max_length
+        self.add_special_tokens = add_special_tokens
 
     def aggregate(self, batch: list[dict]) -> dict:
         agg = defaultdict(list)
@@ -37,12 +37,12 @@ class Collator:
         for key, value in list(agg.items()):
             if key.endswith("id"):
                 continue
-            agg[f"encoded_{key}"] = self._tokenizer(
+            agg[f"encoded_{key}"] = self.tokenizer(
                 value,
                 truncation=True,
-                max_length=self._max_length,
+                max_length=self.max_length,
                 return_token_type_ids=False,
-                add_special_tokens=self._add_special_tokens,
+                add_special_tokens=self.add_special_tokens,
                 padding=True,
                 return_tensors="pt",
             )
@@ -57,9 +57,9 @@ class Collator:
 class IRDataset:
 
     def __init__(self, dataset_id: str) -> None:
-        self._dataset = ir_datasets.load(dataset_id)
-        self._doc_store = self._dataset.docs_store()
-        self._queries = pd.DataFrame(self._dataset.queries_iter()).set_index("query_id")["text"]
+        self.dataset = ir_datasets.load(dataset_id)
+        self.doc_store = self.dataset.docs_store()
+        self.queries = pd.DataFrame(self.dataset.queries_iter()).set_index("query_id")["text"]
 
 
 class TripleDataset(IRDataset, IterableDataset):
@@ -68,10 +68,10 @@ class TripleDataset(IRDataset, IterableDataset):
         super().__init__(dataset_id)
 
     def __iter__(self):
-        for docpair in self._dataset.docpairs_iter():
-            query = self._queries.loc[docpair.query_id]
-            pos_doc = self._doc_store.get(docpair.doc_id_a).default_text()
-            neg_doc = self._doc_store.get(docpair.doc_id_b).default_text()
+        for docpair in self.dataset.docpairs_iter():
+            query = self.queries.loc[docpair.query_id]
+            pos_doc = self.doc_store.get(docpair.doc_id_a).default_text()
+            neg_doc = self.doc_store.get(docpair.doc_id_b).default_text()
             yield {
                 "query_id": docpair.query_id,
                 "pos_doc_id": docpair.doc_id_a,
@@ -87,15 +87,15 @@ class ScoredDocsDataset(IRDataset, IterableDataset):
         super().__init__(dataset_id)
 
     def __iter__(self):
-        for scoreddoc in iter(self._dataset.scoreddocs_iter()):
-            query = self._queries.loc[scoreddoc.query_id]
-            doc = self._doc_store.get(scoreddoc.doc_id).default_text()
+        for scoreddoc in iter(self.dataset.scoreddocs_iter()):
+            query = self.queries.loc[scoreddoc.query_id]
+            doc = self.doc_store.get(scoreddoc.doc_id).default_text()
             yield {
                 "query_id": scoreddoc.query_id,
                 "doc_id": scoreddoc.doc_id,
                 "query": query,
                 "doc": doc,
-                "dataset_id": self._dataset.dataset_id(),
+                "dataset_id": self.dataset.dataset_id(),
             }
 
 

@@ -14,6 +14,8 @@ from transformers import PreTrainedTokenizerBase
 from .datasets import GLUEDataModule, IRDatasetsDataModule
 from .glue_module import GlueModule
 from .jepa import JEPA, LossFn
+from .lars import LARS
+from .lr_schedulers import LARSScheduler
 from .model import TiteModel
 from .msmarco_module import MSMARCOModule
 from .predictor import MAEDecoder, MLMDecoder
@@ -22,11 +24,11 @@ from .predictor import MAEDecoder, MLMDecoder
 class _DetachFromGrad(Module):
     def __init__(self, module: Module, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
-        self._module = module
+        self.module = module
 
     def forward(self, *args, **kwargs) -> Tensor:
         with torch.no_grad():
-            output = self._module(*args, **kwargs)
+            output = self.module(*args, **kwargs)
         assert isinstance(output, Tensor)
         return output.detach()  # Better safe than sorry
 
@@ -57,21 +59,21 @@ class TiteModule(LightningModule):
                 predictors[0].embeddings.word_embeddings = student.get_input_embeddings()
                 if student.embeddings.position_embeddings is not None:
                     predictors[0].embeddings.position_embeddings = student.embeddings.position_embeddings
-        self._student = student
-        self._teachers = torch.nn.ModuleList([teacher if teacher is not None else student for teacher in teachers])
-        self._tokenizer = tokenizer
-        self._log_additional_metrics = log_additional_metrics
-        self._validate_on_glue = validate_on_glue
-        self._validate_on_msmarco = validate_on_msmarco
-        self._log_gradients = log_gradients
+        self.student = student
+        self.teachers = torch.nn.ModuleList([teacher if teacher is not None else student for teacher in teachers])
+        self.tokenizer = tokenizer
+        self.log_additional_metrics = log_additional_metrics
+        self.validate_on_glue = validate_on_glue
+        self.validate_on_msmarco = validate_on_msmarco
+        self.log_gradients = log_gradients
 
-        self._predictors = torch.nn.ModuleList(predictors)
-        self._losses = torch.nn.ModuleList(losses)
+        self.predictors = torch.nn.ModuleList(predictors)
+        self.losses = torch.nn.ModuleList(losses)
         if detach_teacher_from_grad:
-            self._teacher = _DetachFromGrad(self._teacher)
-        self._jepa = JEPA(self._student, self._teachers, self._predictors, self._losses)
+            self.teacher = _DetachFromGrad(self.teacher)
+        self.jepa = JEPA(self.student, self.teachers, self.predictors, self.losses)
 
-        self._tokens_seen = 0.0
+        self.tokens_seen = 0.0
 
     def on_validation_start(self) -> None:
         if self.trainer is None:
@@ -80,20 +82,20 @@ class TiteModule(LightningModule):
             return
         add_special_tokens = self.trainer.datamodule.collator._add_special_tokens
         # Train on GLUE
-        if self._validate_on_glue:
+        if self.validate_on_glue:
             # for task in TASK_COLUMN_NAMES:
             for task in ["mrpc"]:
                 glue = GLUEDataModule(
                     task=task,
-                    tokenizer=self._tokenizer,
+                    tokenizer=self.tokenizer,
                     batch_size=32,
                     add_special_tokens=add_special_tokens,
                     streaming=False,
                 )
-                copy_student = deepcopy(self._student).train()
+                copy_student = deepcopy(self.student).train()
                 if hasattr(copy_student, "pooling"):
                     copy_student.pooling = True
-                glue_module = GlueModule(copy_student, self._tokenizer, glue.hparams.name)
+                glue_module = GlueModule(copy_student, self.tokenizer, glue.hparams.name)
                 trainer = Trainer(
                     logger=False,
                     precision=(self.trainer.precision if self.trainer is not None else "bf16-mixed"),
@@ -108,19 +110,19 @@ class TiteModule(LightningModule):
                     if "step" in name:
                         continue
                     self.log(f"{glue.hparams.name}/{name}", value, on_step=False, on_epoch=True)
-        if self._validate_on_msmarco:
+        if self.validate_on_msmarco:
             msmarco = IRDatasetsDataModule(
-                tokenizer=self._tokenizer,
+                tokenizer=self.tokenizer,
                 add_special_tokens=add_special_tokens,
                 trainset=("msmarco-passage/train/triples-small", "triples"),
                 valset=("msmarco-passage/trec-dl-2019/judged", "scoreddocs"),
                 train_batch_size=32,
                 inference_batch_size=256,
             )
-            copy_student = deepcopy(self._student).train()
+            copy_student = deepcopy(self.student).train()
             if hasattr(copy_student, "pooling"):
                 copy_student.pooling = True
-            msmarco_module = MSMARCOModule(copy_student, self._tokenizer)
+            msmarco_module = MSMARCOModule(copy_student, self.tokenizer)
             max_steps = 1_000
             trainer = Trainer(
                 logger=False,
@@ -140,19 +142,17 @@ class TiteModule(LightningModule):
 
     def on_before_optimizer_step(self, optimizer):
         for name, module in (
-            [("student", self._student)]
-            + [(f"teacher_{idx}", teacher) for idx, teacher in enumerate(self._teachers)]
-            + [(f"predictor_{idx}", predictor) for idx, predictor in enumerate(self._predictors)]
+            [("student", self.student)]
+            + [(f"teacher_{idx}", teacher) for idx, teacher in enumerate(self.teachers)]
+            + [(f"predictor_{idx}", predictor) for idx, predictor in enumerate(self.predictors)]
         ):
             norms = grad_norm(module, norm_type=2)
             if not norms:
                 continue
             total_norm = norms["grad_2.0_norm_total"]
             module_norms = {f"{name}_grad_2.0_norm_total": total_norm}
-            if self._log_gradients:
+            if self.log_gradients:
                 self.log_dict(module_norms)
-            if total_norm > 100:
-                module.zero_grad()
 
     def validation_step(self, batch: dict[str, Any] | None) -> None:
         # Empty validation step to trick pytorch lightning into validating this model though validation is actually done
@@ -164,19 +164,19 @@ class TiteModule(LightningModule):
         teacher_input = batch.pop("teacher_input", None)
         # JEPA will try to predict the original from the transformed input within the embedding space, i.e.,
         #   Loss(pred(student(studentinput), aux), teacher(teacherinput))
-        losses, embs = self._jepa(student_input, teacher_input, **batch)
+        losses, embs = self.jepa(student_input, teacher_input, **batch)
         losses["total"] = sum(losses.values())
         num_tokens = max(
             student_input["attention_mask"].sum().item(),
             0 if teacher_input is None else teacher_input["attention_mask"].sum().item(),
         )
-        self._tokens_seen += num_tokens
-        self.log("tokens_seen", self._tokens_seen, on_step=True, reduce_fx="max")  # We sum it up ourselves
+        self.tokens_seen += num_tokens
+        self.log("tokens_seen", self.tokens_seen, on_step=True, reduce_fx="max")  # We sum it up ourselves
         self.log("loss", losses["total"], prog_bar=True)
         self.log_dict(losses)
         # ####
         # # Log additional metrics for more insight into the training
-        # if self._log_additional_metrics:
+        # if self.log_additional_metrics:
         #     with torch.autocast(device_type="cuda", enabled=False):
         #         # cossim = normalize(embs[:, 0]) @ normalize(embt[:, 0]).T
         #         crossentropy = torch.nn.functional.cross_entropy(
@@ -200,8 +200,8 @@ class TiteModule(LightningModule):
         return losses["total"]
 
     def save_pretrained(self, save_path: str | Path) -> None:
-        self._student.save_pretrained(save_path)
-        self._tokenizer.save_pretrained(save_path)
+        self.student.save_pretrained(save_path)
+        self.tokenizer.save_pretrained(save_path)
 
     def on_save_checkpoint(self, *args, **kwargs) -> None:
         if self.trainer is not None and self.trainer.log_dir is not None:

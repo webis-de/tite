@@ -32,30 +32,28 @@ class TransformationCollator(Collator):
         if text_keys[1] is not None:
             raise ValueError("Text pairs are not supported")
         super().__init__(tokenizer, text_keys, max_length, add_special_tokens)
-        self._student_string_transformations = student_string_transformations or []
+        self.student_string_transformations = student_string_transformations or []
         if teacher_string_transformations == "student":
-            self._teacher_string_transformations: list[StringTransformation] | None = (
-                self._student_string_transformations
-            )
+            self.teacher_string_transformations: list[StringTransformation] | None = self.student_string_transformations
         elif teacher_string_transformations is False:
-            self._teacher_string_transformations = None
+            self.teacher_string_transformations = None
         else:
-            self._teacher_string_transformations = teacher_string_transformations or []
-        self._student_token_transformations = student_token_transformations or []
+            self.teacher_string_transformations = teacher_string_transformations or []
+        self.student_token_transformations = student_token_transformations or []
         if teacher_token_transformations == "student":
-            self._teacher_token_transformations: list[TokenTransformation] | None = self._student_token_transformations
+            self.teacher_token_transformations: list[TokenTransformation] | None = self.student_token_transformations
         elif teacher_token_transformations is False:
-            self._teacher_token_transformations = None
+            self.teacher_token_transformations = None
         else:
-            self._teacher_token_transformations = teacher_token_transformations or []
+            self.teacher_token_transformations = teacher_token_transformations or []
 
     def apply_string_transformations(self, agg: dict) -> tuple[dict, dict]:
         transformed: dict[str, list] = {}
-        text_key = self._text_keys[0]
+        text_key = self.text_keys[0]
         aux: dict[str, Any] = {}
         for name, transformations in (
-            ("student", self._student_string_transformations),
-            ("teacher", self._teacher_string_transformations),
+            ("student", self.student_string_transformations),
+            ("teacher", self.teacher_string_transformations),
         ):
             texts = agg[text_key]
             if transformations is None:
@@ -79,7 +77,7 @@ class TransformationCollator(Collator):
         aux: dict[str, Any] = {}
         input_ids = encoded["input_ids"]
         attention_mask = encoded["attention_mask"]
-        if self._teacher_string_transformations is None:
+        if self.teacher_string_transformations is None:
             student_input = {"input_ids": input_ids, "attention_mask": attention_mask}
             teacher_input = None
         else:
@@ -91,13 +89,13 @@ class TransformationCollator(Collator):
                 "input_ids": input_ids[len(input_ids) // 2 :],
                 "attention_mask": attention_mask[len(input_ids) // 2 :],
             }
-        for transformation in self._student_token_transformations:
+        for transformation in self.student_token_transformations:
             student_input, transform_aux = transformation(**student_input)
             transform_aux = {f"student_{k}": v for k, v in transform_aux.items()}
             aux = {**aux, **transform_aux}
         out = {"student_input": student_input}
-        if teacher_input is not None and self._teacher_token_transformations is not None:
-            for transformation in self._teacher_token_transformations:
+        if teacher_input is not None and self.teacher_token_transformations is not None:
+            for transformation in self.teacher_token_transformations:
                 teacher_input, transform_aux = transformation(**teacher_input)
                 transform_aux = {f"teacher_{k}": v for k, v in transform_aux.items()}
                 aux = {**aux, **transform_aux}

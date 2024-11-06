@@ -73,17 +73,17 @@ class HFBertModel(Module):
         if model_name_or_path is None:
             if config is None:
                 raise ValueError("Either model_name_or_path or config must be provided")
-            self._model = HFBert(config)
+            self.model = HFBert(config)
         else:
-            self._model = HFBert.from_pretrained(model_name_or_path, config=config)
-        self.config = self._model.config
+            self.model = HFBert.from_pretrained(model_name_or_path, config=config)
+        self.config = self.model.config
         self.config.last_hidden_size = self.config.hidden_size
         self.pooling = pooling
 
     def forward(
         self, input_ids: Tensor, attention_mask: Tensor | None = None, token_type_ids: Tensor | None = None
     ) -> Tensor:
-        hidden_states = self._model(
+        hidden_states = self.model(
             input_ids, attention_mask=attention_mask, token_type_ids=token_type_ids, output_hidden_states=True
         ).last_hidden_state
         if self.pooling == "first":
@@ -93,4 +93,4 @@ class HFBertModel(Module):
         return hidden_states
 
     def save_pretrained(self, *args, **kwargs):
-        self._model.save_pretrained(*args, **kwargs)
+        self.model.save_pretrained(*args, **kwargs)
