@@ -402,9 +402,13 @@ class TiteUpscale(torch.nn.Module):
         hidden_size = config.hidden_size[layer_idx]
         old_hidden_size = config.hidden_size[max(0, layer_idx - 1)]
         self.upscale_layer = torch.nn.Linear(old_hidden_size, hidden_size)
+        self.dropout = torch.nn.Dropout(config.dropout_prob)
+        self.LayerNorm = torch.nn.LayerNorm(hidden_size, eps=config.layer_norm_eps)
 
     def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
         hidden_states = self.upscale_layer(hidden_states)
+        hidden_states = self.dropout(hidden_states)
+        hidden_states = self.LayerNorm(hidden_states)
         return hidden_states
 
 
