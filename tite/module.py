@@ -93,8 +93,8 @@ class TiteModule(LightningModule):
                     streaming=False,
                 )
                 copy_student = deepcopy(self.student).train()
-                if hasattr(copy_student, "pooling"):
-                    copy_student.pooling = True
+                if hasattr(copy_student.config, "pooling") and getattr(copy_student.config, "pooling") is None:
+                    copy_student.config.pooling = "first"
                 glue_module = GlueModule(copy_student, self.tokenizer, glue.hparams.name)
                 trainer = Trainer(
                     logger=False,
@@ -120,8 +120,8 @@ class TiteModule(LightningModule):
                 inference_batch_size=256,
             )
             copy_student = deepcopy(self.student).train()
-            if hasattr(copy_student, "pooling"):
-                copy_student.pooling = True
+            if hasattr(copy_student.config, "pooling") and getattr(copy_student.config, "pooling") is None:
+                copy_student.config.pooling = "first"
             msmarco_module = MSMARCOModule(copy_student, self.tokenizer)
             max_steps = 1_000
             trainer = Trainer(
