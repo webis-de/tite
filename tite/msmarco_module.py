@@ -1,4 +1,3 @@
-from collections import defaultdict
 from typing import Any
 
 import ir_datasets
@@ -24,10 +23,10 @@ class MSMARCOModule(LightningModule):
         query_emb = self.model(**batch["encoded_query"])
         pos_doc_emb = self.model(**batch["encoded_pos_doc"])
         neg_doc_emb = self.model(**batch["encoded_neg_doc"])
-        pos_sim = (query_emb @ pos_doc_emb.transpose(-1, -2)).view(-1)
-        neg_sim = (query_emb @ neg_doc_emb.transpose(-1, -2)).view(-1)
-        # pos_sim = torch.nn.functional.cosine_similarity(query_emb.squeeze(1), pos_doc_emb.squeeze(1))
-        # neg_sim = torch.nn.functional.cosine_similarity(query_emb.squeeze(1), neg_doc_emb.squeeze(1))
+        # pos_sim = (query_emb @ pos_doc_emb.transpose(-1, -2)).view(-1)
+        # neg_sim = (query_emb @ neg_doc_emb.transpose(-1, -2)).view(-1)
+        pos_sim = torch.nn.functional.cosine_similarity(query_emb.squeeze(1), pos_doc_emb.squeeze(1))
+        neg_sim = torch.nn.functional.cosine_similarity(query_emb.squeeze(1), neg_doc_emb.squeeze(1))
         margin = pos_sim - neg_sim
         loss = torch.nn.functional.binary_cross_entropy_with_logits(margin, torch.ones_like(margin))
         self.log("train_loss", loss, prog_bar=True, on_epoch=True)

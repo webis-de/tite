@@ -46,10 +46,19 @@ class GlueModule(LightningModule):
         self.tokenizer = tokenizer
         self.task = task
         self.num_classes = NUM_CLASSES_MAP[task]
-        self.classification_head = torch.nn.Sequential(
-            torch.nn.Dropout(0.1),
-            torch.nn.Linear(model.config.last_hidden_size, self.num_classes),
-        )
+        last_dim = 768
+        layers = []
+        hidden_size = model.config.last_hidden_size
+        while True:
+            if hidden_size == last_dim:
+                break
+            new_hidden_size = max(hidden_size // 2, last_dim)
+            layers.append(torch.nn.Linear(hidden_size, new_hidden_size))
+            layers.append(torch.nn.Dropout(0.1))
+            layers.append(torch.nn.ReLU())
+            hidden_size = new_hidden_size
+        layers.append(torch.nn.Linear(last_dim, self.num_classes))
+        self.classification_head = torch.nn.Sequential(*layers)
         if self.num_classes == 1:
             self.loss_function = torch.nn.MSELoss()
         else:
