@@ -323,6 +323,26 @@ class SentenceSwapNeighboring(SentenceTransformation):
         return [" ".join(transformed_sentences)]
 
 
+class SentenceOffset(SentenceTransformation):
+
+    def __init__(self, min_offset: int = 3, max_offset: int = 7, transformation_prob: float = 1.0):
+        super().__init__(transformation_prob)
+        self.min_offset = min_offset
+        self.max_offset = max_offset
+
+    def transform(self, text: str) -> list[str]:
+        if not text:
+            return [text]
+        sentences = self.split(text)
+        max_offset = min(self.max_offset, len(sentences) - 1)
+        min_offset = min(self.min_offset, max_offset)
+        offset = random.randint(min_offset, max_offset)
+        transformed_sentences = sentences[offset:]
+        if not transformed_sentences:
+            raise ValueError("No sentences left after offset.")
+        return [" ".join(transformed_sentences)]
+
+
 class CopyStudentTransformation(StringTransformation):
     pass
 
