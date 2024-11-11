@@ -1,7 +1,8 @@
 model:
-  class_path: tite.module.TiteModule
+  class_path: tite.msmarco_module.MSMARCOModule
   init_args:
-    student:
+    model_name_or_path: null
+    model:
       class_path: tite.model.TiteModel
       init_args:
         config:
@@ -38,25 +39,3 @@ model:
         mask_token: '[MASK]'
       dict_kwargs:
         model_max_length: 512
-    teachers:
-    - class_path: tite.teacher.MAETeacher
-      init_args:
-        padid: 0
-    predictors:
-    - class_path: tite.predictor.MAEDecoder
-      init_args:
-        config:
-          class_path: tite.bert.BertConfig
-          init_args:
-            num_hidden_layers: 3
-            pooling: null
-            unpadding: false
-            positional_embedding_type: absolute
-    losses:
-    - class_path: tite.loss.mlm.MLMCrossEntropy
-      init_args:
-        vocab_size: 30522
-    log_additional_metrics: false
-    validate_on_glue: true
-    validate_on_msmarco: true
-    log_gradients: true

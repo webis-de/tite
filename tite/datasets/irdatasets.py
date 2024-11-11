@@ -3,11 +3,10 @@ from typing import Literal
 
 import ir_datasets
 import pandas as pd
-import torch
 from lightning import LightningDataModule
 from torch.utils.data import DataLoader, IterableDataset
-from transformers import PreTrainedTokenizerBase
 
+from ..tokenizer import TiteTokenizer
 from .commons import seed_or_none
 
 SplitType = Literal["qrels", "triples", "scoreddocs"]
@@ -18,7 +17,7 @@ class Collator:
 
     def __init__(
         self,
-        tokenizer: PreTrainedTokenizerBase,
+        tokenizer: TiteTokenizer,
         max_length: int | None = None,
         add_special_tokens: bool = True,
     ) -> None:
@@ -108,12 +107,12 @@ SPLIT_TYPE_TO_DATASET = {
 class IRDatasetsDataModule(LightningDataModule):
     def __init__(
         self,
-        tokenizer: PreTrainedTokenizerBase,
+        tokenizer: TiteTokenizer,
         add_special_tokens: bool = True,
         trainset: SplitDescriptor | None = None,
         valset: SplitDescriptor | None = None,
         testset: SplitDescriptor | None = None,
-        train_batch_size: int = 32,
+        batch_size: int = 32,
         inference_batch_size: int = 256,
         seed: int | None = None,
     ) -> None:
@@ -122,7 +121,7 @@ class IRDatasetsDataModule(LightningDataModule):
         self.trainset = trainset
         self.valset = valset
         self.testset = testset
-        self.train_batch_size = train_batch_size
+        self.batch_size = batch_size
         self.inference_batch_size = inference_batch_size
         self.collator = Collator(tokenizer, max_length=256, add_special_tokens=add_special_tokens)
 
@@ -131,7 +130,7 @@ class IRDatasetsDataModule(LightningDataModule):
             raise ValueError("No training set provided")
         return DataLoader(
             SPLIT_TYPE_TO_DATASET[self.trainset[1]](self.trainset[0]),
-            batch_size=self.train_batch_size,
+            batch_size=self.batch_size,
             collate_fn=self.collator,
         )
 

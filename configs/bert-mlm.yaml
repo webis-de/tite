@@ -8,6 +8,7 @@ model:
           class_path: tite.bert.BertConfig
           init_args:
             num_hidden_layers: 12
+            unpadding: false
     tokenizer:
       class_path: tite.tokenizer.TiteTokenizer
       init_args:
@@ -34,5 +35,7 @@ model:
     - class_path: tite.loss.mlm.MLMCrossEntropy
       init_args:
         vocab_size: 30522
+    log_additional_metrics: false
     validate_on_glue: true
-    validate_on_msmarco: false
+    validate_on_msmarco: true
+    log_gradients: true

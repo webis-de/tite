@@ -6,14 +6,26 @@ import pandas as pd
 import torch
 from lightning import LightningModule
 from torch import Tensor
-from transformers import PreTrainedTokenizerBase
 
 from .model import TiteModel
+from .tokenizer import TiteTokenizer
 
 
 class MSMARCOModule(LightningModule):
-    def __init__(self, model: TiteModel, tokenizer: PreTrainedTokenizerBase) -> None:
+    def __init__(
+        self,
+        model: TiteModel | None = None,
+        tokenizer: TiteTokenizer | None = None,
+        model_name_or_path: str | None = None,
+        similarity: str = "cosine",
+    ) -> None:
         super().__init__()
+        if model_name_or_path is not None:
+            model = TiteModel.from_pretrained(model_name_or_path)
+            tokenizer = TiteTokenizer.from_pretrained(model_name_or_path)
+        else:
+            assert model is not None and tokenizer is not None
+        self.similarity = similarity
         self.model = model
         self.tokenizer = tokenizer
         self.validation_step_outputs = []
@@ -23,10 +35,14 @@ class MSMARCOModule(LightningModule):
         query_emb = self.model(**batch["encoded_query"])
         pos_doc_emb = self.model(**batch["encoded_pos_doc"])
         neg_doc_emb = self.model(**batch["encoded_neg_doc"])
-        # pos_sim = (query_emb @ pos_doc_emb.transpose(-1, -2)).view(-1)
-        # neg_sim = (query_emb @ neg_doc_emb.transpose(-1, -2)).view(-1)
-        pos_sim = torch.nn.functional.cosine_similarity(query_emb.squeeze(1), pos_doc_emb.squeeze(1))
-        neg_sim = torch.nn.functional.cosine_similarity(query_emb.squeeze(1), neg_doc_emb.squeeze(1))
+        if self.similarity == "cosine":
+            pos_sim = torch.nn.functional.cosine_similarity(query_emb.squeeze(1), pos_doc_emb.squeeze(1))
+            neg_sim = torch.nn.functional.cosine_similarity(query_emb.squeeze(1), neg_doc_emb.squeeze(1))
+        elif self.similarity == "dot":
+            pos_sim = (query_emb @ pos_doc_emb.transpose(-1, -2)).view(-1)
+            neg_sim = (query_emb @ neg_doc_emb.transpose(-1, -2)).view(-1)
+        else:
+            raise ValueError(f"Unknown similarity: {self.similarity}")
         margin = pos_sim - neg_sim
         loss = torch.nn.functional.binary_cross_entropy_with_logits(margin, torch.ones_like(margin))
         self.log("train_loss", loss, prog_bar=True, on_epoch=True)

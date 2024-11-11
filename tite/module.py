@@ -116,7 +116,7 @@ class TiteModule(LightningModule):
                 add_special_tokens=add_special_tokens,
                 trainset=("msmarco-passage/train/triples-small", "triples"),
                 valset=("msmarco-passage/trec-dl-2019/judged", "scoreddocs"),
-                train_batch_size=32,
+                batch_size=32,
                 inference_batch_size=256,
             )
             copy_student = deepcopy(self.student).train()
