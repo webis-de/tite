@@ -116,14 +116,14 @@ class TiteModule(LightningModule):
                 add_special_tokens=add_special_tokens,
                 trainset=("msmarco-passage/train/triples-small", "triples"),
                 valset=("msmarco-passage/trec-dl-2019/judged", "scoreddocs"),
-                batch_size=32,
+                batch_size=128,
                 inference_batch_size=256,
             )
             copy_student = deepcopy(self.student).train()
             if hasattr(copy_student.config, "pooling") and getattr(copy_student.config, "pooling") is None:
                 copy_student.config.pooling = "first"
             msmarco_module = MSMARCOModule(copy_student, self.tokenizer)
-            max_steps = 1_000
+            max_steps = 5_000
             trainer = Trainer(
                 logger=False,
                 precision=(self.trainer.precision if self.trainer is not None else "bf16-mixed"),
