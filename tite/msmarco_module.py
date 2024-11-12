@@ -6,6 +6,7 @@ import pandas as pd
 import torch
 from lightning import LightningModule
 from torch import Tensor
+from transformers import PreTrainedTokenizerBase
 
 from .model import TiteModel
 from .tokenizer import TiteTokenizer
@@ -14,10 +15,10 @@ from .tokenizer import TiteTokenizer
 class MSMARCOModule(LightningModule):
     def __init__(
         self,
-        model: TiteModel | None = None,
-        tokenizer: TiteTokenizer | None = None,
+        model: torch.nn.Module | None = None,
+        tokenizer: PreTrainedTokenizerBase | None = None,
         model_name_or_path: str | None = None,
-        similarity: str = "cosine",
+        similarity: str = "dot",
     ) -> None:
         super().__init__()
         if model_name_or_path is not None:

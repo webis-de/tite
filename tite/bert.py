@@ -61,6 +61,15 @@ class BertModel(TiteModel):
         return hidden_states
 
 
+class PreTrainedBertModel(BertModel):
+
+    def __init__(self, model_name_or_path: str, pooling: Literal["mean", "first"] | None = None):
+        config = HFBertConfig.from_pretrained(model_name_or_path)
+        bert_config = BertConfig(**config.to_dict(), pooling=pooling)
+        bert_config["positional_embeddings_type"] = config.position_embeddings_type
+        super().__init__(bert_config)
+
+
 class HFBertModel(Module):
 
     def __init__(
