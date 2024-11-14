@@ -1,7 +1,7 @@
 model:
   class_path: tite.msmarco_module.MSMARCOModule
   init_args:
-    model_name_or_path: /mnt/ceph/storage/data-tmp/current/fschlatt/tite/wandb/run-20241106_161802-3tbbw336/files/huggingface_checkpoint
+    model_name_or_path: /mnt/ceph/storage/data-tmp/current/fschlatt/tite/wandb/run-20241108_105457-j11kl1ef/files/huggingface_checkpoint
     similarity: dot
     # model:
     #   class_path: tite.model.TiteModel

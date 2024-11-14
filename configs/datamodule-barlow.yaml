@@ -32,9 +32,9 @@ data:
         - null
         max_length: 256
         student_string_transformations:
-        - class_path: tite.transformations.SentenceOffset
-          init_args:
-            transformation_prob: 1.0
+        # - class_path: tite.transformations.SentenceOffset
+        #   init_args:
+        #     transformation_prob: 1.0
         - class_path: tite.transformations.SentenceSwapNeighboring
           init_args:
             swap_prob: 0.5

@@ -44,6 +44,7 @@ class TiteConfig(PretrainedConfig):
         hidden_act: str = "gelu_pytorch_tanh",
         positional_embedding_type: Literal["absolute", "ALiBi"] = "ALiBi",
         unpadding: bool = False,
+        upscale_hidden_size: bool = False,
         **kwargs,
     ):
         super().__init__(pad_token_id=pad_token_id, **kwargs)
@@ -61,6 +62,7 @@ class TiteConfig(PretrainedConfig):
         self.hidden_act = hidden_act
         self.positional_embedding_type = positional_embedding_type
         self.unpadding = unpadding
+        self.upscale_hidden_size = upscale_hidden_size
 
         iterator = zip(
             [
@@ -220,13 +222,17 @@ class TiteSelfAttention(torch.nn.Module):
                 f"number of attention heads ({config.num_attention_heads})"
             )
 
-        hidden_size = config.hidden_size[layer_idx]
+        to_hidden_size = config.hidden_size[layer_idx]
+        if config.upscale_hidden_size:
+            from_hidden_size = to_hidden_size
+        else:
+            from_hidden_size = config.hidden_size[max(0, layer_idx - 1)]
         num_attention_heads = config.num_attention_heads[layer_idx]
         self.num_attention_heads = num_attention_heads
-        self.attention_head_size = int(hidden_size / num_attention_heads)
+        self.attention_head_size = int(to_hidden_size / num_attention_heads)
         self.all_head_size = self.num_attention_heads * self.attention_head_size
 
-        self.Wqkv = torch.nn.Linear(hidden_size, 3 * self.all_head_size)
+        self.Wqkv = torch.nn.Linear(from_hidden_size, 3 * self.all_head_size)
 
         kernel_size = config.kernel_size[layer_idx]
         stride = config.stride[layer_idx]
@@ -349,7 +355,7 @@ class TiteSelfOutput(torch.nn.Module):
         hidden_states = self.dropout(hidden_states)
         if self.pooling is not None:
             input_tensor, _ = self.pooling(input_tensor, attention_mask)
-        hidden_states = hidden_states + input_tensor
+        hidden_states[..., : input_tensor.shape[-1]] = hidden_states[..., : input_tensor.shape[-1]] + input_tensor
         hidden_states = self.LayerNorm(hidden_states)
         return hidden_states
 
@@ -424,7 +430,7 @@ class TiteLayer(torch.nn.Module):
         hidden_size = config.hidden_size[layer_idx]
         old_hidden_size = config.hidden_size[max(0, layer_idx - 1)]
         self.upscale_layer = None
-        if old_hidden_size != hidden_size:
+        if config.upscale_hidden_size and old_hidden_size != hidden_size:
             self.upscale_layer = TiteUpscale(config, layer_idx)
 
     def forward(

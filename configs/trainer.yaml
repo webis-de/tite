@@ -16,6 +16,6 @@ trainer:
     - class_path: LearningRateMonitor
       init_args:
         logging_interval: step
-  max_steps: 70000
+  max_steps: 30000
   enable_progress_bar: false
   num_sanity_val_steps: 0

@@ -25,6 +25,7 @@ model:
             kernel_size: [null, null, null, 3, 3, 3, 3, 3, 3, 3, 3, 3]
             stride: [null, null, null, 2, 2, 2, 2, 2, 2, 2, 2, 2]
             unpadding: false
+            upscale_hidden_size: false
     tokenizer:
       class_path: tite.tokenizer.TiteTokenizer
       init_args:
@@ -47,7 +48,7 @@ model:
     # - class_path: tite.loss.ProjectedBarlowTwins
       init_args:
         lmbda: 0.005
-        embeddim: 1536
+        embeddim: 768
       #   sizes: [2048, 2048, 2048]
     log_additional_metrics: false
     validate_on_glue: true
