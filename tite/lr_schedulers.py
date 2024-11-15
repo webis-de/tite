@@ -92,26 +92,27 @@ class LARSScheduler(WarmupLRScheduler):
         num_warmup_steps: int,
         num_training_steps: int,
         batch_size: int,
+        base_factor: float = 1,
         *args,
         verbose: bool = False,
         **kwargs,
     ) -> None:
         self.num_training_steps = num_training_steps
         self.batch_size = batch_size
+        self.base_factor = base_factor
         super().__init__(optimizer, num_warmup_steps, *args, verbose=verbose, **kwargs)
 
     def value_lambda(self, current_step: int) -> float:
         max_steps = self.num_training_steps
         warmup_steps = self.num_warmup_steps
-        base_factor = self.batch_size / 256
         if current_step < warmup_steps:
-            factor = base_factor * current_step / warmup_steps
+            factor = self.base_factor * current_step / warmup_steps
         else:
             current_step -= warmup_steps
             max_steps -= warmup_steps
             q = 0.5 * (1 + math.cos(math.pi * current_step / max_steps))
-            end_factor = base_factor * 0.001
-            factor = base_factor * q + end_factor * (1 - q)
+            end_factor = self.base_factor * 0.001
+            factor = self.base_factor * q + end_factor * (1 - q)
         return factor
 
 
