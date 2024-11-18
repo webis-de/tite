@@ -40,10 +40,10 @@ data:
         #     cls_id: 101
         #     sep_id: 102
         #     mask_prob: 0.3
-        teacher_token_transformations: 
+        teacher_token_transformations:
         - class_path: tite.transformations.MaskTokens
           init_args:
             mask_id: 103
             cls_id: 101
             sep_id: 102
-            mask_prob: 0.5
+            mask_prob: 0.0

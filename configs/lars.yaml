@@ -9,3 +9,4 @@ lr_scheduler:
   class_path: LARSScheduler
   init_args:
     num_warmup_steps: 3000
+    base_factor: 4

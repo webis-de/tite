@@ -18,7 +18,7 @@ from .lars import LARS
 from .lr_schedulers import LARSScheduler
 from .model import TiteModel
 from .msmarco_module import MSMARCOModule
-from .predictor import MAEDecoder, MLMDecoder
+from .predictor import MAEDecoder, MAEEnhancedDecoder, MLMDecoder
 
 
 class _DetachFromGrad(Module):
@@ -51,11 +51,11 @@ class TiteModule(LightningModule):
         # ties weights for BERT models -- only works for teacher MLM and student BERT
         if (
             len(predictors) == 1
-            and isinstance(predictors[0], (MLMDecoder, MAEDecoder))
+            and isinstance(predictors[0], (MLMDecoder, MAEDecoder, MAEEnhancedDecoder))
             and isinstance(student, TiteModel)
         ):
             student.tie_decoder_weights(predictors[0].decoder)
-            if isinstance(predictors[0], MAEDecoder):
+            if isinstance(predictors[0], (MAEDecoder, MAEEnhancedDecoder)):
                 predictors[0].embeddings.word_embeddings = student.get_input_embeddings()
                 if student.embeddings.position_embeddings is not None:
                     predictors[0].embeddings.position_embeddings = student.embeddings.position_embeddings
