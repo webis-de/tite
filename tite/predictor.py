@@ -89,8 +89,6 @@ class MAESelfAttention(torch.nn.Module):
         kv = rearrange(kv, "b s (t h d) -> t b h s d", t=2, h=self.num_attention_heads, d=self.attention_head_size)
         key, value = kv.unbind(dim=0)
 
-        # use embx as query + positional embeddings
-        # embx at position x can attend to random tokens in the sequence but not to the original token at position x
         query = self.Wq(query_hidden_states)
         query = rearrange(
             query_hidden_states,
@@ -101,7 +99,7 @@ class MAESelfAttention(torch.nn.Module):
         decoding_mask = torch.rand((batch_size, seq_len, seq_len), device=embx.device) >= self.mask_prob
         diag_mask = ~torch.eye(seq_len, device=embx.device).bool()
         enhanced_decoding_mask = attention_mask[:, None].logical_and(decoding_mask).logical_and(diag_mask)
-        enhanced_decoding_mask = torch.nn.functional.pad(enhanced_decoding_mask, (1, 0, 0, 0), value=True)
+        enhanced_decoding_mask = torch.nn.functional.pad(enhanced_decoding_mask, (embx.shape[1], 0, 0, 0), value=True)
         attn_weight = repeat(
             torch.where(enhanced_decoding_mask, 0, -10000.0),
             "b s1 s2 -> b h s1 s2",
@@ -207,9 +205,9 @@ class MAEEnhancedDecoder(PreTrainedModel):
         num_sub_vectors = embx.shape[-1] // key_value_hidden_states.shape[-1]
         embx = embx.view(embx.shape[0], num_sub_vectors, key_value_hidden_states.shape[-1])
         query_hidden_states = self.embeddings(torch.full_like(input_ids, self.mask_id), attention_mask)
-        hidden_states = self.attention(query_hidden_states, key_value_hidden_states, attention_mask, embx)
-        hidden_states = self.intermediate(hidden_states)
-        hidden_states = self.output(hidden_states, key_value_hidden_states)
+        attention_output = self.attention(query_hidden_states, key_value_hidden_states, attention_mask, embx)
+        intermediate_output = self.intermediate(attention_output)
+        hidden_states = self.output(intermediate_output, attention_output)
         logits = self.mlm_decoder(hidden_states)
         return logits
 
