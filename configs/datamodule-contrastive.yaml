@@ -34,6 +34,8 @@ data:
         student_string_transformations:
         - class_path: tite.transformations.SentenceOffset
           init_args:
+            min_offset: 0
+            max_offset: 7
             transformation_prob: 1.0
         - class_path: tite.transformations.SentenceSwapNeighboring
           init_args:
