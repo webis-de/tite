@@ -4,6 +4,7 @@ from typing import Any, Callable, NamedTuple
 from torch import Tensor
 from torch.nn import Module
 
+from tite.model import TiteModelOutput
 from tite.teacher import CopyStudent
 
 
@@ -40,6 +41,8 @@ class JEPA(Module):
         student_aux = {k[8:]: v for k, v in aux.items() if k.startswith("student_")}
         teacher_aux = {k[8:]: v for k, v in aux.items() if k.startswith("teacher_")}
         embx = self.student(**input)
+        if isinstance(embx, TiteModelOutput):
+            embx = embx.last_hidden_state
         losses = {}
         for teacher, predictor, loss in zip(self.teachers, self.predictors, self.losses):
             if target is None or isinstance(teacher, CopyStudent):
@@ -47,6 +50,8 @@ class JEPA(Module):
             else:
                 teacher_kwargs = parse_kwargs({**student_aux, **teacher_aux}, teacher)
                 emby = teacher(**target, **teacher_kwargs)
+                if isinstance(emby, TiteModelOutput):
+                    emby = emby.last_hidden_state
             predictor_kwargs = parse_kwargs({**student_aux, **teacher_aux, **(target or {})}, predictor)
             pred = predictor(embx, **predictor_kwargs)
             losses[loss.__class__.__name__] = loss(pred, emby)
