@@ -42,7 +42,7 @@ class TiteConfig(PretrainedConfig):
         layer_norm_eps: float = 1e-12,
         pad_token_id: int = 0,
         hidden_act: str = "gelu_pytorch_tanh",
-        positional_embedding_type: Literal["absolute", "ALiBi"] = "ALiBi",
+        positional_embedding_type: Literal["absolute", "ALiBi", "rotary"] = "ALiBi",
         unpadding: bool = False,
         upscale_hidden_size: bool = False,
         **kwargs,
@@ -245,8 +245,15 @@ class TiteSelfAttention(torch.nn.Module):
             self.register_buffer(
                 "alibi", self.get_alibi_embeddings(config.output_shapes[layer_idx], self.num_attention_heads)
             )
+            self.sinusoidal: torch.Tensor | None = None
+        elif config.positional_embedding_type == "rotary":
+            self.alibi = None
+            self.register_buffer(
+                "sinusoidal", self.get_sinusoidal_embeddings(config.output_shapes[layer_idx], self.attention_head_size)
+            )
         else:
             self.alibi = None
+            self.rotary = None
 
         self.unpadding = config.unpadding
 
@@ -290,6 +297,26 @@ class TiteSelfAttention(torch.nn.Module):
 
         return alibi
 
+    def get_sinusoidal_embeddings(self, max_position_embeddings: int, attention_head_size: int) -> torch.Tensor:
+        position = torch.arange(max_position_embeddings).unsqueeze(1)
+        div_term = torch.exp(
+            torch.arange(0, attention_head_size, 2).float() * (-math.log(10000.0) / attention_head_size)
+        )
+        sinusoidal_emb = torch.empty((max_position_embeddings, attention_head_size))
+        sinusoidal_emb[:, 0::2] = torch.sin(position * div_term)
+        sinusoidal_emb[:, 1::2] = torch.cos(position * div_term)
+        return sinusoidal_emb
+
+    def apply_rotary_position_embeddings(self, x: torch.Tensor) -> torch.Tensor:
+        assert self.sinusoidal is not None
+        # Split the sinusoidal_pos into sin and cos parts
+        sin, cos = self.sinusoidal[: x.shape[-2]].chunk(2, dim=-1)
+        # Apply the rotary embeddings to the query and key
+        x_rot = torch.stack((-x[..., 1::2], x[..., ::2]), dim=-1)
+        x_rot = torch.reshape(x_rot, x.shape[:-1] + (x.shape[-1] // 2, 2)) * torch.stack((cos, sin), dim=-1)
+        x_rot = torch.reshape(x_rot, x.shape)
+        return x_rot
+
     def forward(self, hidden_states: torch.Tensor, attention_mask: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         batch_size, seq_len = attention_mask.shape
         qkv = self.Wqkv(hidden_states)
@@ -308,6 +335,9 @@ class TiteSelfAttention(torch.nn.Module):
             query = rearrange(query, "b s (h d) -> b h s d", h=self.num_attention_heads, d=self.attention_head_size)
         new_seq_len = new_attention_mask.shape[1]
 
+        if self.sinusoidal is not None:
+            query = self.apply_rotary_position_embeddings(query)
+            key = self.apply_rotary_position_embeddings(key)
         attn_weight = repeat(
             torch.where(einsum(new_attention_mask, attention_mask, "b s1, b s2 -> b s1 s2"), 0, -10000.0),
             "b s1 s2 -> b h s1 s2",
