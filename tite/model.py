@@ -1,11 +1,13 @@
 import math
 import warnings
+from dataclasses import dataclass
 from typing import List, Literal, Tuple
 
 import torch
 from einops import einsum, rearrange, repeat
 from transformers import PretrainedConfig, PreTrainedModel
 from transformers.activations import ACT2FN
+from transformers.modeling_outputs import ModelOutput
 
 from .unpad import repad, unpad
 
@@ -26,7 +28,15 @@ def compute_output_shapes(
     return output_shapes
 
 
+@dataclass
+class TiteModelOutput(ModelOutput):
+    last_hidden_state: torch.Tensor
+
+
 class TiteConfig(PretrainedConfig):
+
+    model_type = "tite"
+
     def __init__(
         self,
         vocab_size: int = 30522,
@@ -138,7 +148,7 @@ class TiteModel(PreTrainedModel):
             module.bias.data.zero_()
             module.weight.data.fill_(1.0)
 
-    def forward(self, input_ids: torch.Tensor, attention_mask: torch.Tensor | None = None) -> torch.Tensor:
+    def forward(self, input_ids: torch.Tensor, attention_mask: torch.Tensor | None = None, **kwargs) -> TiteModelOutput:
         if attention_mask is None:
             attention_mask = torch.ones(1, input_ids.shape[1], device=input_ids.device, dtype=torch.bool)
         attention_mask = attention_mask.bool()
@@ -153,7 +163,7 @@ class TiteModel(PreTrainedModel):
                 hidden_states = repad(hidden_states, indices, batch_size, seq_len)
             else:
                 hidden_states = hidden_states.unsqueeze(1)
-        return hidden_states
+        return TiteModelOutput(last_hidden_state=hidden_states)
 
 
 class TiteEmbeddings(torch.nn.Module):
@@ -198,7 +208,7 @@ class MaskedAvgPool1d(torch.nn.Module):
         self.kernel_size = kernel_size
         self.stride = stride
 
-    def forward(self, x: torch.Tensor, mask: torch.BoolTensor) -> tuple[torch.Tensor, torch.BoolTensor]:
+    def forward(self, x: torch.Tensor, mask: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         if x.shape[-2] == 1:
             return x, mask
         x = torch.where(mask.unsqueeze(-1).expand((-1, -1, x.shape[-1])), x, 0)
