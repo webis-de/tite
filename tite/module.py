@@ -103,6 +103,7 @@ class TiteModule(LightningModule):
                     # callbacks=[EarlyStopping(glue_module._evaluation_metrics[0].__class__.__name__, mode="max", patience=1)],
                     enable_checkpointing=False,
                     num_sanity_val_steps=0,
+                    enable_progress_bar=False,
                 )
                 trainer.fit(glue_module, glue)
                 metrics = trainer.logged_metrics
@@ -132,6 +133,7 @@ class TiteModule(LightningModule):
                 enable_checkpointing=False,
                 num_sanity_val_steps=0,
                 val_check_interval=max_steps,
+                enable_progress_bar=False,
             )
             trainer.fit(msmarco_module, msmarco)
             metrics = trainer.logged_metrics
