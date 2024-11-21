@@ -115,6 +115,7 @@ class IRDatasetsDataModule(LightningDataModule):
         batch_size: int = 32,
         inference_batch_size: int = 256,
         seed: int | None = None,
+        max_length: int = 256,
     ) -> None:
         super().__init__()
         seed = seed_or_none(seed)
@@ -123,7 +124,7 @@ class IRDatasetsDataModule(LightningDataModule):
         self.testset = testset
         self.batch_size = batch_size
         self.inference_batch_size = inference_batch_size
-        self.collator = Collator(tokenizer, max_length=256, add_special_tokens=add_special_tokens)
+        self.collator = Collator(tokenizer, max_length=max_length, add_special_tokens=add_special_tokens)
 
     def train_dataloader(self) -> DataLoader:
         if self.trainset is None:
