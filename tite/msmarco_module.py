@@ -50,8 +50,8 @@ class MSMARCOModule(LightningModule):
         return loss
 
     def validation_step(self, batch, *args, **kwargs) -> None:
-        query_emb = self.model(**batch["encoded_query"])
-        doc_emb = self.model(**batch["encoded_doc"])
+        query_emb = self.model(**batch["encoded_query"]).last_hidden_state
+        doc_emb = self.model(**batch["encoded_doc"]).last_hidden_state
         sim = (query_emb @ doc_emb.transpose(-1, -2)).view(-1)
         self.validation_step_outputs.extend(zip(batch["query_id"], batch["doc_id"], sim.tolist(), batch["dataset_id"]))
         # logits = self.classification_head(output.mean(1))
