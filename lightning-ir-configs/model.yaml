@@ -1,0 +1,22 @@
+model:
+  class_path: BiEncoderModule
+  init_args:
+    model_name_or_path: /mnt/ceph/storage/data-tmp/current/fschlatt/tite/wandb/run-20241115_211750-4nw8ob4m/files/huggingface_checkpoint
+    config:
+      class_path: BiEncoderConfig
+      init_args:
+        similarity_function: dot
+        query_pooling_strategy: first
+        doc_pooling_strategy: first
+        query_length: 32
+        doc_length: 256
+        embedding_dim: 768
+        projection: null
+    loss_functions:
+    - class_path: SupervisedMarginMSE
+    - class_path: KLDivergence
+    - class_path: ScoreBasedInBatchCrossEntropy
+      init_args:
+        min_target_diff: 3
+    evaluation_metrics:
+    - nDCG@10

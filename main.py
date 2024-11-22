@@ -95,6 +95,7 @@ class CustomLightningCLI(LightningCLI):
             "lr_scheduler.init_args.batch_size",
             compute_fn=compute_global_batch_size,
         )
+        parser.link_arguments("model.init_args.tokenizer", "data.init_args.collator.init_args.tokenizer")
 
 
 class DummyTite(PreTrainedModel):

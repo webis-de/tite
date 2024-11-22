@@ -17,6 +17,6 @@ trainer:
       init_args:
         logging_interval: step
   max_steps: 70000
+  accumulate_grad_batches: 2
   enable_progress_bar: false
-  num_sanity_val_steps: 0
-  val_check_interval: 10000
+  val_check_interval: 20000

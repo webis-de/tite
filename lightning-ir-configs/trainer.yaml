@@ -1,0 +1,31 @@
+seed_everything: 0
+trainer:
+  accelerator: auto
+  strategy: auto
+  devices: auto
+  num_nodes: 1
+  precision: bf16-mixed
+  logger:
+    class_path: LightningIRWandbLogger
+    init_args:
+      project: tite
+    dict_kwargs:
+      entity: tite
+  callbacks:
+  - class_path: ModelCheckpoint
+    init_args:
+      monitor: nDCG@10
+      mode: max
+      save_on_train_epoch_end: false
+      save_top_k: 1
+      every_n_epochs: 1
+  - class_path: tite.callbacks.DummyImportCallback
+  max_epochs: null
+  max_steps: 100000
+  val_check_interval: 80000
+  check_val_every_n_epoch: null
+  num_sanity_val_steps: 2
+  accumulate_grad_batches: 8
+  gradient_clip_val: 1
+  inference_mode: true
+  enable_progress_bar: false

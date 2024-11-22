@@ -1,0 +1,9 @@
+optimizer:
+  class_path: tite.adamw.AdamWNoWeightDecayBiasNorm
+  init_args:
+    lr: 1e-5
+lr_scheduler:
+  class_path: tite.lr_schedulers.SigmoidLRSchedulerWithLinearWarmup
+  init_args:
+    num_warmup_steps: 3000
+    final_value: 0.02
