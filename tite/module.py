@@ -1,11 +1,9 @@
-import math
 from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
 import torch
 from lightning import LightningModule, Trainer
-from lightning.pytorch.callbacks.early_stopping import EarlyStopping
 from lightning.pytorch.utilities import grad_norm
 from torch import Tensor
 from torch.nn import Module
@@ -14,8 +12,6 @@ from transformers import PreTrainedTokenizerBase
 from .datasets import GLUEDataModule, IRDatasetsDataModule
 from .glue_module import GlueModule
 from .jepa import JEPA, LossFn
-from .lars import LARS
-from .lr_schedulers import LARSScheduler
 from .model import TiteModel
 from .msmarco_module import MSMARCOModule
 from .predictor import MAEDecoder, MAEEnhancedDecoder, MLMDecoder
@@ -100,7 +96,6 @@ class TiteModule(LightningModule):
                     logger=False,
                     precision=(self.trainer.precision if self.trainer is not None else "bf16-mixed"),
                     max_epochs=10,
-                    # callbacks=[EarlyStopping(glue_module._evaluation_metrics[0].__class__.__name__, mode="max", patience=1)],
                     enable_checkpointing=False,
                     num_sanity_val_steps=0,
                     enable_progress_bar=False,
@@ -129,7 +124,6 @@ class TiteModule(LightningModule):
                 logger=False,
                 precision=(self.trainer.precision if self.trainer is not None else "bf16-mixed"),
                 max_steps=max_steps,
-                # callbacks=[EarlyStopping("MeanSquaredError", mode="min", patience=1)],
                 enable_checkpointing=False,
                 num_sanity_val_steps=0,
                 val_check_interval=max_steps,
