@@ -66,8 +66,7 @@ class GlueModule(LightningModule):
         self.evaluation_metrics = torch.nn.ModuleList(METRICS_MAP[task])
 
     def training_step(self, batch) -> Tensor:
-        output = self.model(batch["input_ids"], batch["attention_mask"])
-        # logits = self.classification_head(output.mean(1))
+        output = self.model(batch["input_ids"], batch["attention_mask"]).last_hidden_state
         logits = self.classification_head(output[:, 0])
         loss = self.loss_function(logits, batch["label"])
         self.log("train_loss", loss, prog_bar=True, on_epoch=True)
@@ -75,8 +74,7 @@ class GlueModule(LightningModule):
 
     def validation_step(self, batch, *args, **kwargs) -> None:
         output = self.model(batch["input_ids"], batch["attention_mask"])
-        # logits = self.classification_head(output.mean(1))
-        logits = self.classification_head(output[:, 0])
+        logits = self.classification_head(output.last_hidden_state[:, 0])
         if self.num_classes > 1:
             logits = logits.argmax(-1)
         for validation_metric in self.evaluation_metrics:

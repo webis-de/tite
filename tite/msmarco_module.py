@@ -33,9 +33,9 @@ class MSMARCOModule(LightningModule):
         self.ndcgs = []
 
     def training_step(self, batch) -> Tensor:
-        query_emb = self.model(**batch["encoded_query"])
-        pos_doc_emb = self.model(**batch["encoded_pos_doc"])
-        neg_doc_emb = self.model(**batch["encoded_neg_doc"])
+        query_emb = self.model(**batch["encoded_query"]).last_hidden_state
+        pos_doc_emb = self.model(**batch["encoded_pos_doc"]).last_hidden_state
+        neg_doc_emb = self.model(**batch["encoded_neg_doc"]).last_hidden_state
         if self.similarity == "cosine":
             pos_sim = torch.nn.functional.cosine_similarity(query_emb.squeeze(1), pos_doc_emb.squeeze(1))
             neg_sim = torch.nn.functional.cosine_similarity(query_emb.squeeze(1), neg_doc_emb.squeeze(1))
