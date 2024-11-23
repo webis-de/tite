@@ -38,8 +38,12 @@ class MLMTeacher(Module):
 
 class MAETeacher(MLMTeacher):
 
+    def __init__(self, padid: int, enhanced: bool) -> None:
+        super().__init__(padid)
+        self.enhanced = enhanced
+
     def forward(self, original_input_ids: Tensor, mlm_mask: Tensor, special_tokens_mask: Tensor, **kwargs) -> Tensor:
-        if not mlm_mask.any():
+        if self.enhanced:
             # enhanced decoding, predict every token
             return torch.where(original_input_ids.eq(self.pad_id) | special_tokens_mask, -100, original_input_ids)
         return super().forward(original_input_ids, mlm_mask, **kwargs)

@@ -1,7 +1,9 @@
 model:
   class_path: BiEncoderModule
   init_args:
-    model_name_or_path: /mnt/ceph/storage/data-tmp/current/fschlatt/tite/wandb/run-20241115_211750-4nw8ob4m/files/huggingface_checkpoint
+    # model_name_or_path: /mnt/ceph/storage/data-tmp/current/fschlatt/tite/wandb/run-20241115_211750-4nw8ob4m/files/huggingface_checkpoint
+    # model_name_or_path: bert-base-uncased
+    model_name_or_path: Shitao/RetroMAE
     config:
       class_path: BiEncoderConfig
       init_args:

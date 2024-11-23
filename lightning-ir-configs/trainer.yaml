@@ -19,6 +19,9 @@ trainer:
       save_on_train_epoch_end: false
       save_top_k: 1
       every_n_epochs: 1
+  - class_path: LearningRateMonitor
+      init_args:
+        logging_interval: step
   - class_path: tite.callbacks.DummyImportCallback
   max_epochs: null
   max_steps: 100000

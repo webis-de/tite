@@ -23,15 +23,32 @@ model:
       dict_kwargs:
         model_max_length: 512
     teachers:
+    - class_path: tite.teacher.MAETeacher
+      init_args:
+        padid: 0
+        enhanced: true
     - class_path: tite.teacher.MLMTeacher
       init_args:
         padid: 0
     predictors:
+    - class_path: tite.predictor.MAEEnhancedDecoder
+      init_args:
+        config:
+          class_path: tite.bert.BertConfig
+          init_args:
+            pooling: null
+            unpadding: false
+            positional_embedding_type: absolute
+        mask_id: 103
+        mask_prob: 0.5
     - class_path: tite.predictor.MLMDecoder
       init_args:
         vocab_size: 30522
         hidden_size: 768
     losses:
+    - class_path: tite.loss.mlm.MLMCrossEntropy
+      init_args:
+        vocab_size: 30522
     - class_path: tite.loss.mlm.OrigMLMCrossEntropy
       init_args:
         vocab_size: 30522

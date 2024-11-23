@@ -45,16 +45,13 @@ class TiteModule(LightningModule):
     ) -> None:
         super().__init__()
         # ties weights for BERT models -- only works for teacher MLM and student BERT
-        if (
-            len(predictors) == 1
-            and isinstance(predictors[0], (MLMDecoder, MAEDecoder, MAEEnhancedDecoder))
-            and isinstance(student, TiteModel)
-        ):
-            student.tie_decoder_weights(predictors[0].decoder)
-            if isinstance(predictors[0], (MAEDecoder, MAEEnhancedDecoder)):
-                predictors[0].embeddings.word_embeddings = student.get_input_embeddings()
-                if student.embeddings.position_embeddings is not None:
-                    predictors[0].embeddings.position_embeddings = student.embeddings.position_embeddings
+        for predictor in predictors:
+            if isinstance(predictor, (MLMDecoder, MAEDecoder, MAEEnhancedDecoder)) and isinstance(student, TiteModel):
+                student.tie_decoder_weights(predictor.decoder)
+                if isinstance(predictor, (MAEDecoder, MAEEnhancedDecoder)):
+                    predictor.embeddings.word_embeddings = student.get_input_embeddings()
+                    if student.embeddings.position_embeddings is not None:
+                        predictor.embeddings.position_embeddings = student.embeddings.position_embeddings
         self.student = student
         self.teachers = torch.nn.ModuleList([teacher if teacher is not None else student for teacher in teachers])
         self.tokenizer = tokenizer

@@ -198,6 +198,8 @@ class MAEEnhancedDecoder(PreTrainedModel):
     def forward(
         self, embx: Tensor, input_ids: torch.Tensor, attention_mask: torch.Tensor | None = None
     ) -> torch.Tensor:
+        if embx.shape[1] > 1:
+            embx = embx[:, [0]]
         if attention_mask is None:
             attention_mask = torch.ones(1, input_ids.shape[1], device=input_ids.device, dtype=torch.bool)
         attention_mask = attention_mask.bool()

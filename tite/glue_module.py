@@ -7,6 +7,7 @@ from lightning import LightningModule
 from torch import Tensor
 from transformers import PreTrainedTokenizerBase
 
+from .lars import LARS
 from .model import TiteModel
 
 NUM_CLASSES_MAP = {
@@ -85,5 +86,10 @@ class GlueModule(LightningModule):
         self.validation_step(batch, *args, **kwargs)
 
     def configure_optimizers(self) -> torch.optim.Optimizer:
-        opt = torch.optim.AdamW(self.parameters(), lr=5e-5)
+        if type(self.model) is TiteModel:
+            opt = LARS(
+                self.parameters(), lr_weights=0.8, lr_biases=0.02, weight_decay_filter=True, lars_adaptation_filter=True
+            )
+        else:
+            opt = torch.optim.AdamW(self.parameters(), lr=5e-5)
         return opt
