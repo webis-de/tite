@@ -5,7 +5,7 @@ from torch.nn import Module
 from transformers import BertConfig as HFBertConfig
 from transformers import BertModel as HFBert
 
-from .model import TiteConfig, TiteModel
+from .model import TiteConfig, TiteModel, TiteModelOutput
 
 
 class BertConfig(TiteConfig):
@@ -52,13 +52,14 @@ class BertModel(TiteModel):
     def __init__(self, config: BertConfig):
         super().__init__(config)
 
-    def forward(self, input_ids: Tensor, attention_mask: Tensor | None = None) -> Tensor:
-        hidden_states = super().forward(input_ids, attention_mask)
+    def forward(self, input_ids: Tensor, attention_mask: Tensor | None = None) -> TiteModelOutput:
+        output = super().forward(input_ids, attention_mask)
+        hidden_states = output.last_hidden_state
         if self.config.pooling == "first":
-            return hidden_states[:, [0]]
+            return TiteModelOutput(hidden_states[:, [0]])
         elif self.config.pooling == "mean":
-            return hidden_states.mean(dim=1, keepdim=True)
-        return hidden_states
+            return TiteModelOutput(hidden_states.mean(dim=1, keepdim=True))
+        return output
 
 
 class PreTrainedBertModel(BertModel):
