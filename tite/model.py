@@ -263,7 +263,7 @@ class TiteSelfAttention(torch.nn.Module):
             )
         else:
             self.alibi = None
-            self.rotary = None
+            self.sinusoidal = None
 
         self.unpadding = config.unpadding
 
