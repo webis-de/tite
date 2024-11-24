@@ -154,10 +154,11 @@ class MAEAttention(torch.nn.Module):
 
 class MAEEnhancedDecoder(PreTrainedModel):
 
-    def __init__(self, config: BertConfig, mask_id: int, mask_prob: float):
+    def __init__(self, config: BertConfig, mask_id: int, mask_prob: float, query_strategy: str = "embx"):
         super().__init__(config)
         self.config = config
         self.mask_id = mask_id
+        self.query_strategy = query_strategy
 
         self.embeddings = TiteEmbeddings(config)
         self.attention = MAEAttention(config, 0, mask_prob)
@@ -206,7 +207,16 @@ class MAEEnhancedDecoder(PreTrainedModel):
         key_value_hidden_states = self.embeddings(input_ids, attention_mask)
         num_sub_vectors = embx.shape[-1] // key_value_hidden_states.shape[-1]
         embx = embx.view(embx.shape[0], num_sub_vectors, key_value_hidden_states.shape[-1])
-        query_hidden_states = self.embeddings(torch.full_like(input_ids, self.mask_id), attention_mask)
+        if self.query_strategy == "embx":
+            assert num_sub_vectors == 1
+            assert self.embeddings.position_embeddings is not None
+            query_hidden_states = embx + self.embeddings.position_embeddings(
+                torch.arange(input_ids.shape[1], device=embx.device)
+            )
+        elif self.query_strategy == "mask":
+            query_hidden_states = self.embeddings(torch.full_like(input_ids, self.mask_id), attention_mask)
+        else:
+            raise ValueError(f"Unknown query strategy: {self.query_strategy}")
         attention_output = self.attention(query_hidden_states, key_value_hidden_states, attention_mask, embx)
         intermediate_output = self.intermediate(attention_output)
         hidden_states = self.output(intermediate_output, attention_output)
