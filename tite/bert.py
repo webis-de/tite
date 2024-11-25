@@ -22,7 +22,7 @@ class BertConfig(TiteConfig):
         layer_norm_eps: float = 1e-12,
         pad_token_id: int = 0,
         hidden_act: str = "gelu_pytorch_tanh",
-        positional_embedding_type: Literal["absolute", "ALiBi"] = "ALiBi",
+        positional_embedding_type: Literal["absolute", "ALiBi", "rotary"] = "ALiBi",
         pooling: Literal["mean", "first"] | None = None,
         unpadding: bool = False,
         **kwargs
