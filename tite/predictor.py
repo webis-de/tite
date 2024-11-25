@@ -329,6 +329,13 @@ class MAEDecoder(BertModel):
         return logits
 
 
+class BOWDecoder(MLMDecoder):
+
+    def forward(self, hidden_states: Tensor, *args, **kwargs) -> torch.Tensor:
+        hidden_states = hidden_states[:, [0]]
+        return super().forward(hidden_states, *args, **kwargs)
+
+
 class BlockPredictor(Module):
 
     def __init__(

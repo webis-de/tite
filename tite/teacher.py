@@ -49,6 +49,21 @@ class MAETeacher(MLMTeacher):
         return super().forward(original_input_ids, mlm_mask, **kwargs)
 
 
+class BOWTeacher(Module):
+    def __init__(self, vocab_size: int, padid: int) -> None:
+        super().__init__()
+        self.vocab_size = vocab_size
+        self.pad_id = padid
+
+    def forward(self, original_input_ids: Tensor, special_tokens_mask: Tensor, **kwargs) -> Tensor:
+        targets = torch.zeros(original_input_ids.shape[0], self.vocab_size, device=original_input_ids.device)
+        input_ids = original_input_ids.clone()
+        input_ids[special_tokens_mask] = self.pad_id
+        targets = targets.scatter_(1, input_ids, 1)
+        targets[self.pad_id] = 0
+        return targets
+
+
 class CopyStudent(Module):
     def __init__(self) -> None:
         super().__init__()
