@@ -217,18 +217,36 @@ class MaskedAvgPool1d(torch.nn.Module):
         self.kernel_size = kernel_size
         self.stride = stride
 
-    def forward(self, x: torch.Tensor, mask: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    # def forward(self, x: torch.Tensor, mask: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    #     if x.shape[-2] == 1:
+    #         return x, mask
+    #     x = torch.where(mask.unsqueeze(-1).expand((-1, -1, x.shape[-1])), x, 0)
+    #     kernel_size = min(self.kernel_size, mask.shape[-1])
+    #     normalization = sum_pool2d(
+    #         mask.float().unsqueeze(-1), kernel_size=(kernel_size, 1), stride=(self.stride, 1), ceil_mode=True
+    #     )
+    #     y_mask = (normalization != 0).squeeze(-1)
+    #     normalization[normalization == 0] = 1
+    #     sums = sum_pool2d(x, kernel_size=(kernel_size, 1), stride=(self.stride, 1), ceil_mode=True)
+    #     y = sums / normalization
+    #     return y, y_mask
+
+    def forward(self, x: torch.Tensor, mask: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         if x.shape[-2] == 1:
             return x, mask
-        x = torch.where(mask.unsqueeze(-1).expand((-1, -1, x.shape[-1])), x, 0)
-        kernel_size = min(self.kernel_size, mask.shape[-1])
-        normalization = sum_pool2d(
-            mask.float().unsqueeze(-1), kernel_size=(kernel_size, 1), stride=(self.stride, 1), ceil_mode=True
-        )
-        y_mask = (normalization != 0).squeeze(-1)
+        padding = (x.shape[-2] - self.kernel_size) % self.stride
+        if self.kernel_size > x.shape[-2]:
+            padding = self.kernel_size - x.shape[-2]
+        if padding != 0:
+            x = torch.nn.functional.pad(x, (0, 0, 0, padding))
+            mask = torch.nn.functional.pad(mask, (0, padding))
+        x_blocks = x.unfold(-2, self.kernel_size, self.stride)
+        mask_blocks = mask.unfold(1, self.kernel_size, self.stride).unsqueeze(-2)
+        x_masked = x_blocks * mask_blocks
+        normalization = mask_blocks.sum(-1)
         normalization[normalization == 0] = 1
-        sums = sum_pool2d(x, kernel_size=(kernel_size, 1), stride=(self.stride, 1), ceil_mode=True)
-        y = sums / normalization
+        y = x_masked.sum(-1) / normalization
+        y_mask = mask_blocks.amax(-1).squeeze(-1)
         return y, y_mask
 
 
