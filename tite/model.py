@@ -31,6 +31,7 @@ def compute_output_shapes(
 @dataclass
 class TiteModelOutput(ModelOutput):
     last_hidden_state: torch.Tensor
+    hidden_states: Tuple[torch.Tensor, ...] | None = None
 
 
 class TiteConfig(PretrainedConfig):
@@ -55,6 +56,7 @@ class TiteConfig(PretrainedConfig):
         positional_embedding_type: Literal["absolute", "ALiBi", "rotary"] = "ALiBi",
         unpadding: bool = False,
         upscale_hidden_size: bool = False,
+        attention_based_pooling: bool = True,
         **kwargs,
     ):
         super().__init__(pad_token_id=pad_token_id, **kwargs)
@@ -73,6 +75,7 @@ class TiteConfig(PretrainedConfig):
         self.positional_embedding_type = positional_embedding_type
         self.unpadding = unpadding
         self.upscale_hidden_size = upscale_hidden_size
+        self.attention_based_pooling = attention_based_pooling
 
         iterator = zip(
             [
@@ -148,7 +151,13 @@ class TiteModel(PreTrainedModel):
             module.bias.data.zero_()
             module.weight.data.fill_(1.0)
 
-    def forward(self, input_ids: torch.Tensor, attention_mask: torch.Tensor | None = None, **kwargs) -> TiteModelOutput:
+    def forward(
+        self,
+        input_ids: torch.Tensor,
+        attention_mask: torch.Tensor | None = None,
+        output_hidden_states: bool = False,
+        **kwargs,
+    ) -> TiteModelOutput:
         if attention_mask is None:
             attention_mask = torch.ones(1, input_ids.shape[1], device=input_ids.device, dtype=torch.bool)
         attention_mask = attention_mask.bool()
@@ -157,13 +166,13 @@ class TiteModel(PreTrainedModel):
             indices = torch.nonzero(attention_mask.flatten()).flatten()
             input_ids = unpad(input_ids, indices)
         hidden_states = self.embeddings(input_ids, attention_mask)
-        hidden_states = self.encoder(hidden_states, attention_mask)
+        hidden_states, all_hidden_states = self.encoder(hidden_states, attention_mask, output_hidden_states)
         if self.unpadding:
             if hidden_states.shape[0] != batch_size:
                 hidden_states = repad(hidden_states, indices, batch_size, seq_len)
             else:
                 hidden_states = hidden_states.unsqueeze(1)
-        return TiteModelOutput(last_hidden_state=hidden_states)
+        return TiteModelOutput(last_hidden_state=hidden_states, hidden_states=all_hidden_states)
 
 
 class TiteEmbeddings(torch.nn.Module):
@@ -247,7 +256,7 @@ class TiteSelfAttention(torch.nn.Module):
         kernel_size = config.kernel_size[layer_idx]
         stride = config.stride[layer_idx]
         self.pooling = None
-        if kernel_size is not None and stride is not None:
+        if kernel_size is not None and stride is not None and config.attention_based_pooling:
             self.pooling = MaskedAvgPool1d(kernel_size, stride)
 
         self.dropout_prob = config.dropout_prob
@@ -390,17 +399,20 @@ class TiteSelfOutput(torch.nn.Module):
         self.pooling = None
         if kernel_size is not None and stride is not None:
             self.pooling = MaskedAvgPool1d(kernel_size, stride)
+        self.attention_based_pooling = config.attention_based_pooling
 
     def forward(
         self, hidden_states: torch.Tensor, attention_mask: torch.Tensor, input_tensor: torch.Tensor
     ) -> torch.Tensor:
         hidden_states = self.dense(hidden_states)
         hidden_states = self.dropout(hidden_states)
-        if self.pooling is not None:
+        if self.pooling is not None and self.attention_based_pooling:
             input_tensor, _ = self.pooling(input_tensor, attention_mask)
         hidden_states[..., : input_tensor.shape[-1]] = hidden_states[..., : input_tensor.shape[-1]] + input_tensor
+        if not self.attention_based_pooling and self.pooling is not None:
+            hidden_states, attention_mask = self.pooling(hidden_states, attention_mask)
         hidden_states = self.LayerNorm(hidden_states)
-        return hidden_states
+        return hidden_states, attention_mask
 
 
 class TiteAttention(torch.nn.Module):
@@ -411,7 +423,7 @@ class TiteAttention(torch.nn.Module):
 
     def forward(self, hidden_states: torch.Tensor, attention_mask: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         self_outputs, new_attention_mask = self.self(hidden_states, attention_mask)
-        attn_output = self.output(self_outputs, attention_mask, hidden_states)
+        attn_output, new_attention_mask = self.output(self_outputs, attention_mask, hidden_states)
         return attn_output, new_attention_mask
 
 
@@ -495,7 +507,12 @@ class TiteEncoder(torch.nn.Module):
             [TiteLayer(config, layer_idx) for layer_idx in range(config.num_hidden_layers)]
         )
 
-    def forward(self, hidden_states: torch.Tensor, attention_mask: torch.BoolTensor) -> torch.Tensor:
+    def forward(
+        self, hidden_states: torch.Tensor, attention_mask: torch.BoolTensor, output_hidden_states: bool = False
+    ) -> Tuple[torch.Tensor, Tuple[torch.Tensor, ...] | None]:
+        all_hidden_states = [hidden_states] if output_hidden_states else None
         for layer_module in self.layer:
             hidden_states, attention_mask = layer_module(hidden_states, attention_mask)
-        return hidden_states
+            if all_hidden_states is not None:
+                all_hidden_states.append(hidden_states)
+        return (hidden_states, tuple(all_hidden_states) if all_hidden_states is not None else None)
