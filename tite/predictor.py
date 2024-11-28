@@ -152,9 +152,9 @@ class MAESelfAttention(torch.nn.Module):
     ) -> torch.Tensor:
         batch_size, seq_len = attention_mask.shape
 
-        expanded_hidden_states = torch.cat([embx, key_value_hidden_states], dim=1)
+        expanded_key_value_hidden_states = torch.cat([embx, key_value_hidden_states], dim=1)
 
-        kv = self.Wkv(expanded_hidden_states)
+        kv = self.Wkv(expanded_key_value_hidden_states)
         kv = rearrange(kv, "b s (t h d) -> t b h s d", t=2, h=self.num_attention_heads, d=self.attention_head_size)
         key, value = kv.unbind(dim=0)
 
