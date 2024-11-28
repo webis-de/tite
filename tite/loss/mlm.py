@@ -30,4 +30,9 @@ class BOWBinaryCrossEntropy(Module):
         self.vocab_size = vocab_size
 
     def forward(self, logits, labels):
-        return torch.nn.functional.binary_cross_entropy_with_logits(logits.view(-1), labels.view(-1))
+        logits = logits.view(-1)
+        labels = labels.view(-1)
+        mask = labels == -100
+        logits = logits[~mask]
+        labels = labels[~mask]
+        return torch.nn.functional.binary_cross_entropy_with_logits(logits, labels)
