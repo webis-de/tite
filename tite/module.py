@@ -47,12 +47,6 @@ class TiteModule(LightningModule):
         # ties weights for BERT models -- only works for teacher MLM and student BERT
         for predictor in predictors:
             if isinstance(predictor, (MLMDecoder, MAEDecoder, MAEEnhancedDecoder)) and isinstance(student, TiteModel):
-                if hasattr(predictor, "config") and isinstance(predictor.config, TiteConfig):
-                    if predictor.config.positional_embedding_type != student.config.positional_embedding_type:
-                        raise ValueError(
-                            f"Positional embedding type of predictor ({predictor.config.positional_embedding_type}) "
-                            f"does not match student ({student.config.positional_embedding_type})"
-                        )
                 student.tie_decoder_weights(predictor.decoder)
                 if isinstance(predictor, (MAEDecoder, MAEEnhancedDecoder)):
                     predictor.embeddings.word_embeddings = student.get_input_embeddings()
