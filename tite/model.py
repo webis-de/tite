@@ -345,20 +345,23 @@ class TiteSelfAttention(torch.nn.Module):
             query = rearrange(query, "b s (h d) -> b h s d", h=self.num_attention_heads, d=self.attention_head_size)
         new_seq_len = new_attention_mask.shape[1]
 
-        if self.sinusoidal is not None:
-            query = self.apply_rotary_position_embeddings(query)
-            key = self.apply_rotary_position_embeddings(key)
-        attn_weight = repeat(
-            torch.where(einsum(new_attention_mask, attention_mask, "b s1, b s2 -> b s1 s2"), 0, -10000.0),
-            "b s1 s2 -> b h s1 s2",
-            h=self.num_attention_heads,
-        )
-        if self.alibi is not None:
-            attn_weight = attn_weight + self.alibi[:, :, : attn_weight.shape[-2], : attn_weight.shape[-1]]
+        if value.shape[-2] > 1:
+            if self.sinusoidal is not None:
+                query = self.apply_rotary_position_embeddings(query)
+                key = self.apply_rotary_position_embeddings(key)
+            attn_weight = repeat(
+                torch.where(einsum(new_attention_mask, attention_mask, "b s1, b s2 -> b s1 s2"), 0, -10000.0),
+                "b s1 s2 -> b h s1 s2",
+                h=self.num_attention_heads,
+            )
+            if self.alibi is not None:
+                attn_weight = attn_weight + self.alibi[:, :, : attn_weight.shape[-2], : attn_weight.shape[-1]]
 
-        attn_output = torch.nn.functional.scaled_dot_product_attention(
-            query, key, value, attn_weight, self.dropout_prob if self.training else 0.0
-        )
+            attn_output = torch.nn.functional.scaled_dot_product_attention(
+                query, key, value, attn_weight, self.dropout_prob if self.training else 0.0
+            )
+        else:
+            attn_output = value
         attn_output = rearrange(
             attn_output,
             "b h s d -> b s (h d)",
