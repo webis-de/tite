@@ -249,7 +249,7 @@ class MaskedAvgPool1d(torch.nn.Module):
             x = torch.nn.functional.pad(x, (0, 0, 0, padding))
             mask = torch.nn.functional.pad(mask, (0, padding))
         x_blocks = x.unfold(-2, self.kernel_size, self.stride)
-        mask_blocks = mask.unfold(1, self.kernel_size, self.stride).unsqueeze(-2)
+        mask_blocks = mask.unfold(-1, self.kernel_size, self.stride).unsqueeze(-2)
         x_masked = x_blocks * mask_blocks
         normalization = mask_blocks.sum(-1)
         normalization[normalization == 0] = 1
