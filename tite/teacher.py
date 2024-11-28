@@ -59,8 +59,8 @@ class BOWTeacher(Module):
         targets = torch.zeros(original_input_ids.shape[0], self.vocab_size, device=original_input_ids.device)
         input_ids = original_input_ids.clone()
         input_ids[special_tokens_mask] = self.pad_id
-        targets = targets.scatter_(1, input_ids, 1)
-        targets[self.pad_id] = 0
+        targets = targets.scatter(1, input_ids, 1)
+        targets[:, self.pad_id] = 0
         return targets
 
 
