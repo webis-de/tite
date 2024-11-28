@@ -24,6 +24,24 @@ def config() -> TiteConfig:
 
 
 @pytest.mark.parametrize("kernel_size, stride, seq_length", [(3, 1, 8), (3, 2, 8), (3, 3, 8)])
+def test_masked_avg_pool1d_backward(kernel_size: int, stride: int, seq_length: int):
+    layer_unfold = MaskedAvgPool1d(kernel_size, stride, "unfold")
+    layer_sum_pool2d = MaskedAvgPool1d(kernel_size, stride, "sum_pool2d")
+
+    x_unfold = torch.randn(2, seq_length, 4, requires_grad=True)
+    x_sum_pool2d = x_unfold.detach().clone()
+    x_sum_pool2d.requires_grad = True
+    mask = torch.ones(2, seq_length, dtype=torch.bool)
+    mask[0, -seq_length // 2 :] = False
+
+    output_unfold, _ = layer_unfold(x_unfold, mask)
+    output_sum_pool2d, _ = layer_sum_pool2d(x_sum_pool2d, mask)
+    output_unfold.sum().backward()
+    output_sum_pool2d.sum().backward()
+    assert torch.allclose(x_unfold.grad, x_sum_pool2d.grad, atol=1e-6)
+
+
+@pytest.mark.parametrize("kernel_size, stride, seq_length", [(3, 1, 8), (3, 2, 8), (3, 3, 8)])
 def test_masked_avg_pool1d_dimensions(kernel_size: int, stride: int, seq_length: int):
     layer = MaskedAvgPool1d(kernel_size, stride)
 
