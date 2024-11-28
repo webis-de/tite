@@ -1,5 +1,5 @@
 import math
-from typing import List
+from typing import List, Literal
 
 import torch
 from einops import rearrange, repeat
@@ -10,15 +10,7 @@ from transformers import BertForMaskedLM, PreTrainedModel
 from transformers.activations import ACT2FN
 
 from .bert import BertConfig, BertModel
-from .model import (
-    TiteConfig,
-    TiteEmbeddings,
-    TiteIntermediate,
-    TiteLayer,
-    TiteOutput,
-    TiteSelfAttention,
-    TiteSelfOutput,
-)
+from .model import TiteConfig, TiteEmbeddings, TiteIntermediate, TiteLayer, TiteOutput, TiteSelfOutput
 
 
 class MLMDecoder(Module):
@@ -237,7 +229,9 @@ class MAEAttention(torch.nn.Module):
 
 class MAEEnhancedDecoder(PreTrainedModel):
 
-    def __init__(self, config: BertConfig, mask_id: int, mask_prob: float, query_strategy: str = "embx"):
+    def __init__(
+        self, config: BertConfig, mask_id: int, mask_prob: float, query_strategy: Literal["embx", "mask"] = "embx"
+    ):
         super().__init__(config)
         self.config = config
         self.mask_id = mask_id
