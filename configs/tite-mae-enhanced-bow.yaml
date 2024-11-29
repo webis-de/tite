@@ -53,6 +53,7 @@ model:
       init_args:
         vocab_size: 30522
         padid: 0
+    - class_path: tite.teacher.Identity
     predictors:
     - class_path: tite.predictor.MAEEnhancedDecoder
       init_args:
@@ -69,13 +70,15 @@ model:
       init_args:
         vocab_size: 30522
         hidden_size: 768
+    - class_path: tite.teacher.Identity
     losses:
-    - class_path: tite.loss.mlm.MLMCrossEntropy
+    - class_path: tite.loss.MLMCrossEntropy
       init_args:
         vocab_size: 30522
-    - class_path: tite.loss.mlm.BOWBinaryCrossEntropy
+    - class_path: tite.loss.BOWBinaryCrossEntropy
       init_args:
         vocab_size: 30522
+    - class_path: tite.loss.StandardDivRegularization
     log_additional_metrics: false
     validate_on_glue: true
     validate_on_msmarco: true

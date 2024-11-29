@@ -27,7 +27,7 @@ model:
       init_args:
         model_name_or_path: bert-base-uncased
     losses:
-    - class_path: tite.loss.mlm.MLMCrossEntropy
+    - class_path: tite.loss.MLMCrossEntropy
       init_args:
         vocab_size: 30522
     validate_on_glue: true

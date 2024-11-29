@@ -32,7 +32,7 @@ model:
         vocab_size: 30522
         hidden_size: 768
     losses:
-    - class_path: tite.loss.mlm.OrigMLMCrossEntropy
+    - class_path: tite.loss.OrigMLMCrossEntropy
       init_args:
         vocab_size: 30522
     log_additional_metrics: false

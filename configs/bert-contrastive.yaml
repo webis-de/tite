@@ -28,7 +28,7 @@ model:
     predictors:
     - class_path: tite.predictor.Identity
     losses:
-    - class_path: tite.loss.contrastive.ContrastiveInBatchSimilarity
+    - class_path: tite.loss.ContrastiveInBatchSimilarity
     log_additional_metrics: false
     validate_on_glue: true
     validate_on_msmarco: true
