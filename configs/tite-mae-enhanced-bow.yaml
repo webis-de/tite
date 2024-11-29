@@ -23,14 +23,17 @@ model:
             # intermediate_size: [3072, 4096, 4096, 5120, 5120, 6144, 6144, 7168, 7168, 8192, 8192, 9216]
             # kernel_size: [null, null, null, null, null, null, 3, 3, 3, 3, 3, 3]
             # stride: [null, null, null, null, null, null, 3, 3, 3, 3, 3, 3]
-            kernel_size: [null, 3, null, 3, null, 3, null, 3, null, 3, null, 3]
-            stride: [null, 3, null, 3, null, 3, null, 3, null, 3, null, 3]
+            # kernel_size: [null, 3, null, 3, null, 3, null, 3, null, 3, null, 3]
+            # stride: [null, 3, null, 3, null, 3, null, 3, null, 3, null, 3]
             # kernel_size: [null, null, null, 3, 3, 3, 3, 3, 3, 3, 3, 3]
             # stride: [null, null, null, 2, 2, 2, 2, 2, 2, 2, 2, 2]
+            kernel_size: [null, null, null, 2, 2, 2, 2, 2, 2, 2, 2, 2]
+            stride: [null, null, null, 2, 2, 2, 2, 2, 2, 2, 2, 2]
             positional_embedding_type: rotary
             unpadding: false
             upscale_hidden_size: false
             attention_based_pooling: true
+            pooling_strategy: select
     tokenizer:
       class_path: tite.tokenizer.TiteTokenizer
       init_args:
@@ -53,7 +56,7 @@ model:
       init_args:
         vocab_size: 30522
         padid: 0
-    - class_path: tite.teacher.Identity
+    # - class_path: tite.teacher.Identity
     predictors:
     - class_path: tite.predictor.MAEEnhancedDecoder
       init_args:
@@ -70,7 +73,7 @@ model:
       init_args:
         vocab_size: 30522
         hidden_size: 768
-    - class_path: tite.predictor.Identity
+    # - class_path: tite.predictor.Identity
     losses:
     - class_path: tite.loss.MLMCrossEntropy
       init_args:
@@ -78,7 +81,7 @@ model:
     - class_path: tite.loss.BOWBinaryCrossEntropy
       init_args:
         vocab_size: 30522
-    - class_path: tite.loss.StandardDivRegularization
+    # - class_path: tite.loss.StandardDivRegularization
     log_additional_metrics: false
     validate_on_glue: true
     validate_on_msmarco: true

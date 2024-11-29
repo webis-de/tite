@@ -57,6 +57,7 @@ class TiteConfig(PretrainedConfig):
         unpadding: bool = False,
         upscale_hidden_size: bool = False,
         attention_based_pooling: bool = True,
+        pooling_strategy: Literal["mean_conv", "select"] = "mean_conv",
         **kwargs,
     ):
         super().__init__(pad_token_id=pad_token_id, **kwargs)
@@ -76,6 +77,7 @@ class TiteConfig(PretrainedConfig):
         self.unpadding = unpadding
         self.upscale_hidden_size = upscale_hidden_size
         self.attention_based_pooling = attention_based_pooling
+        self.pooling_strategy = pooling_strategy
 
         iterator = zip(
             [
@@ -258,6 +260,22 @@ class MaskedAvgPool1d(torch.nn.Module):
         return y, y_mask
 
 
+class MaskedSelect(torch.nn.Module):
+    def __init__(self, kernel_size: int, stride: int):
+        super().__init__()
+        self.kernel_size = kernel_size
+        self.stride = stride
+        if kernel_size != stride:
+            raise ValueError("Kernel size and stride must be equal for MaskedSelect")
+
+    def forward(self, x: torch.Tensor, mask: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+        if x.shape[-2] == 1:
+            return x, mask
+        x = x[..., :: self.stride, :]
+        mask = mask[..., :: self.stride]
+        return x, mask
+
+
 class TiteSelfAttention(torch.nn.Module):
     def __init__(self, config: TiteConfig, layer_idx: int):
         super().__init__()
@@ -283,7 +301,12 @@ class TiteSelfAttention(torch.nn.Module):
         stride = config.stride[layer_idx]
         self.pooling = None
         if kernel_size is not None and stride is not None and config.attention_based_pooling:
-            self.pooling = MaskedAvgPool1d(kernel_size, stride)
+            if config.pooling_strategy == "mean_conv":
+                self.pooling = MaskedAvgPool1d(kernel_size, stride)
+            elif config.pooling_strategy == "select":
+                self.pooling = MaskedSelect(kernel_size, stride)
+            else:
+                raise ValueError(f"Unknown pooling strategy {config.pooling_strategy}")
 
         self.dropout_prob = config.dropout_prob
         if config.positional_embedding_type == "ALiBi":
@@ -423,8 +446,13 @@ class TiteSelfOutput(torch.nn.Module):
         kernel_size = config.kernel_size[layer_idx]
         stride = config.stride[layer_idx]
         self.pooling = None
-        if kernel_size is not None and stride is not None:
-            self.pooling = MaskedAvgPool1d(kernel_size, stride)
+        if kernel_size is not None and stride is not None and config.attention_based_pooling:
+            if config.pooling_strategy == "mean_conv":
+                self.pooling = MaskedAvgPool1d(kernel_size, stride)
+            elif config.pooling_strategy == "select":
+                self.pooling = MaskedSelect(kernel_size, stride)
+            else:
+                raise ValueError(f"Unknown pooling strategy {config.pooling_strategy}")
         self.attention_based_pooling = config.attention_based_pooling
 
     def forward(
