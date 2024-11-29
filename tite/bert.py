@@ -52,8 +52,10 @@ class BertModel(TiteModel):
     def __init__(self, config: BertConfig):
         super().__init__(config)
 
-    def forward(self, input_ids: Tensor, attention_mask: Tensor | None = None) -> TiteModelOutput:
-        output = super().forward(input_ids, attention_mask)
+    def forward(
+        self, input_ids: Tensor, attention_mask: Tensor | None = None, output_hidden_states: bool = False
+    ) -> TiteModelOutput:
+        output = super().forward(input_ids, attention_mask, output_hidden_states=output_hidden_states)
         hidden_states = output.last_hidden_state
         if self.config.pooling == "first":
             return TiteModelOutput(hidden_states[:, [0]])

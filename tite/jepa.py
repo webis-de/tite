@@ -40,9 +40,11 @@ class JEPA(Module):
     def forward(self, input: dict, target: dict | None, **aux):
         student_aux = {k[8:]: v for k, v in aux.items() if k.startswith("student_")}
         teacher_aux = {k[8:]: v for k, v in aux.items() if k.startswith("teacher_")}
-        embx = self.student(**input)
-        if isinstance(embx, TiteModelOutput):
-            embx = embx.last_hidden_state
+        output = self.student(**input, output_hidden_states=True)
+        if isinstance(output, TiteModelOutput):
+            embx = output.last_hidden_state
+        else:
+            embx = output
         losses = {}
         for teacher, predictor, loss in zip(self.teachers, self.predictors, self.losses):
             if target is None or isinstance(teacher, CopyStudent):
@@ -55,4 +57,4 @@ class JEPA(Module):
             predictor_kwargs = parse_kwargs({**student_aux, **teacher_aux, **(target or {})}, predictor)
             pred = predictor(embx, **predictor_kwargs)
             losses[loss.__class__.__name__] = loss(pred, emby)
-        return losses, embx
+        return losses, output

@@ -9,6 +9,7 @@ model:
           init_args:
             num_hidden_layers: 12
             pooling: first
+            positional_embedding_type: rotary
             unpadding: false
     tokenizer:
       class_path: tite.tokenizer.TiteTokenizer
@@ -27,6 +28,7 @@ model:
     - class_path: tite.teacher.MAETeacher
       init_args:
         padid: 0
+        enhanced: true
     predictors:
     - class_path: tite.predictor.MAEEnhancedDecoder
       init_args:
@@ -35,7 +37,8 @@ model:
           init_args:
             pooling: null
             unpadding: false
-            positional_embedding_type: absolute
+            positional_embedding_type: rotary
+        query_strategy: embx
         mask_id: 103
         mask_prob: 0.5
     losses:

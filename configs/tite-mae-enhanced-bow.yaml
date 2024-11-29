@@ -21,15 +21,16 @@ model:
             # hidden_size: [768, 1024, 1024, 1280, 1280, 1536, 1536, 1792, 1792, 2048, 2048, 2304]
             # num_attention_heads: [12, 16, 16, 20, 20, 24, 24, 28, 28, 32, 32, 36]
             # intermediate_size: [3072, 4096, 4096, 5120, 5120, 6144, 6144, 7168, 7168, 8192, 8192, 9216]
-            kernel_size: [null, null, null, null, null, null, 3, 3, 3, 3, 3, 3]
-            stride: [null, null, null, null, null, null, 3, 3, 3, 3, 3, 3]
-            # kernel_size: [null, 3, null, 3, null, 3, null, 3, null, 3, null, 3]
-            # stride: [null, 3, null, 3, null, 3, null, 3, null, 3, null, 3]
+            # kernel_size: [null, null, null, null, null, null, 3, 3, 3, 3, 3, 3]
+            # stride: [null, null, null, null, null, null, 3, 3, 3, 3, 3, 3]
+            kernel_size: [null, 3, null, 3, null, 3, null, 3, null, 3, null, 3]
+            stride: [null, 3, null, 3, null, 3, null, 3, null, 3, null, 3]
             # kernel_size: [null, null, null, 3, 3, 3, 3, 3, 3, 3, 3, 3]
             # stride: [null, null, null, 2, 2, 2, 2, 2, 2, 2, 2, 2]
             positional_embedding_type: rotary
             unpadding: false
             upscale_hidden_size: false
+            attention_based_pooling: true
     tokenizer:
       class_path: tite.tokenizer.TiteTokenizer
       init_args:
@@ -48,6 +49,10 @@ model:
       init_args:
         padid: 0
         enhanced: true
+    - class_path: tite.teacher.BOWTeacher
+      init_args:
+        vocab_size: 30522
+        padid: 0
     predictors:
     - class_path: tite.predictor.MAEEnhancedDecoder
       init_args:
@@ -56,12 +61,19 @@ model:
           init_args:
             pooling: null
             unpadding: false
-            positional_embedding_type: rotary
+            positional_embedding_type: absolute
         query_strategy: embx
         mask_id: 103
         mask_prob: 0.5
+    - class_path: tite.predictor.BOWDecoder
+      init_args:
+        vocab_size: 30522
+        hidden_size: 768
     losses:
     - class_path: tite.loss.mlm.MLMCrossEntropy
+      init_args:
+        vocab_size: 30522
+    - class_path: tite.loss.mlm.BOWBinaryCrossEntropy
       init_args:
         vocab_size: 30522
     log_additional_metrics: false

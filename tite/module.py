@@ -157,7 +157,7 @@ class TiteModule(LightningModule):
         teacher_input = batch.pop("teacher_input", None)
         # JEPA will try to predict the original from the transformed input within the embedding space, i.e.,
         #   Loss(pred(student(studentinput), aux), teacher(teacherinput))
-        losses, embs = self.jepa(student_input, teacher_input, **batch)
+        losses, output = self.jepa(student_input, teacher_input, **batch)
         losses["total"] = sum(losses.values())
         num_tokens = max(
             student_input["attention_mask"].sum().item(),
@@ -167,29 +167,13 @@ class TiteModule(LightningModule):
         self.log("tokens_seen", self.tokens_seen, on_step=True, reduce_fx="max")  # We sum it up ourselves
         self.log("loss", losses["total"], prog_bar=True)
         self.log_dict(losses)
-        # ####
-        # # Log additional metrics for more insight into the training
-        # if self.log_additional_metrics:
-        #     with torch.autocast(device_type="cuda", enabled=False):
-        #         # cossim = normalize(embs[:, 0]) @ normalize(embt[:, 0]).T
-        #         crossentropy = torch.nn.functional.cross_entropy(
-        #             (embs[:, 0] @ embt[:, 0].T) / math.sqrt(embs.shape[-1]),
-        #             torch.arange(embs.shape[0], device=self.device),
-        #         )
-        #         # Equivalent to above: -torch.diag(torch.log_softmax(embs[:, 0] @ embt[:, 0].T, dim=, -1)).mean()
-        #         # crosscorr = normalize(embs[:, 0], dim=0).T @ normalize(embt[:, 0], dim=0) / embt.shape[0]
-        #     metrics = {
-        #         "crossentropy": crossentropy,
-        #         # "pairwise-cossim": cossim,
-        #         # "crosscorrelation": crosscorr,
-        #     }
-        #     for metric_name, metric_value in metrics.items():
-        #         if metric_value.ndim > 1:
-        #             if self.logger is not None and (self.trainer.global_step + 1) % self.trainer.log_every_n_steps == 0:
-        #                 self.logger.log_image(metric_name, [metric_value])
-        #         else:
-        #             self.log(metric_name, metric_value)
-        # ####
+        if output.hidden_states is not None:
+            with torch.no_grad():
+                stds = {
+                    f"std_layer_{layer_idx}": hs.std(0).abs().mean()
+                    for layer_idx, hs in enumerate(output.hidden_states)
+                }
+                self.log_dict(stds)
         return losses["total"]
 
     def save_pretrained(self, save_path: str | Path) -> None:

@@ -433,7 +433,7 @@ class TiteSelfOutput(torch.nn.Module):
         hidden_states = self.dense(hidden_states)
         hidden_states = self.dropout(hidden_states)
         if self.pooling is not None and self.attention_based_pooling:
-            input_tensor, _ = self.pooling(input_tensor, attention_mask)
+            input_tensor, attention_mask = self.pooling(input_tensor, attention_mask)
         hidden_states[..., : input_tensor.shape[-1]] = hidden_states[..., : input_tensor.shape[-1]] + input_tensor
         if not self.attention_based_pooling and self.pooling is not None:
             hidden_states, attention_mask = self.pooling(hidden_states, attention_mask)

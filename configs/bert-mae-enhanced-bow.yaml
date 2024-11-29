@@ -8,6 +8,7 @@ model:
           class_path: tite.bert.BertConfig
           init_args:
             num_hidden_layers: 12
+            pooling: first
             positional_embedding_type: rotary
             unpadding: false
     tokenizer:
@@ -28,8 +29,9 @@ model:
       init_args:
         padid: 0
         enhanced: true
-    - class_path: tite.teacher.MLMTeacher
+    - class_path: tite.teacher.BOWTeacher
       init_args:
+        vocab_size: 30522
         padid: 0
     predictors:
     - class_path: tite.predictor.MAEEnhancedDecoder
@@ -43,7 +45,7 @@ model:
         query_strategy: embx
         mask_id: 103
         mask_prob: 0.5
-    - class_path: tite.predictor.MLMDecoder
+    - class_path: tite.predictor.BOWDecoder
       init_args:
         vocab_size: 30522
         hidden_size: 768
@@ -51,7 +53,7 @@ model:
     - class_path: tite.loss.mlm.MLMCrossEntropy
       init_args:
         vocab_size: 30522
-    - class_path: tite.loss.mlm.OrigMLMCrossEntropy
+    - class_path: tite.loss.mlm.BOWBinaryCrossEntropy
       init_args:
         vocab_size: 30522
     log_additional_metrics: false
