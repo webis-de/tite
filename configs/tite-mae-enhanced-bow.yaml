@@ -70,7 +70,7 @@ model:
       init_args:
         vocab_size: 30522
         hidden_size: 768
-    - class_path: tite.teacher.Identity
+    - class_path: tite.predictor.Identity
     losses:
     - class_path: tite.loss.MLMCrossEntropy
       init_args:

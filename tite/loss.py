@@ -142,9 +142,9 @@ class BOWBinaryCrossEntropy(Module):
 
 class StandardDivRegularization(Module):
 
-    def forward(self, embx: Tensor) -> Tensor:
-        stds = embx.std(0)
-        return torch.nn.functional.mse_loss(stds, torch.tensor(1.0, device=stds.device))
+    def forward(self, embx: Tensor, *args, **kwargs) -> Tensor:
+        stds = embx.std(0).mean(-1)
+        return torch.nn.functional.mse_loss(stds, torch.ones_like(stds))
 
 
 def mmcr(embeddings: Tensor) -> Tensor:
