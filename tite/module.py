@@ -167,13 +167,6 @@ class TiteModule(LightningModule):
         self.log("tokens_seen", self.tokens_seen, on_step=True, reduce_fx="max")  # We sum it up ourselves
         self.log("loss", losses["total"], prog_bar=True)
         self.log_dict(losses)
-        if output.hidden_states is not None:
-            with torch.no_grad():
-                stds = {
-                    f"std_layer_{layer_idx}": hs.std(0).abs().mean()
-                    for layer_idx, hs in enumerate(output.hidden_states)
-                }
-                self.log_dict(stds)
         return losses["total"]
 
     def save_pretrained(self, save_path: str | Path) -> None:

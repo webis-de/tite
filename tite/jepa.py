@@ -40,7 +40,7 @@ class JEPA(Module):
     def forward(self, input: dict, target: dict | None, **aux):
         student_aux = {k[8:]: v for k, v in aux.items() if k.startswith("student_")}
         teacher_aux = {k[8:]: v for k, v in aux.items() if k.startswith("teacher_")}
-        output = self.student(**input, output_hidden_states=True)
+        output = self.student(**input)
         if isinstance(output, TiteModelOutput):
             embx = output.last_hidden_state
         else:
