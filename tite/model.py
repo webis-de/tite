@@ -415,9 +415,7 @@ class TiteSelfAttention(torch.nn.Module):
             if self.alibi is not None:
                 attn_weight = attn_weight + self.alibi[:, :, : attn_weight.shape[-2], : attn_weight.shape[-1]]
 
-            attn_output = torch.nn.functional.scaled_dot_product_attention(
-                query, key, value, attn_weight, self.dropout_prob if self.training else 0.0
-            )
+            attn_output = torch.nn.functional.scaled_dot_product_attention(query, key, value, attn_weight)
         else:
             attn_output = value
         attn_output = rearrange(
