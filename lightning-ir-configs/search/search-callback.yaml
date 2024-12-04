@@ -1,0 +1,9 @@
+trainer:
+  callbacks+:
+  - class_path: SearchCallback
+    init_args:
+      use_gpu: true
+      search_config:
+        class_path: FaissSearchConfig
+        init_args:
+          k: 100

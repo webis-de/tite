@@ -1,0 +1,87 @@
+data:
+  class_path: LightningIRDataModule
+  init_args:
+    num_workers: 1
+    inference_batch_size: 256
+    inference_datasets:
+    - class_path: DocDataset
+      init_args:
+        doc_dataset: beir/arguana
+    - class_path: DocDataset
+      init_args:
+        doc_dataset: beir/climate-fever
+    - class_path: DocDataset
+      init_args:
+        doc_dataset: beir/cqadupstack/android
+    - class_path: DocDataset
+      init_args:
+        doc_dataset: beir/cqadupstack/english
+    - class_path: DocDataset
+      init_args:
+        doc_dataset: beir/cqadupstack/gaming
+    - class_path: DocDataset
+      init_args:
+        doc_dataset: beir/cqadupstack/gis
+    - class_path: DocDataset
+      init_args:
+        doc_dataset: beir/cqadupstack/mathematica
+    - class_path: DocDataset
+      init_args:
+        doc_dataset: beir/cqadupstack/physics
+    - class_path: DocDataset
+      init_args:
+        doc_dataset: beir/cqadupstack/programmers
+    - class_path: DocDataset
+      init_args:
+        doc_dataset: beir/cqadupstack/stats
+    - class_path: DocDataset
+      init_args:
+        doc_dataset: beir/cqadupstack/tex
+    - class_path: DocDataset
+      init_args:
+        doc_dataset: beir/cqadupstack/unix
+    - class_path: DocDataset
+      init_args:
+        doc_dataset: beir/cqadupstack/webmasters
+    - class_path: DocDataset
+      init_args:
+        doc_dataset: beir/cqadupstack/wordpress
+    - class_path: DocDataset
+      init_args:
+        doc_dataset: beir/dbpedia-entity
+    - class_path: DocDataset
+      init_args:
+        doc_dataset: beir/fever
+    - class_path: DocDataset
+      init_args:
+        doc_dataset: beir/fiqa
+    - class_path: DocDataset
+      init_args:
+        doc_dataset: beir/hotpotqa
+    - class_path: DocDataset
+      init_args:
+        doc_dataset: beir/msmarco
+    - class_path: DocDataset
+      init_args:
+        doc_dataset: beir/nfcorpus
+    - class_path: DocDataset
+      init_args:
+        doc_dataset: beir/nq
+    - class_path: DocDataset
+      init_args:
+        doc_dataset: beir/quora
+    - class_path: DocDataset
+      init_args:
+        doc_dataset: beir/scidocs
+    - class_path: DocDataset
+      init_args:
+        doc_dataset: beir/scifact
+    - class_path: DocDataset
+      init_args:
+        doc_dataset: beir/trec-covid
+    - class_path: DocDataset
+      init_args:
+        doc_dataset: beir/webis-touche2020
+    - class_path: DocDataset
+      init_args:
+        doc_dataset: msmarco-passage

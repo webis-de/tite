@@ -1,0 +1,9 @@
+trainer:
+  accelerator: auto
+  strategy: auto
+  devices: auto
+  num_nodes: 1
+  callbacks:
+  - class_path: tite.callbacks.DummyImportCallback
+  logger: false
+  enable_checkpointing: false

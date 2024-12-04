@@ -1,0 +1,87 @@
+data:
+  class_path: LightningIRDataModule
+  init_args:
+    num_workers: 1
+    inference_batch_size: 4
+    inference_datasets:
+    - class_path: QueryDataset
+      init_args:
+        query_dataset: beir/arguana
+    - class_path: QueryDataset
+      init_args:
+        query_dataset: beir/climate-fever
+    - class_path: QueryDataset
+      init_args:
+        query_dataset: beir/cqadupstack/android
+    - class_path: QueryDataset
+      init_args:
+        query_dataset: beir/cqadupstack/english
+    - class_path: QueryDataset
+      init_args:
+        query_dataset: beir/cqadupstack/gaming
+    - class_path: QueryDataset
+      init_args:
+        query_dataset: beir/cqadupstack/gis
+    - class_path: QueryDataset
+      init_args:
+        query_dataset: beir/cqadupstack/mathematica
+    - class_path: QueryDataset
+      init_args:
+        query_dataset: beir/cqadupstack/physics
+    - class_path: QueryDataset
+      init_args:
+        query_dataset: beir/cqadupstack/programmers
+    - class_path: QueryDataset
+      init_args:
+        query_dataset: beir/cqadupstack/stats
+    - class_path: QueryDataset
+      init_args:
+        query_dataset: beir/cqadupstack/tex
+    - class_path: QueryDataset
+      init_args:
+        query_dataset: beir/cqadupstack/unix
+    - class_path: QueryDataset
+      init_args:
+        query_dataset: beir/cqadupstack/webmasters
+    - class_path: QueryDataset
+      init_args:
+        query_dataset: beir/cqadupstack/wordpress
+    - class_path: QueryDataset
+      init_args:
+        query_dataset: beir/dbpedia-entity/test
+    - class_path: QueryDataset
+      init_args:
+        query_dataset: beir/fever/test
+    - class_path: QueryDataset
+      init_args:
+        query_dataset: beir/fiqa/test
+    - class_path: QueryDataset
+      init_args:
+        query_dataset: beir/hotpotqa/test
+    - class_path: QueryDataset
+      init_args:
+        query_dataset: beir/nfcorpus/test
+    - class_path: QueryDataset
+      init_args:
+        query_dataset: beir/nq
+    - class_path: QueryDataset
+      init_args:
+        query_dataset: beir/quora/test
+    - class_path: QueryDataset
+      init_args:
+        query_dataset: beir/scidocs
+    - class_path: QueryDataset
+      init_args:
+        query_dataset: beir/scifact/test
+    - class_path: QueryDataset
+      init_args:
+        query_dataset: beir/trec-covid
+    - class_path: QueryDataset
+      init_args:
+        query_dataset: beir/webis-touche2020
+    - class_path: QueryDataset
+      init_args:
+        query_dataset: msmarco-passage/trec-dl-2019/judged
+    - class_path: QueryDataset
+      init_args:
+        query_dataset: msmarco-passage/trec-dl-2020/judged
