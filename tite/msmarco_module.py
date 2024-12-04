@@ -19,6 +19,7 @@ class MSMARCOModule(LightningModule):
         tokenizer: PreTrainedTokenizerBase | None = None,
         model_name_or_path: str | None = None,
         similarity: str = "dot",
+        hidden_size: int = 768,
     ) -> None:
         super().__init__()
         if model_name_or_path is not None:
@@ -31,11 +32,18 @@ class MSMARCOModule(LightningModule):
         self.tokenizer = tokenizer
         self.validation_step_outputs = []
         self.ndcgs = []
+        self.projection = None
+        if model.config.last_hidden_size != hidden_size:
+            self.projection = torch.nn.Linear(model.config.last_hidden_size, hidden_size)
 
     def training_step(self, batch) -> Tensor:
         query_emb = self.model(**batch["encoded_query"]).last_hidden_state
         pos_doc_emb = self.model(**batch["encoded_pos_doc"]).last_hidden_state
         neg_doc_emb = self.model(**batch["encoded_neg_doc"]).last_hidden_state
+        if self.projection is not None:
+            query_emb = self.projection(query_emb)
+            pos_doc_emb = self.projection(pos_doc_emb)
+            neg_doc_emb = self.projection(neg_doc_emb)
         if self.similarity == "cosine":
             pos_sim = torch.nn.functional.cosine_similarity(query_emb.squeeze(1), pos_doc_emb.squeeze(1))
             neg_sim = torch.nn.functional.cosine_similarity(query_emb.squeeze(1), neg_doc_emb.squeeze(1))

@@ -14,16 +14,18 @@ from .model import TiteConfig, TiteEmbeddings, TiteIntermediate, TiteLayer, Tite
 
 
 class MLMDecoder(Module):
-    def __init__(self, vocab_size: int, hidden_size: int, embx_dim: int, hidden_act: str = "gelu_pytorch_tanh") -> None:
+    def __init__(
+        self, vocab_size: int, orig_hidden_size: int, hidden_size: int, hidden_act: str = "gelu_pytorch_tanh"
+    ) -> None:
         super().__init__()
-        self.dense = torch.nn.Linear(embx_dim, embx_dim)
+        self.dense = torch.nn.Linear(hidden_size, hidden_size)
         self.transform_act_fn = ACT2FN[hidden_act]
-        self.LayerNorm = torch.nn.LayerNorm(embx_dim, eps=1e-12)
+        self.LayerNorm = torch.nn.LayerNorm(hidden_size, eps=1e-12)
         self.decoder = torch.nn.Linear(hidden_size, vocab_size)
 
         self.downscale = None
-        if embx_dim != hidden_size:
-            self.downscale = torch.nn.Linear(embx_dim, hidden_size)
+        if orig_hidden_size != hidden_size:
+            self.downscale = torch.nn.Linear(hidden_size, orig_hidden_size)
 
         self.bias = torch.nn.Parameter(torch.zeros(vocab_size))
 
@@ -36,8 +38,8 @@ class MLMDecoder(Module):
         hidden_states = self.LayerNorm(hidden_states)
         if self.downscale is not None:
             hidden_states = self.downscale(hidden_states)
-        hidden_states = self.decoder(hidden_states)
-        return hidden_states
+        logits = self.decoder(hidden_states)
+        return logits
 
 
 class HFMLMDecoder(MLMDecoder):
@@ -237,31 +239,46 @@ class MAEEnhancedDecoder(PreTrainedModel):
 
     def __init__(
         self,
-        config: BertConfig,
+        orig_hidden_size: int,
+        hidden_size: int,
+        num_attention_heads: int,
+        intermediate_size: int,
         mask_id: int,
         mask_prob: float,
+        positional_embedding_type: Literal["ALiBi", "rotary", "absolute"] = "absolute",
         query_strategy: Literal["embx", "mask"] = "embx",
-        embx_dim: int = 768,
     ):
-        super().__init__(config)
-        self.config = config
+        embeddings_config = BertConfig(
+            num_hidden_layers=1, hidden_size=orig_hidden_size, positional_embedding_type=positional_embedding_type
+        )
+        attention_config = BertConfig(
+            num_hidden_layers=1,
+            hidden_size=hidden_size,
+            num_attention_heads=num_attention_heads,
+            intermediate_size=intermediate_size,
+            positional_embedding_type=positional_embedding_type,
+        )
+        super().__init__(attention_config)
         self.mask_id = mask_id
         self.query_strategy = query_strategy
 
-        self.embeddings = TiteEmbeddings(config)
-        self.attention = MAEAttention(config, 0, mask_prob)
-        self.intermediate = TiteIntermediate(config, 0)
-        self.output = TiteOutput(config, 0)
+        # embeddings_config.hidden_size[0] =
+        self.embeddings = TiteEmbeddings(embeddings_config)
+        self.attention = MAEAttention(attention_config, 0, mask_prob)
+        self.intermediate = TiteIntermediate(attention_config, 0)
+        self.output = TiteOutput(attention_config, 0)
+
+        self.upscale = None
+        self.upscale_position_embeddings = None
+        if orig_hidden_size != hidden_size:
+            self.upscale = torch.nn.Linear(orig_hidden_size, hidden_size)
+            if self.embeddings.position_embeddings is not None:
+                self.upscale_position_embeddings = torch.nn.Linear(orig_hidden_size, hidden_size)
 
         self.mlm_decoder = MLMDecoder(
-            config.vocab_size, config.hidden_size[0], config.hidden_size[0], config.hidden_act
+            attention_config.vocab_size, orig_hidden_size, attention_config.hidden_size[0], attention_config.hidden_act
         )
         self.decoder = self.mlm_decoder.decoder
-
-        self.embx_dim = embx_dim
-        self.downscale = None
-        if embx_dim != config.hidden_size[0]:
-            self.downscale = torch.nn.Linear(embx_dim, config.hidden_size[0])
 
         self.post_init()
 
@@ -300,21 +317,21 @@ class MAEEnhancedDecoder(PreTrainedModel):
             attention_mask = torch.ones(1, input_ids.shape[1], device=input_ids.device, dtype=torch.bool)
         attention_mask = attention_mask.bool()
         key_value_hidden_states = self.embeddings(input_ids, attention_mask)
+        if self.upscale is not None:
+            key_value_hidden_states = self.upscale(key_value_hidden_states)
         if self.query_strategy == "embx":
-            downscaled_embx = embx
-            if self.downscale is not None:
-                downscaled_embx = self.downscale(downscaled_embx)
-            query_hidden_states = downscaled_embx.expand_as(key_value_hidden_states)
+            query_hidden_states = embx.expand_as(key_value_hidden_states)
             if self.embeddings.position_embeddings is not None:
-                query_hidden_states = query_hidden_states + self.embeddings.position_embeddings(
+                position_embeddings = self.embeddings.position_embeddings(
                     torch.arange(input_ids.shape[1], device=embx.device)
                 )
+                if self.upscale_position_embeddings is not None:
+                    position_embeddings = self.upscale_position_embeddings(position_embeddings)
+                query_hidden_states = query_hidden_states + position_embeddings
         elif self.query_strategy == "mask":
             query_hidden_states = self.embeddings(torch.full_like(input_ids, self.mask_id), attention_mask)
         else:
             raise ValueError(f"Unknown query strategy: {self.query_strategy}")
-        num_sub_vectors = embx.shape[-1] // key_value_hidden_states.shape[-1]
-        embx = embx.view(embx.shape[0], num_sub_vectors, key_value_hidden_states.shape[-1])
         attention_output = self.attention(query_hidden_states, key_value_hidden_states, attention_mask, embx)
         intermediate_output = self.intermediate(attention_output)
         hidden_states = self.output(intermediate_output, attention_output)
