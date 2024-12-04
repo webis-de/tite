@@ -96,14 +96,11 @@ class TiteConfig(PretrainedConfig):
                     f"Expected {num_hidden_layers}, got {len(setting)}."
                 )
 
-        if all(k is None and s is None for k, s in zip(kernel_size, stride)):
-            warnings.warn("No pooling layers are used. The output shape will be the same as the input shape.")
-        else:
-            if self.output_shapes[-1] != 1:
-                raise ValueError(
-                    "Output shape with input of maximum sequence length is not 1. "
-                    "Please adjust kernel_size and stride."
-                )
+        if self.output_shapes[0] != self.output_shapes[-1] and self.output_shapes[-1] != 1:
+            raise ValueError(
+                "Kernel_size and stride are set, but do not reduce the maximum sequence length to 1. "
+                "Please adjust kernel_size and stride."
+            )
 
     @property
     def output_shapes(self) -> List[int]:
