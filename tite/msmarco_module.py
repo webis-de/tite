@@ -36,14 +36,16 @@ class MSMARCOModule(LightningModule):
         if model.config.last_hidden_size != hidden_size:
             self.projection = torch.nn.Linear(model.config.last_hidden_size, hidden_size)
 
-    def training_step(self, batch) -> Tensor:
-        query_emb = self.model(**batch["encoded_query"]).last_hidden_state
-        pos_doc_emb = self.model(**batch["encoded_pos_doc"]).last_hidden_state
-        neg_doc_emb = self.model(**batch["encoded_neg_doc"]).last_hidden_state
+    def forward(self, encoding) -> Tensor:
+        emb = self.model(**encoding).last_hidden_state
         if self.projection is not None:
-            query_emb = self.projection(query_emb)
-            pos_doc_emb = self.projection(pos_doc_emb)
-            neg_doc_emb = self.projection(neg_doc_emb)
+            emb = self.projection(emb)
+        return emb
+
+    def training_step(self, batch) -> Tensor:
+        query_emb = self.forward(batch["encoded_query"])
+        pos_doc_emb = self.forward(batch["encoded_pos_doc"])
+        neg_doc_emb = self.forward(batch["encoded_neg_doc"])
         if self.similarity == "cosine":
             pos_sim = torch.nn.functional.cosine_similarity(query_emb.squeeze(1), pos_doc_emb.squeeze(1))
             neg_sim = torch.nn.functional.cosine_similarity(query_emb.squeeze(1), neg_doc_emb.squeeze(1))
@@ -58,8 +60,8 @@ class MSMARCOModule(LightningModule):
         return loss
 
     def validation_step(self, batch, *args, **kwargs) -> None:
-        query_emb = self.model(**batch["encoded_query"]).last_hidden_state
-        doc_emb = self.model(**batch["encoded_doc"]).last_hidden_state
+        query_emb = self.forward(batch["encoded_query"])
+        doc_emb = self.forward(batch["encoded_doc"])
         sim = (query_emb @ doc_emb.transpose(-1, -2)).view(-1)
         self.validation_step_outputs.extend(zip(batch["query_id"], batch["doc_id"], sim.tolist(), batch["dataset_id"]))
         # logits = self.classification_head(output.mean(1))
