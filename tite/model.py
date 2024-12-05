@@ -452,12 +452,15 @@ class TiteSelfOutput(torch.nn.Module):
 
     def forward(
         self, hidden_states: torch.Tensor, attention_mask: torch.Tensor, input_tensor: torch.Tensor
-    ) -> torch.Tensor:
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
         hidden_states = self.dense(hidden_states)
         hidden_states = self.dropout(hidden_states)
         if self.pooling is not None and self.attention_based_pooling:
             input_tensor, attention_mask = self.pooling(input_tensor, attention_mask)
-        hidden_states[..., : input_tensor.shape[-1]] = hidden_states[..., : input_tensor.shape[-1]] + input_tensor
+        if hidden_states.shape[-1] == input_tensor.shape[-1]:
+            hidden_states = hidden_states + input_tensor
+        else:
+            hidden_states[..., : input_tensor.shape[-1]] = hidden_states[..., : input_tensor.shape[-1]] + input_tensor
         if not self.attention_based_pooling and self.pooling is not None:
             hidden_states, attention_mask = self.pooling(hidden_states, attention_mask)
         hidden_states = self.LayerNorm(hidden_states)
