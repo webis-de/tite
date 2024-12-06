@@ -1,5 +1,4 @@
 import math
-import warnings
 from dataclasses import dataclass
 from typing import List, Literal, Tuple
 
@@ -8,8 +7,6 @@ from einops import einsum, rearrange, repeat
 from transformers import PretrainedConfig, PreTrainedModel
 from transformers.activations import ACT2FN
 from transformers.modeling_outputs import ModelOutput
-
-from .unpad import repad, unpad
 
 
 def ceil_div(a: int, b: int) -> int:
@@ -54,7 +51,6 @@ class TiteConfig(PretrainedConfig):
         pad_token_id: int = 0,
         hidden_act: str = "gelu_pytorch_tanh",
         positional_embedding_type: Literal["absolute", "ALiBi", "rotary"] = "ALiBi",
-        unpadding: bool = False,
         upscale_hidden_size: bool = False,
         attention_based_pooling: bool = True,
         pooling_strategy: Literal["mean_conv", "select"] = "mean_conv",
@@ -74,7 +70,6 @@ class TiteConfig(PretrainedConfig):
         self.layer_norm_eps = layer_norm_eps
         self.hidden_act = hidden_act
         self.positional_embedding_type = positional_embedding_type
-        self.unpadding = unpadding
         self.upscale_hidden_size = upscale_hidden_size
         self.attention_based_pooling = attention_based_pooling
         self.pooling_strategy = pooling_strategy
@@ -120,8 +115,6 @@ class TiteModel(PreTrainedModel):
         self.embeddings = TiteEmbeddings(config)
         self.encoder = TiteEncoder(config)
 
-        self.unpadding = config.unpadding
-
         self.post_init()
 
     def get_input_embeddings(self):
@@ -161,16 +154,8 @@ class TiteModel(PreTrainedModel):
             attention_mask = torch.ones(1, input_ids.shape[1], device=input_ids.device, dtype=torch.bool)
         attention_mask = attention_mask.bool()
         batch_size, seq_len = input_ids.shape
-        if self.unpadding:
-            indices = torch.nonzero(attention_mask.flatten()).flatten()
-            input_ids = unpad(input_ids, indices)
         hidden_states = self.embeddings(input_ids, attention_mask)
         hidden_states, all_hidden_states = self.encoder(hidden_states, attention_mask, output_hidden_states)
-        if self.unpadding:
-            if hidden_states.shape[0] != batch_size:
-                hidden_states = repad(hidden_states, indices, batch_size, seq_len)
-            else:
-                hidden_states = hidden_states.unsqueeze(1)
         return TiteModelOutput(last_hidden_state=hidden_states, hidden_states=all_hidden_states)
 
 
@@ -186,17 +171,12 @@ class TiteEmbeddings(torch.nn.Module):
         self.LayerNorm = torch.nn.LayerNorm(hidden_size, eps=config.layer_norm_eps)
         self.dropout = torch.nn.Dropout(config.dropout_prob)
 
-        self.unpadding = config.unpadding
-
     def forward(self, input_ids: torch.Tensor, attention_mask: torch.Tensor) -> torch.Tensor:
         embeddings = self.word_embeddings(input_ids)
         if self.position_embeddings is not None:
-            if self.unpadding:
-                embeddings = embeddings + self.position_embeddings(attention_mask.nonzero()[:, 1].flatten())
-            else:
-                embeddings = embeddings + self.position_embeddings(
-                    torch.arange(input_ids.shape[1], device=input_ids.device)
-                )
+            embeddings = embeddings + self.position_embeddings(
+                torch.arange(input_ids.shape[1], device=input_ids.device)
+            )
         embeddings = self.LayerNorm(embeddings)
         embeddings = self.dropout(embeddings)
         return embeddings
@@ -320,8 +300,6 @@ class TiteSelfAttention(torch.nn.Module):
             self.alibi = None
             self.sinusoidal = None
 
-        self.unpadding = config.unpadding
-
     def get_alibi_embeddings(self, max_position_embeddings: int, num_attention_heads: int) -> torch.Tensor:
         # https://github.com/mosaicml/examples/blob/daddaeff7a535273ff984b0134da4839c70a45b3/examples/benchmarks/bert/src/bert_layers.py#L432
         # ALiBi
@@ -386,9 +364,6 @@ class TiteSelfAttention(torch.nn.Module):
         batch_size, seq_len = attention_mask.shape
         qkv = self.Wqkv(hidden_states)
 
-        if self.unpadding:
-            indices = torch.nonzero(attention_mask.flatten()).flatten()
-            qkv = repad(qkv, indices, batch_size, seq_len)
         qkv = rearrange(qkv, "b s (t h d) -> t b h s d", t=3, h=self.num_attention_heads, d=self.attention_head_size)
 
         query, key, value = qkv.unbind(dim=0)
@@ -423,10 +398,6 @@ class TiteSelfAttention(torch.nn.Module):
             s=new_seq_len,
             d=self.attention_head_size,
         )
-        if self.unpadding:
-            if attention_mask.shape != new_attention_mask.shape:
-                indices = torch.nonzero(new_attention_mask.flatten()).flatten()
-            attn_output = unpad(attn_output, indices)
         return attn_output, new_attention_mask
 
 
