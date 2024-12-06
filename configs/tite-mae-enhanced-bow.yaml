@@ -25,15 +25,21 @@ model:
             # stride: [null, null, null, null, null, null, 3, 3, 3, 3, 3, 3]
             # kernel_size: [null, 3, null, 3, null, 3, null, 3, null, 3, null, 3]
             # stride: [null, 3, null, 3, null, 3, null, 3, null, 3, null, 3]
-            # kernel_size: [null, null, null, 3, 3, 3, 3, 3, 3, 3, 3, 3]
+            # kernel_size: [null, null, null, 2, 2, 2, 2, 2, 2, 2, 2, 2]
             # stride: [null, null, null, 2, 2, 2, 2, 2, 2, 2, 2, 2]
-            kernel_size: [null, null, null, 2, 2, 2, 2, 2, 2, 2, 2, 2]
-            stride: [null, null, null, 2, 2, 2, 2, 2, 2, 2, 2, 2]
+            kernel_size: [null, 2, 2, 2, null, 2, 2, 2, null, 2, 2, 2]
+            stride: [null, 2, 2, 2, null, 2, 2, 2, null, 2, 2, 2]
+            # hidden_size: [768, 1024, 1280, 1536, 1536, 1792, 2048, 2304, 2304, 2560, 2816, 3072]
+            # num_attention_heads: [12, 16, 20, 24, 24, 28, 32, 36, 36, 40, 44, 48]
+            # intermediate_size: [3072, 4096, 5120, 6144, 6144, 7168, 8192, 9216, 9216, 10240, 11264, 12288]
+            hidden_size: [768, 1024, 1024, 1024, 1024, 1280, 1280, 1280, 1280, 1536, 1536, 1536]
+            num_attention_heads: [12, 16, 16, 16, 16, 20, 20, 20, 20, 24, 24, 24]
+            intermediate_size: [3072, 4096, 4096, 4096, 4096, 5120, 5120, 5120, 5120, 6144, 6144, 6144]
             positional_embedding_type: rotary
             unpadding: false
-            upscale_hidden_size: false
+            upscale_hidden_size: true
             attention_based_pooling: true
-            pooling_strategy: select
+            pooling_strategy: mean_conv
     tokenizer:
       class_path: tite.tokenizer.TiteTokenizer
       init_args:
@@ -60,22 +66,25 @@ model:
     predictors:
     - class_path: tite.predictor.MAEEnhancedDecoder
       init_args:
-        config:
-          class_path: tite.bert.BertConfig
-          init_args:
-            pooling: null
-            unpadding: false
-            positional_embedding_type: absolute
+        orig_hidden_size: 768
+        # hidden_size: 3072
+        # num_attention_heads: 48
+        # intermediate_size: 12288
+        hidden_size: 1536
+        num_attention_heads: 24
+        intermediate_size: 6144
+        positional_embedding_type: absolute
         query_strategy: embx
         mask_id: 103
         mask_prob: 0.5
     - class_path: tite.predictor.BOWDecoder
       init_args:
         vocab_size: 30522
-        hidden_size: 768
+        orig_hidden_size: 768
+        hidden_size: 1536
     # - class_path: tite.predictor.Identity
     losses:
-    - class_path: tite.loss.MLMCrossEntropy
+    - class_path: tite.loss.MAECrossEntropy
       init_args:
         vocab_size: 30522
     - class_path: tite.loss.BOWBinaryCrossEntropy

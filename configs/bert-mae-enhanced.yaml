@@ -42,7 +42,7 @@ model:
         mask_id: 103
         mask_prob: 0.5
     losses:
-    - class_path: tite.loss.MLMCrossEntropy
+    - class_path: tite.loss.MAECrossEntropy
       init_args:
         vocab_size: 30522
     log_additional_metrics: false

@@ -50,7 +50,7 @@ model:
         vocab_size: 30522
         hidden_size: 768
     losses:
-    - class_path: tite.loss.MLMCrossEntropy
+    - class_path: tite.loss.MAECrossEntropy
       init_args:
         vocab_size: 30522
     - class_path: tite.loss.BOWBinaryCrossEntropy

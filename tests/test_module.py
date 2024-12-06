@@ -6,8 +6,7 @@ from torch.nn import Module
 from transformers import AutoTokenizer, BertForMaskedLM
 
 from tite.bert import BertConfig, BertModel
-from tite.loss import BarlowTwins, MLMCrossEntropy
-from tite.loss.mlm import MLMCrossEntropy
+from tite.loss import BarlowTwins, MAECrossEntropy
 from tite.model import TiteConfig, TiteModel
 from tite.module import TiteModule
 from tite.predictor import Identity, MLMDecoder
@@ -48,7 +47,7 @@ def config() -> TiteConfig:
             MLMTeacher(0),
             MLMDecoder(32, 4),
             MLMMaskTokens(32, 4, 2, 3),
-            MLMCrossEntropy(32),
+            MAECrossEntropy(32),
         ),
         (
             TiteConfig(
@@ -192,7 +191,7 @@ def test_same_as_bert_loss():
         state_dict[key.replace("predictions.", "").replace("transform.", "")] = value
     predictor.load_state_dict(state_dict)
 
-    loss = MLMCrossEntropy(config.vocab_size)
+    loss = MAECrossEntropy(config.vocab_size)
     module = TiteModule(model, teacher, tokenizer, [transformation], predictor, loss)
 
     encoding = tokenizer(texts, return_tensors="pt", padding=True, truncation=True)

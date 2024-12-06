@@ -115,15 +115,8 @@ class MLMCrossEntropy(Module):
         return torch.nn.functional.cross_entropy(logits, labels)
 
 
-class OrigMLMCrossEntropy(Module):
-    def __init__(self, vocab_size: int) -> None:
-        super().__init__()
-        self.vocab_size = vocab_size
-
-    def forward(self, logits, labels):
-        logits = logits.view(-1, self.vocab_size)
-        labels = labels.view(-1)
-        return torch.nn.functional.cross_entropy(logits, labels)
+class MAECrossEntropy(MLMCrossEntropy):
+    pass
 
 
 class BOWBinaryCrossEntropy(Module):
