@@ -264,9 +264,13 @@ class MAEEnhancedDecoder(PreTrainedModel):
         self.upscale = None
         self.upscale_position_embeddings = None
         if orig_hidden_size != hidden_size:
-            self.upscale = torch.nn.Linear(orig_hidden_size, hidden_size)
+            self.upscale = torch.nn.Sequential(
+                torch.nn.Linear(orig_hidden_size, hidden_size), torch.nn.LayerNorm(hidden_size)
+            )
             if self.embeddings.position_embeddings is not None:
-                self.upscale_position_embeddings = torch.nn.Linear(orig_hidden_size, hidden_size)
+                self.upscale_position_embeddings = torch.nn.Sequential(
+                    torch.nn.Linear(orig_hidden_size, hidden_size), torch.nn.LayerNorm(hidden_size)
+                )
 
         self.mlm_decoder = MLMDecoder(
             attention_config.vocab_size, orig_hidden_size, attention_config.hidden_size[0], attention_config.hidden_act
