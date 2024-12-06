@@ -18,15 +18,10 @@ class MLMDecoder(Module):
         self, vocab_size: int, orig_hidden_size: int, hidden_size: int, hidden_act: str = "gelu_pytorch_tanh"
     ) -> None:
         super().__init__()
-        self.dense = torch.nn.Linear(hidden_size, hidden_size)
+        self.dense = torch.nn.Linear(hidden_size, orig_hidden_size)
         self.transform_act_fn = ACT2FN[hidden_act]
-        self.LayerNorm = torch.nn.LayerNorm(hidden_size, eps=1e-12)
-        self.decoder = torch.nn.Linear(hidden_size, vocab_size)
-
-        self.downscale = None
-        if orig_hidden_size != hidden_size:
-            self.downscale = torch.nn.Linear(hidden_size, orig_hidden_size)
-
+        self.LayerNorm = torch.nn.LayerNorm(orig_hidden_size, eps=1e-12)
+        self.decoder = torch.nn.Linear(orig_hidden_size, vocab_size)
         self.bias = torch.nn.Parameter(torch.zeros(vocab_size))
 
     def _tie_weights(self):
@@ -36,8 +31,6 @@ class MLMDecoder(Module):
         hidden_states = self.dense(hidden_states)
         hidden_states = self.transform_act_fn(hidden_states)
         hidden_states = self.LayerNorm(hidden_states)
-        if self.downscale is not None:
-            hidden_states = self.downscale(hidden_states)
         logits = self.decoder(hidden_states)
         return logits
 
