@@ -8,6 +8,8 @@ from transformers import PretrainedConfig, PreTrainedModel
 from transformers.activations import ACT2FN
 from transformers.modeling_outputs import ModelOutput
 
+from .rope import RotaryPositionalEmbeddings
+
 
 def ceil_div(a: int, b: int) -> int:
     return -(-a // b)
@@ -290,15 +292,13 @@ class TiteSelfAttention(torch.nn.Module):
             self.register_buffer(
                 "alibi", self.get_alibi_embeddings(config.output_shapes[layer_idx], self.num_attention_heads)
             )
-            self.sinusoidal: torch.Tensor | None = None
+            self.rope = None
         elif config.positional_embedding_type == "rotary":
             self.alibi = None
-            self.register_buffer(
-                "sinusoidal", self.get_sinusoidal_embeddings(config.output_shapes[layer_idx], self.attention_head_size)
-            )
+            self.rope = RotaryPositionalEmbeddings(self.attention_head_size, config.max_position_embeddings)
         else:
             self.alibi = None
-            self.sinusoidal = None
+            self.rope = None
 
     def get_alibi_embeddings(self, max_position_embeddings: int, num_attention_heads: int) -> torch.Tensor:
         # https://github.com/mosaicml/examples/blob/daddaeff7a535273ff984b0134da4839c70a45b3/examples/benchmarks/bert/src/bert_layers.py#L432
@@ -340,26 +340,6 @@ class TiteSelfAttention(torch.nn.Module):
 
         return alibi
 
-    def get_sinusoidal_embeddings(self, max_position_embeddings: int, attention_head_size: int) -> torch.Tensor:
-        position = torch.arange(max_position_embeddings).unsqueeze(1)
-        div_term = torch.exp(
-            torch.arange(0, attention_head_size, 2).float() * (-math.log(10000.0) / attention_head_size)
-        )
-        sinusoidal_emb = torch.empty((max_position_embeddings, attention_head_size))
-        sinusoidal_emb[:, 0::2] = torch.sin(position * div_term)
-        sinusoidal_emb[:, 1::2] = torch.cos(position * div_term)
-        return sinusoidal_emb
-
-    def apply_rotary_position_embeddings(self, x: torch.Tensor) -> torch.Tensor:
-        assert self.sinusoidal is not None
-        # Split the sinusoidal_pos into sin and cos parts
-        sin, cos = self.sinusoidal[: x.shape[-2]].chunk(2, dim=-1)
-        # Apply the rotary embeddings to the query and key
-        x_rot = torch.stack((-x[..., 1::2], x[..., ::2]), dim=-1)
-        x_rot = torch.reshape(x_rot, x.shape[:-1] + (x.shape[-1] // 2, 2)) * torch.stack((cos, sin), dim=-1)
-        x_rot = torch.reshape(x_rot, x.shape)
-        return x_rot
-
     def forward(self, hidden_states: torch.Tensor, attention_mask: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         batch_size, seq_len = attention_mask.shape
         qkv = self.Wqkv(hidden_states)
@@ -376,9 +356,9 @@ class TiteSelfAttention(torch.nn.Module):
         new_seq_len = new_attention_mask.shape[1]
 
         if value.shape[-2] > 1:
-            if self.sinusoidal is not None:
-                query = self.apply_rotary_position_embeddings(query)
-                key = self.apply_rotary_position_embeddings(key)
+            if self.rope is not None:
+                query = rearrange(self.rope(rearrange(query, "b h s d -> b s h d")), "b s h d -> b h s d")
+                key = rearrange(self.rope(rearrange(key, "b h s d -> b s h d")), "b s h d -> b h s d")
             attn_weight = repeat(
                 torch.where(einsum(new_attention_mask, attention_mask, "b s1, b s2 -> b s1 s2"), 0, -10000.0),
                 "b s1 s2 -> b h s1 s2",
@@ -412,7 +392,7 @@ class TiteSelfOutput(torch.nn.Module):
         kernel_size = config.kernel_size[layer_idx]
         stride = config.stride[layer_idx]
         self.pooling = None
-        if kernel_size is not None and stride is not None and config.attention_based_pooling:
+        if kernel_size is not None and stride is not None:
             if config.pooling_strategy == "mean_conv":
                 self.pooling = MaskedAvgPool1d(kernel_size, stride)
             elif config.pooling_strategy == "select":
@@ -432,7 +412,7 @@ class TiteSelfOutput(torch.nn.Module):
             hidden_states = hidden_states + input_tensor
         else:
             hidden_states[..., : input_tensor.shape[-1]] = hidden_states[..., : input_tensor.shape[-1]] + input_tensor
-        if not self.attention_based_pooling and self.pooling is not None:
+        if self.pooling is not None and not self.attention_based_pooling:
             hidden_states, attention_mask = self.pooling(hidden_states, attention_mask)
         hidden_states = self.LayerNorm(hidden_states)
         return hidden_states, attention_mask
