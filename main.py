@@ -14,6 +14,7 @@ from tite.lr_schedulers import LR_SCHEDULERS, WarmupLRScheduler
 from tite.model import PreTrainedModel, TiteConfig
 
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
+torch.set_float32_matmul_precision("medium")
 
 
 class CustomSaveConfigCallback(SaveConfigCallback):
