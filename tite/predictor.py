@@ -162,18 +162,17 @@ class MAEEnhancedDecoder(PreTrainedModel):
         intermediate_size: int,
         mask_id: int,
         mask_prob: float,
-        positional_embedding_type: Literal["ALiBi", "rotary", "absolute"] = "absolute",
         query_strategy: Literal["embx", "mask"] = "embx",
     ):
         embeddings_config = BertConfig(
-            num_hidden_layers=1, hidden_size=orig_hidden_size, positional_embedding_type=positional_embedding_type
+            num_hidden_layers=1, hidden_size=orig_hidden_size, positional_embedding_type="absolute"
         )
         attention_config = BertConfig(
             num_hidden_layers=1,
             hidden_size=hidden_size,
             num_attention_heads=num_attention_heads,
             intermediate_size=intermediate_size,
-            positional_embedding_type=positional_embedding_type,
+            positional_embedding_type="absolute",
         )
         super().__init__(attention_config)
         self.mask_id = mask_id
