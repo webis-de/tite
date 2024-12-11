@@ -1,5 +1,4 @@
-import math
-from typing import List, Literal
+from typing import Literal
 
 import torch
 from einops import rearrange, repeat
@@ -22,6 +21,7 @@ class MLMDecoder(Module):
         self.transform_act_fn = ACT2FN[hidden_act]
         self.LayerNorm = torch.nn.LayerNorm(orig_hidden_size, eps=1e-12)
         self.decoder = torch.nn.Linear(orig_hidden_size, vocab_size)
+
         self.bias = torch.nn.Parameter(torch.zeros(vocab_size))
 
     def _tie_weights(self):
@@ -70,79 +70,8 @@ class MAESelfAttention(torch.nn.Module):
         self.dropout_prob = config.dropout_prob
         self.mask_prob = mask_prob
 
-        if config.positional_embedding_type == "ALiBi":
-            self.register_buffer(
-                "alibi", self.get_alibi_embeddings(config.output_shapes[layer_idx], self.num_attention_heads)
-            )
-            self.sinusoidal: torch.Tensor | None = None
-        elif config.positional_embedding_type == "rotary":
-            self.alibi = None
-            self.register_buffer(
-                "sinusoidal", self.get_sinusoidal_embeddings(config.output_shapes[layer_idx], self.attention_head_size)
-            )
-        else:
-            self.alibi = None
-            self.sinusoidal = None
-
-    def get_alibi_embeddings(self, max_position_embeddings: int, num_attention_heads: int) -> torch.Tensor:
-        # https://github.com/mosaicml/examples/blob/daddaeff7a535273ff984b0134da4839c70a45b3/examples/benchmarks/bert/src/bert_layers.py#L432
-        # ALiBi
-        # Following https://github.com/ofirpress/attention_with_linear_biases/issues/5 (Implementation 1)
-        # In the causal case, you can exploit the fact that softmax is invariant to a uniform translation
-        # of the logits, which makes the math work out *after* applying causal masking. If no causal masking
-        # will be applied, it is necessary to construct the diagonal mask.
-        def _get_alibi_head_slopes(num_attention_heads: int) -> List[float]:
-
-            def get_slopes_power_of_2(num_attention_heads: int) -> List[float]:
-                start = 2 ** (-(2 ** -(math.log2(num_attention_heads) - 3)))
-                ratio = start
-                return [start * ratio**i for i in range(num_attention_heads)]
-
-            # In the paper, they only train models that have 2^a heads for some a. This function
-            # has some good properties that only occur when the input is a power of 2. To
-            # maintain that even when the number of heads is not a power of 2, we use a
-            # workaround.
-            if math.log2(num_attention_heads).is_integer():
-                return get_slopes_power_of_2(num_attention_heads)
-
-            closest_power_of_2 = 2 ** math.floor(math.log2(num_attention_heads))
-            slopes_a = get_slopes_power_of_2(closest_power_of_2)
-            slopes_b = _get_alibi_head_slopes(2 * closest_power_of_2)
-            slopes_b = slopes_b[0::2][: num_attention_heads - closest_power_of_2]
-            return slopes_a + slopes_b
-
-        context_position = torch.arange(max_position_embeddings)[:, None]
-        memory_position = torch.arange(max_position_embeddings)[None, :]
-        relative_position = torch.abs(memory_position - context_position)
-        # [num_attention_heads, max_token_length, max_token_length]
-        relative_position = relative_position.unsqueeze(0).expand(num_attention_heads, -1, -1)
-        slopes = torch.tensor(_get_alibi_head_slopes(num_attention_heads), device=relative_position.device)
-        alibi = slopes.unsqueeze(1).unsqueeze(1) * -relative_position
-        # [1, num_attention_heads, max_token_length, max_token_length]
-        alibi = alibi.unsqueeze(0)
-        assert alibi.shape == torch.Size([1, num_attention_heads, max_position_embeddings, max_position_embeddings])
-
-        return alibi
-
-    def get_sinusoidal_embeddings(self, max_position_embeddings: int, attention_head_size: int) -> torch.Tensor:
-        position = torch.arange(max_position_embeddings).unsqueeze(1)
-        div_term = torch.exp(
-            torch.arange(0, attention_head_size, 2).float() * (-math.log(10000.0) / attention_head_size)
-        )
-        sinusoidal_emb = torch.empty((max_position_embeddings, attention_head_size))
-        sinusoidal_emb[:, 0::2] = torch.sin(position * div_term)
-        sinusoidal_emb[:, 1::2] = torch.cos(position * div_term)
-        return sinusoidal_emb
-
-    def apply_rotary_position_embeddings(self, x: torch.Tensor) -> torch.Tensor:
-        assert self.sinusoidal is not None
-        # Split the sinusoidal_pos into sin and cos parts
-        sin, cos = self.sinusoidal[: x.shape[-2]].chunk(2, dim=-1)
-        # Apply the rotary embeddings to the query and key
-        x_rot = torch.stack((-x[..., 1::2], x[..., ::2]), dim=-1)
-        x_rot = torch.reshape(x_rot, x.shape[:-1] + (x.shape[-1] // 2, 2)) * torch.stack((cos, sin), dim=-1)
-        x_rot = torch.reshape(x_rot, x.shape)
-        return x_rot
+        if config.positional_embedding_type != "absolute":
+            raise ValueError(f"Unsupported positional embedding type: {config.positional_embedding_type}")
 
     def forward(
         self,
@@ -171,16 +100,11 @@ class MAESelfAttention(torch.nn.Module):
         enhanced_decoding_mask = attention_mask[:, None].logical_and(decoding_mask).logical_and(diag_mask)
         enhanced_decoding_mask = torch.nn.functional.pad(enhanced_decoding_mask, (embx.shape[1], 0, 0, 0), value=True)
 
-        if self.sinusoidal is not None:
-            query = self.apply_rotary_position_embeddings(query)
-            key = self.apply_rotary_position_embeddings(key)
         attn_weight = repeat(
             torch.where(enhanced_decoding_mask, 0, -10000.0),
             "b s1 s2 -> b h s1 s2",
             h=self.num_attention_heads,
         )
-        if self.alibi is not None:
-            attn_weight = attn_weight + self.alibi[:, :, : attn_weight.shape[-2], : attn_weight.shape[-1]]
 
         attn_output = torch.nn.functional.scaled_dot_product_attention(
             query, key, value, attn_weight, self.dropout_prob if self.training else 0.0
@@ -255,7 +179,6 @@ class MAEEnhancedDecoder(PreTrainedModel):
         self.mask_id = mask_id
         self.query_strategy = query_strategy
 
-        # embeddings_config.hidden_size[0] =
         self.embeddings = TiteEmbeddings(embeddings_config)
         self.attention = MAEAttention(attention_config, 0, mask_prob)
         self.intermediate = TiteIntermediate(attention_config, 0)
