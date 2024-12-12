@@ -24,7 +24,7 @@ trainer:
       logging_interval: step
   - class_path: tite.callbacks.DummyImportCallback
   max_epochs: null
-  max_steps: 100000
+  max_steps: 50000
   val_check_interval: 80000
   check_val_every_n_epoch: null
   num_sanity_val_steps: 2
