@@ -359,10 +359,12 @@ class TiteSelfAttention(torch.nn.Module):
             if self.rope is not None:
                 query = rearrange(self.rope(rearrange(query, "b h s d -> b s h d")), "b s h d -> b h s d")
                 key = rearrange(self.rope(rearrange(key, "b h s d -> b s h d")), "b s h d -> b h s d")
+            if attention_mask.shape != new_attention_mask.shape:
+                attn_weight = einsum(new_attention_mask, attention_mask, "b s1, b s2 -> b s1 s2")
+            else:
+                attn_weight = attention_mask[:, None].expand(batch_size, seq_len, seq_len)
             attn_weight = repeat(
-                torch.where(einsum(new_attention_mask, attention_mask, "b s1, b s2 -> b s1 s2"), 0, -10000.0),
-                "b s1 s2 -> b h s1 s2",
-                h=self.num_attention_heads,
+                torch.where(attn_weight, 0, -10000.0), "b s1 s2 -> b h s1 s2", h=self.num_attention_heads
             )
             if self.alibi is not None:
                 attn_weight = attn_weight + self.alibi[:, :, : attn_weight.shape[-2], : attn_weight.shape[-1]]
