@@ -157,12 +157,14 @@ class MAEEnhancedDecoder(PreTrainedModel):
     def __init__(
         self,
         orig_hidden_size: int,
+        embx_hidden_size: int,
         hidden_size: int,
         num_attention_heads: int,
         intermediate_size: int,
         mask_id: int,
         mask_prob: float,
         query_strategy: Literal["embx", "mask"] = "embx",
+        subvectors: bool = False,
     ):
         embeddings_config = BertConfig(
             num_hidden_layers=1, hidden_size=orig_hidden_size, positional_embedding_type="absolute"
@@ -177,6 +179,7 @@ class MAEEnhancedDecoder(PreTrainedModel):
         super().__init__(attention_config)
         self.mask_id = mask_id
         self.query_strategy = query_strategy
+        self.subvectors = subvectors
 
         self.embeddings = TiteEmbeddings(embeddings_config)
         self.attention = MAEAttention(attention_config, 0, mask_prob)
@@ -185,14 +188,24 @@ class MAEEnhancedDecoder(PreTrainedModel):
 
         self.upscale = None
         self.upscale_position_embeddings = None
-        if orig_hidden_size != hidden_size:
-            self.upscale = torch.nn.Sequential(
-                torch.nn.Linear(orig_hidden_size, hidden_size), torch.nn.LayerNorm(hidden_size)
-            )
-            if self.embeddings.position_embeddings is not None:
-                self.upscale_position_embeddings = torch.nn.Sequential(
+        self.downscale = None
+        if orig_hidden_size != embx_hidden_size:
+            if subvectors:
+                if embx_hidden_size % orig_hidden_size != 0:
+                    raise ValueError("Incompatible hidden sizes")
+                self.downscale = torch.nn.Sequential(
+                    torch.nn.Linear(embx_hidden_size, orig_hidden_size), torch.nn.LayerNorm(orig_hidden_size)
+                )
+            else:
+                if embx_hidden_size != hidden_size:
+                    raise ValueError("Incompatible hidden sizes")
+                self.upscale = torch.nn.Sequential(
                     torch.nn.Linear(orig_hidden_size, hidden_size), torch.nn.LayerNorm(hidden_size)
                 )
+                if self.embeddings.position_embeddings is not None:
+                    self.upscale_position_embeddings = torch.nn.Sequential(
+                        torch.nn.Linear(orig_hidden_size, hidden_size), torch.nn.LayerNorm(hidden_size)
+                    )
 
         self.mlm_decoder = MLMDecoder(
             attention_config.vocab_size, orig_hidden_size, attention_config.hidden_size[0], attention_config.hidden_act
@@ -235,14 +248,19 @@ class MAEEnhancedDecoder(PreTrainedModel):
         if attention_mask is None:
             attention_mask = torch.ones(1, input_ids.shape[1], device=input_ids.device, dtype=torch.bool)
         attention_mask = attention_mask.bool()
+
+        query_embx = embx
+        if self.downscale:
+            query_embx = self.downscale(embx)
+
         key_value_hidden_states = self.embeddings(input_ids, attention_mask)
         if self.upscale is not None:
             key_value_hidden_states = self.upscale(key_value_hidden_states)
         if self.query_strategy == "embx":
-            query_hidden_states = embx.expand_as(key_value_hidden_states)
+            query_hidden_states = query_embx.expand_as(key_value_hidden_states)
             if self.embeddings.position_embeddings is not None:
                 position_embeddings = self.embeddings.position_embeddings(
-                    torch.arange(input_ids.shape[1], device=embx.device)
+                    torch.arange(input_ids.shape[1], device=query_embx.device)
                 )
                 if self.upscale_position_embeddings is not None:
                     position_embeddings = self.upscale_position_embeddings(position_embeddings)
@@ -251,6 +269,11 @@ class MAEEnhancedDecoder(PreTrainedModel):
             query_hidden_states = self.embeddings(torch.full_like(input_ids, self.mask_id), attention_mask)
         else:
             raise ValueError(f"Unknown query strategy: {self.query_strategy}")
+
+        if self.subvectors:
+            num_sub_vectors = embx.shape[-1] // key_value_hidden_states.shape[-1]
+            embx = embx.view(embx.shape[0], num_sub_vectors, key_value_hidden_states.shape[-1])
+
         attention_output = self.attention(query_hidden_states, key_value_hidden_states, attention_mask, embx)
         intermediate_output = self.intermediate(attention_output)
         hidden_states = self.output(intermediate_output, attention_output)
