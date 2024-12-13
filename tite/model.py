@@ -357,8 +357,8 @@ class TiteSelfAttention(torch.nn.Module):
 
         if value.shape[-2] > 1:
             if self.rope is not None:
-                query = rearrange(self.rope(rearrange(query, "b h s d -> b s h d")), "b s h d -> b h s d")
-                key = rearrange(self.rope(rearrange(key, "b h s d -> b s h d")), "b s h d -> b h s d")
+                query = self.rope(query)
+                key = self.rope(key)
             if attention_mask.shape != new_attention_mask.shape:
                 attn_weight = einsum(new_attention_mask, attention_mask, "b s1, b s2 -> b s1 s2")
             else:
