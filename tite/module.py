@@ -29,6 +29,10 @@ class _DetachFromGrad(Module):
         return output.detach()  # Better safe than sorry
 
 
+def tie_weights(student_weight: torch.Tensor, teacher_weight: torch.Tensor) -> None:
+    student_weight.data = teacher_weight.data[:, : student_weight.data.shape[1]]
+
+
 class TiteModule(LightningModule):
     def __init__(
         self,
@@ -44,14 +48,6 @@ class TiteModule(LightningModule):
         log_gradients: bool = False,
     ) -> None:
         super().__init__()
-        # ties weights for BERT models -- only works for teacher MLM and student BERT
-        for predictor in predictors:
-            if isinstance(predictor, (MLMDecoder, MAEDecoder, MAEEnhancedDecoder)) and isinstance(student, TiteModel):
-                student.tie_decoder_weights(predictor.decoder)
-                if isinstance(predictor, (MAEDecoder, MAEEnhancedDecoder)):
-                    predictor.embeddings.word_embeddings = student.get_input_embeddings()
-                    if student.embeddings.position_embeddings is not None:
-                        predictor.embeddings.position_embeddings = student.embeddings.position_embeddings
         self.student = student
         self.teachers = torch.nn.ModuleList([teacher if teacher is not None else student for teacher in teachers])
         self.tokenizer = tokenizer
@@ -67,6 +63,22 @@ class TiteModule(LightningModule):
         self.jepa = JEPA(self.student, self.teachers, self.predictors, self.losses)
 
         self.tokens_seen = 0.0
+
+    def on_train_start(self) -> None:
+        # tie weights
+        for predictor in self.predictors:
+            if isinstance(predictor, (MLMDecoder, MAEDecoder, MAEEnhancedDecoder)):
+                # student.tie_decoder_weights(predictor.decoder)
+                tie_weights(self.student.embeddings.word_embeddings.weight, predictor.decoder.weight)
+                if isinstance(predictor, (MAEDecoder, MAEEnhancedDecoder)):
+                    predictor.embeddings.word_embeddings = self.student.get_input_embeddings()
+                    if (
+                        self.student.embeddings.position_embeddings is not None
+                        and predictor.embeddings.position_embeddings is not None
+                    ):
+                        predictor.embeddings.position_embeddings.weight.data = (
+                            self.student.embeddings.position_embeddings.weight.data
+                        )
 
     def on_validation_start(self) -> None:
         if self.trainer is None:
