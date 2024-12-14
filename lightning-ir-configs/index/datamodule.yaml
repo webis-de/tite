@@ -60,9 +60,6 @@ data:
         doc_dataset: beir/hotpotqa
     - class_path: DocDataset
       init_args:
-        doc_dataset: beir/msmarco
-    - class_path: DocDataset
-      init_args:
         doc_dataset: beir/nfcorpus
     - class_path: DocDataset
       init_args:
