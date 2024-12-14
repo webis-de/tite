@@ -24,7 +24,6 @@ class BertConfig(TiteConfig):
         hidden_act: str = "gelu_pytorch_tanh",
         positional_embedding_type: Literal["absolute", "ALiBi", "rotary"] = "ALiBi",
         pooling: Literal["mean", "first"] | None = None,
-        unpadding: bool = False,
         **kwargs
     ):
         super().__init__(
@@ -42,7 +41,6 @@ class BertConfig(TiteConfig):
             pad_token_id,
             hidden_act,
             positional_embedding_type,
-            unpadding,
             **kwargs
         )
         self.pooling = pooling
