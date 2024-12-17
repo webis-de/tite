@@ -71,13 +71,14 @@ class TiteModule(LightningModule):
                 # student.tie_decoder_weights(predictor.decoder)
                 tie_weights(self.student.embeddings.word_embeddings.weight, predictor.decoder.weight)
                 if isinstance(predictor, (MAEDecoder, MAEEnhancedDecoder)):
-                    predictor.embeddings.word_embeddings = self.student.get_input_embeddings()
+                    predictor.embeddings.word_embeddings.weight.data = predictor.decoder.weight.data
                     if (
                         self.student.embeddings.position_embeddings is not None
                         and predictor.embeddings.position_embeddings is not None
                     ):
-                        predictor.embeddings.position_embeddings.weight.data = (
-                            self.student.embeddings.position_embeddings.weight.data
+                        tie_weights(
+                            self.student.embeddings.position_embeddings.weight,
+                            predictor.embeddings.position_embeddings.weight,
                         )
 
     def on_validation_start(self) -> None:
