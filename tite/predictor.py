@@ -229,13 +229,19 @@ class MAEEnhancedDecoder(PreTrainedModel):
             module.weight.data.fill_(1.0)
 
     def forward(
-        self, embx: Tensor, input_ids: torch.Tensor, attention_mask: torch.Tensor | None = None
+        self,
+        embx: Tensor,
+        input_ids: torch.Tensor,
+        attention_mask: torch.Tensor | None = None,
+        special_tokens_mask: torch.Tensor | None = None,
     ) -> torch.Tensor:
         if embx.shape[1] > 1:
             embx = embx[:, [0]]
         if attention_mask is None:
-            attention_mask = torch.ones(1, input_ids.shape[1], device=input_ids.device, dtype=torch.bool)
-        attention_mask = attention_mask.bool()
+            attention_mask = torch.ones_like(input_ids, dtype=torch.bool)
+        if special_tokens_mask is None:
+            special_tokens_mask = torch.zeros_like(input_ids, dtype=torch.bool)
+        attention_mask = attention_mask.bool() & ~special_tokens_mask.bool()
 
         key_value_hidden_states = self.embeddings(input_ids, attention_mask)
         if self.query_strategy == "embx":
