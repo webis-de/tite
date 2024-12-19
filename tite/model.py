@@ -16,10 +16,10 @@ def ceil_div(a: int, b: int) -> int:
 
 
 def compute_output_shapes(
-    input_shape: int, kernel_size: Tuple[int | None, ...], stride: Tuple[int | None, ...]
+    input_shape: int, kernel_sizes: Tuple[int | None, ...], strides: Tuple[int | None, ...]
 ) -> List[int]:
     output_shapes = [input_shape]
-    for k, s in zip(kernel_size, stride):
+    for k, s in zip(kernel_sizes, strides):
         if k is None or s is None:
             output_shapes.append(output_shapes[-1])
         else:
@@ -41,11 +41,11 @@ class TiteConfig(PretrainedConfig):
         self,
         vocab_size: int = 30522,
         num_hidden_layers: int = 12,
-        hidden_size: Tuple[int, ...] = (768,) * 12,
+        hidden_sizes: Tuple[int, ...] = (768,) * 12,
         num_attention_heads: Tuple[int, ...] = (12,) * 12,
-        intermediate_size: Tuple[int, ...] = (3072,) * 12,
-        kernel_size: Tuple[int | None, ...] = (None,) * 12,
-        stride: Tuple[int | None, ...] = (None,) * 12,
+        intermediate_sizes: Tuple[int, ...] = (3072,) * 12,
+        kernel_sizes: Tuple[int | None, ...] = (None,) * 12,
+        strides: Tuple[int | None, ...] = (None,) * 12,
         dropout_prob: float = 0.1,
         max_position_embeddings: int = 512,
         initializer_range: float = 0.02,
@@ -53,7 +53,7 @@ class TiteConfig(PretrainedConfig):
         pad_token_id: int = 0,
         hidden_act: str = "gelu_pytorch_tanh",
         positional_embedding_type: Literal["absolute", "ALiBi", "rotary"] = "ALiBi",
-        upscale_hidden_size: bool = False,
+        upscale_hidden_sizes: bool = False,
         attention_based_pooling: bool = True,
         pooling_strategy: Literal["mean_conv", "select"] = "mean_conv",
         **kwargs,
@@ -61,30 +61,30 @@ class TiteConfig(PretrainedConfig):
         super().__init__(pad_token_id=pad_token_id, **kwargs)
         self.vocab_size = vocab_size
         self.num_hidden_layers = num_hidden_layers
-        self.hidden_size = hidden_size
+        self.hidden_sizes = hidden_sizes
         self.num_attention_heads = num_attention_heads
-        self.intermediate_size = intermediate_size
-        self.kernel_size = kernel_size
-        self.stride = stride
+        self.intermediate_sizes = intermediate_sizes
+        self.kernel_sizes = kernel_sizes
+        self.strides = strides
         self.dropout_prob = dropout_prob
         self.max_position_embeddings = max_position_embeddings
         self.initializer_range = initializer_range
         self.layer_norm_eps = layer_norm_eps
         self.hidden_act = hidden_act
         self.positional_embedding_type = positional_embedding_type
-        self.upscale_hidden_size = upscale_hidden_size
+        self.upscale_hidden_sizes = upscale_hidden_sizes
         self.attention_based_pooling = attention_based_pooling
         self.pooling_strategy = pooling_strategy
 
         iterator = zip(
             [
-                "hidden_size",
+                "hidden_sizes",
                 "num_attention_heads",
-                "intermediate_size",
-                "kernel_size",
-                "stride",
+                "intermediate_sizes",
+                "kernel_sizes",
+                "strides",
             ],
-            [hidden_size, num_attention_heads, intermediate_size, kernel_size, stride],
+            [hidden_sizes, num_attention_heads, intermediate_sizes, kernel_sizes, strides],
         )
         for name, setting in iterator:
             if len(setting) != num_hidden_layers:
@@ -95,17 +95,17 @@ class TiteConfig(PretrainedConfig):
 
         if self.output_shapes[0] != self.output_shapes[-1] and self.output_shapes[-1] != 1:
             raise ValueError(
-                "Kernel_size and stride are set, but do not reduce the maximum sequence length to 1. "
-                "Please adjust kernel_size and stride."
+                "Kernel_sizes and strides are set, but do not reduce the maximum sequence length to 1. "
+                "Please adjust kernel_sizes and strides."
             )
 
     @property
     def output_shapes(self) -> List[int]:
-        return compute_output_shapes(self.max_position_embeddings, self.kernel_size, self.stride)
+        return compute_output_shapes(self.max_position_embeddings, self.kernel_sizes, self.strides)
 
     @property
-    def last_hidden_size(self) -> int:
-        return self.hidden_size[-1]
+    def hidden_size(self) -> int:
+        return self.hidden_sizes[-1]
 
 
 class TiteModel(PreTrainedModel):
@@ -164,13 +164,13 @@ class TiteModel(PreTrainedModel):
 class TiteEmbeddings(torch.nn.Module):
     def __init__(self, config: TiteConfig):
         super().__init__()
-        hidden_size = config.hidden_size[0]
+        hidden_sizes = config.hidden_sizes[0]
         self.num_attention_heads = config.num_attention_heads
-        self.word_embeddings = torch.nn.Embedding(config.vocab_size, hidden_size, padding_idx=config.pad_token_id)
+        self.word_embeddings = torch.nn.Embedding(config.vocab_size, hidden_sizes, padding_idx=config.pad_token_id)
         self.position_embeddings = None
         if config.positional_embedding_type == "absolute":
-            self.position_embeddings = torch.nn.Embedding(config.max_position_embeddings, hidden_size)
-        self.LayerNorm = torch.nn.LayerNorm(hidden_size, eps=config.layer_norm_eps)
+            self.position_embeddings = torch.nn.Embedding(config.max_position_embeddings, hidden_sizes)
+        self.LayerNorm = torch.nn.LayerNorm(hidden_sizes, eps=config.layer_norm_eps)
         self.dropout = torch.nn.Dropout(config.dropout_prob)
 
     def forward(self, input_ids: torch.Tensor, attention_mask: torch.Tensor) -> torch.Tensor:
@@ -185,18 +185,18 @@ class TiteEmbeddings(torch.nn.Module):
 
 
 def sum_pool2d(
-    input: torch.Tensor, kernel_size: tuple[int, int], stride: tuple[int, int], ceil_mode: bool = False
+    input: torch.Tensor, kernel_sizes: tuple[int, int], strides: tuple[int, int], ceil_mode: bool = False
 ) -> torch.Tensor:
     return torch.nn.functional.avg_pool2d(
-        input, kernel_size=kernel_size, stride=stride, ceil_mode=ceil_mode, divisor_override=1
+        input, kernel_sizes=kernel_sizes, strides=strides, ceil_mode=ceil_mode, divisor_override=1
     )
 
 
 class MaskedAvgPool1d(torch.nn.Module):
-    def __init__(self, kernel_size: int, stride: int, implementation: Literal["unfold", "sum_pool2d"] = "unfold"):
+    def __init__(self, kernel_sizes: int, strides: int, implementation: Literal["unfold", "sum_pool2d"] = "unfold"):
         super().__init__()
-        self.kernel_size = kernel_size
-        self.stride = stride
+        self.kernel_sizes = kernel_sizes
+        self.strides = strides
         self.implementation = implementation
 
     def forward(self, x: torch.Tensor, mask: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
@@ -210,27 +210,27 @@ class MaskedAvgPool1d(torch.nn.Module):
         if x.shape[-2] == 1:
             return x, mask
         x = torch.where(mask.unsqueeze(-1).expand((-1, -1, x.shape[-1])), x, 0)
-        kernel_size = min(self.kernel_size, mask.shape[-1])
+        kernel_sizes = min(self.kernel_sizes, mask.shape[-1])
         normalization = sum_pool2d(
-            mask.float().unsqueeze(-1), kernel_size=(kernel_size, 1), stride=(self.stride, 1), ceil_mode=True
+            mask.float().unsqueeze(-1), kernel_sizes=(kernel_sizes, 1), strides=(self.strides, 1), ceil_mode=True
         )
         y_mask = (normalization != 0).squeeze(-1)
         normalization[normalization == 0] = 1
-        sums = sum_pool2d(x, kernel_size=(kernel_size, 1), stride=(self.stride, 1), ceil_mode=True)
+        sums = sum_pool2d(x, kernel_sizes=(kernel_sizes, 1), strides=(self.strides, 1), ceil_mode=True)
         y = sums / normalization
         return y, y_mask
 
     def unfold_forward(self, x: torch.Tensor, mask: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         if x.shape[-2] == 1:
             return x, mask
-        padding = (x.shape[-2] - self.kernel_size) % self.stride
-        if self.kernel_size > x.shape[-2]:
-            padding = self.kernel_size - x.shape[-2]
+        padding = (x.shape[-2] - self.kernel_sizes) % self.strides
+        if self.kernel_sizes > x.shape[-2]:
+            padding = self.kernel_sizes - x.shape[-2]
         if padding != 0:
             x = torch.nn.functional.pad(x, (0, 0, 0, padding))
             mask = torch.nn.functional.pad(mask, (0, padding))
-        x_blocks = x.unfold(-2, self.kernel_size, self.stride)
-        mask_blocks = mask.unfold(-1, self.kernel_size, self.stride).unsqueeze(-2)
+        x_blocks = x.unfold(-2, self.kernel_sizes, self.strides)
+        mask_blocks = mask.unfold(-1, self.kernel_sizes, self.strides).unsqueeze(-2)
         x_masked = x_blocks * mask_blocks
         normalization = mask_blocks.sum(-1)
         normalization[normalization == 0] = 1
@@ -240,50 +240,50 @@ class MaskedAvgPool1d(torch.nn.Module):
 
 
 class MaskedSelect(torch.nn.Module):
-    def __init__(self, kernel_size: int, stride: int):
+    def __init__(self, kernel_sizes: int, strides: int):
         super().__init__()
-        self.kernel_size = kernel_size
-        self.stride = stride
-        if kernel_size != stride:
-            raise ValueError("Kernel size and stride must be equal for MaskedSelect")
+        self.kernel_sizes = kernel_sizes
+        self.strides = strides
+        if kernel_sizes != strides:
+            raise ValueError("Kernel size and strides must be equal for MaskedSelect")
 
     def forward(self, x: torch.Tensor, mask: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         if x.shape[-2] == 1:
             return x, mask
-        x = x[..., :: self.stride, :]
-        mask = mask[..., :: self.stride]
+        x = x[..., :: self.strides, :]
+        mask = mask[..., :: self.strides]
         return x, mask
 
 
 class TiteSelfAttention(torch.nn.Module):
     def __init__(self, config: TiteConfig, layer_idx: int):
         super().__init__()
-        if config.hidden_size[layer_idx] % config.num_attention_heads[layer_idx] != 0:
+        if config.hidden_sizes[layer_idx] % config.num_attention_heads[layer_idx] != 0:
             raise ValueError(
-                f"The hidden size ({config.hidden_size}) is not a multiple of the "
+                f"The hidden size ({config.hidden_sizes}) is not a multiple of the "
                 f"number of attention heads ({config.num_attention_heads})"
             )
 
-        to_hidden_size = config.hidden_size[layer_idx]
-        if config.upscale_hidden_size:
-            from_hidden_size = to_hidden_size
+        to_hidden_sizes = config.hidden_sizes[layer_idx]
+        if config.upscale_hidden_sizes:
+            from_hidden_sizes = to_hidden_sizes
         else:
-            from_hidden_size = config.hidden_size[max(0, layer_idx - 1)]
+            from_hidden_sizes = config.hidden_sizes[max(0, layer_idx - 1)]
         num_attention_heads = config.num_attention_heads[layer_idx]
         self.num_attention_heads = num_attention_heads
-        self.attention_head_size = int(to_hidden_size / num_attention_heads)
+        self.attention_head_size = int(to_hidden_sizes / num_attention_heads)
         self.all_head_size = self.num_attention_heads * self.attention_head_size
 
-        self.Wqkv = torch.nn.Linear(from_hidden_size, 3 * self.all_head_size)
+        self.Wqkv = torch.nn.Linear(from_hidden_sizes, 3 * self.all_head_size)
 
-        kernel_size = config.kernel_size[layer_idx]
-        stride = config.stride[layer_idx]
+        kernel_sizes = config.kernel_sizes[layer_idx]
+        strides = config.strides[layer_idx]
         self.pooling = None
-        if kernel_size is not None and stride is not None and config.attention_based_pooling:
+        if kernel_sizes is not None and strides is not None and config.attention_based_pooling:
             if config.pooling_strategy == "mean_conv":
-                self.pooling = MaskedAvgPool1d(kernel_size, stride)
+                self.pooling = MaskedAvgPool1d(kernel_sizes, strides)
             elif config.pooling_strategy == "select":
-                self.pooling = MaskedSelect(kernel_size, stride)
+                self.pooling = MaskedSelect(kernel_sizes, strides)
             else:
                 raise ValueError(f"Unknown pooling strategy {config.pooling_strategy}")
 
@@ -386,19 +386,19 @@ class TiteSelfAttention(torch.nn.Module):
 class TiteSelfOutput(torch.nn.Module):
     def __init__(self, config: TiteConfig, layer_idx: int):
         super().__init__()
-        hidden_size = config.hidden_size[layer_idx]
-        self.dense = torch.nn.Linear(hidden_size, hidden_size)
-        self.LayerNorm = torch.nn.LayerNorm(hidden_size, eps=config.layer_norm_eps)
+        hidden_sizes = config.hidden_sizes[layer_idx]
+        self.dense = torch.nn.Linear(hidden_sizes, hidden_sizes)
+        self.LayerNorm = torch.nn.LayerNorm(hidden_sizes, eps=config.layer_norm_eps)
         self.dropout = torch.nn.Dropout(config.dropout_prob)
 
-        kernel_size = config.kernel_size[layer_idx]
-        stride = config.stride[layer_idx]
+        kernel_sizes = config.kernel_sizes[layer_idx]
+        strides = config.strides[layer_idx]
         self.pooling = None
-        if kernel_size is not None and stride is not None:
+        if kernel_sizes is not None and strides is not None:
             if config.pooling_strategy == "mean_conv":
-                self.pooling = MaskedAvgPool1d(kernel_size, stride)
+                self.pooling = MaskedAvgPool1d(kernel_sizes, strides)
             elif config.pooling_strategy == "select":
-                self.pooling = MaskedSelect(kernel_size, stride)
+                self.pooling = MaskedSelect(kernel_sizes, strides)
             else:
                 raise ValueError(f"Unknown pooling strategy {config.pooling_strategy}")
         self.attention_based_pooling = config.attention_based_pooling
@@ -435,9 +435,9 @@ class TiteAttention(torch.nn.Module):
 class TiteIntermediate(torch.nn.Module):
     def __init__(self, config: TiteConfig, layer_idx: int):
         super().__init__()
-        hidden_size = config.hidden_size[layer_idx]
-        intermediate_size = config.intermediate_size[layer_idx]
-        self.dense = torch.nn.Linear(hidden_size, intermediate_size)
+        hidden_sizes = config.hidden_sizes[layer_idx]
+        intermediate_sizes = config.intermediate_sizes[layer_idx]
+        self.dense = torch.nn.Linear(hidden_sizes, intermediate_sizes)
         self.intermediate_act_fn = ACT2FN[config.hidden_act]
 
     def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
@@ -449,10 +449,10 @@ class TiteIntermediate(torch.nn.Module):
 class TiteOutput(torch.nn.Module):
     def __init__(self, config: TiteConfig, layer_idx: int):
         super().__init__()
-        hidden_size = config.hidden_size[layer_idx]
-        intermediate_size = config.intermediate_size[layer_idx]
-        self.dense = torch.nn.Linear(intermediate_size, hidden_size)
-        self.LayerNorm = torch.nn.LayerNorm(hidden_size, eps=config.layer_norm_eps)
+        hidden_sizes = config.hidden_sizes[layer_idx]
+        intermediate_sizes = config.intermediate_sizes[layer_idx]
+        self.dense = torch.nn.Linear(intermediate_sizes, hidden_sizes)
+        self.LayerNorm = torch.nn.LayerNorm(hidden_sizes, eps=config.layer_norm_eps)
         self.dropout = torch.nn.Dropout(config.dropout_prob)
 
     def forward(self, hidden_states: torch.Tensor, input_tensor: torch.Tensor) -> torch.Tensor:
@@ -465,11 +465,11 @@ class TiteOutput(torch.nn.Module):
 class TiteUpscale(torch.nn.Module):
     def __init__(self, config: TiteConfig, layer_idx: int):
         super().__init__()
-        hidden_size = config.hidden_size[layer_idx]
-        old_hidden_size = config.hidden_size[max(0, layer_idx - 1)]
-        self.upscale_layer = torch.nn.Linear(old_hidden_size, hidden_size)
+        hidden_sizes = config.hidden_sizes[layer_idx]
+        old_hidden_sizes = config.hidden_sizes[max(0, layer_idx - 1)]
+        self.upscale_layer = torch.nn.Linear(old_hidden_sizes, hidden_sizes)
         self.dropout = torch.nn.Dropout(config.dropout_prob)
-        self.LayerNorm = torch.nn.LayerNorm(hidden_size, eps=config.layer_norm_eps)
+        self.LayerNorm = torch.nn.LayerNorm(hidden_sizes, eps=config.layer_norm_eps)
 
     def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
         hidden_states = self.upscale_layer(hidden_states)
@@ -487,10 +487,10 @@ class TiteLayer(torch.nn.Module):
         self.intermediate = TiteIntermediate(config, layer_idx)
         self.output = TiteOutput(config, layer_idx)
 
-        hidden_size = config.hidden_size[layer_idx]
-        old_hidden_size = config.hidden_size[max(0, layer_idx - 1)]
+        hidden_sizes = config.hidden_sizes[layer_idx]
+        old_hidden_sizes = config.hidden_sizes[max(0, layer_idx - 1)]
         self.upscale_layer = None
-        if config.upscale_hidden_size and old_hidden_size != hidden_size:
+        if config.upscale_hidden_sizes and old_hidden_sizes != hidden_sizes:
             self.upscale_layer = TiteUpscale(config, layer_idx)
 
     def forward(

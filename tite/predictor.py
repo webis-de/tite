@@ -37,7 +37,7 @@ class HFMLMDecoder(MLMDecoder):
 
     def __init__(self, model_name_or_path: str):
         config = OriginalBertConfig.from_pretrained(model_name_or_path)
-        super().__init__(config.vocab_size, config.hidden_size, config.hidden_act)
+        super().__init__(config.vocab_size, config.hidden_sizes, config.hidden_act)
         model = BertForMaskedLM.from_pretrained(model_name_or_path)
         state_dict = {}
         for key, value in model.cls.state_dict().items():
@@ -50,13 +50,13 @@ class MAESelfAttention(torch.nn.Module):
     def __init__(self, config: TiteConfig, layer_idx: int, mask_prob: float = 0.0):
         super().__init__()
 
-        if config.hidden_size[layer_idx] % config.num_attention_heads[layer_idx] != 0:
+        if config.hidden_sizes[layer_idx] % config.num_attention_heads[layer_idx] != 0:
             raise ValueError(
-                f"The hidden size ({config.hidden_size}) is not a multiple of the "
+                f"The hidden size ({config.hidden_sizes}) is not a multiple of the "
                 f"number of attention heads ({config.num_attention_heads})"
             )
 
-        hidden_size = config.hidden_size[layer_idx]
+        hidden_size = config.hidden_sizes[layer_idx]
         num_attention_heads = config.num_attention_heads[layer_idx]
         self.num_attention_heads = num_attention_heads
         self.attention_head_size = int(hidden_size / num_attention_heads)
@@ -266,7 +266,7 @@ class MAEEnhancedDecoder(PreTrainedModel):
 class MAEDecoder(BertModel):
     def __init__(self, config: BertConfig):
         super().__init__(config)
-        self.mlm_decoder = MLMDecoder(config.vocab_size, config.hidden_size[0], config.hidden_act)
+        self.mlm_decoder = MLMDecoder(config.vocab_size, config.hidden_sizes[0], config.hidden_act)
         self.decoder = self.mlm_decoder.decoder
 
         self.post_init()
