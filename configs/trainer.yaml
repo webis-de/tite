@@ -10,13 +10,10 @@ trainer:
       entity: tite
   callbacks:
     - class_path: ModelCheckpoint
-      init_args:
-        save_on_train_epoch_end: false
-        save_top_k: -1
     - class_path: LearningRateMonitor
       init_args:
         logging_interval: step
-  max_steps: 70000
+  max_steps: 200000
   enable_progress_bar: false
   gradient_clip_val: 1.0
   num_sanity_val_steps: 0

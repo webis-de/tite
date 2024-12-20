@@ -13,12 +13,6 @@ trainer:
       entity: tite
   callbacks:
   - class_path: ModelCheckpoint
-    init_args:
-      monitor: nDCG@10
-      mode: max
-      save_on_train_epoch_end: false
-      save_top_k: 1
-      every_n_epochs: 1
   - class_path: LearningRateMonitor
     init_args:
       logging_interval: step

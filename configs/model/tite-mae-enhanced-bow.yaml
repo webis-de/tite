@@ -9,7 +9,6 @@ model:
           init_args:
             vocab_size: 30522
             num_hidden_layers: 12
-            dropout_prob: 0.1
             # hidden_size: [768, 768, 768, 768, 768, 768, 768, 768, 768, 768, 768, 768]
             # num_attention_heads: [12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12]
             # intermediate_size: [3072, 3072, 3072, 3072, 3072, 3072, 3072, 3072, 3072, 3072, 3072, 3072]
@@ -68,25 +67,21 @@ model:
     predictors:
     - class_path: tite.predictor.MAEEnhancedDecoder
       init_args:
-        # orig_hidden_size: 768
-        # embx_hidden_size: 1536
-        # hidden_size: 768
-        # num_attention_heads: 12
-        # intermediate_size: 3072
-        hidden_size: 1536
-        num_attention_heads: 24
-        intermediate_size: 6144
+        hidden_size: 768
+        num_attention_heads: 12
+        intermediate_size: 3072
+        # hidden_size: 1536
+        # num_attention_heads: 24
+        # intermediate_size: 6144
         # hidden_size: 3072
         # num_attention_heads: 48
         # intermediate_size: 12288
         query_strategy: embx
         mask_id: 103
         mask_prob: 0.5
-        # subvectors: true
     - class_path: tite.predictor.BOWDecoder
       init_args:
         vocab_size: 30522
-        # orig_hidden_size: 768
         hidden_size: 1536
     losses:
     - class_path: tite.loss.MAECrossEntropy
