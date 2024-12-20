@@ -11,11 +11,6 @@ data:
     batch_size: 128
     num_workers: 8
     streaming: true
-    # path: wikimedia/wikipedia
-    # name: 20231101.en
-    # batch_size: 128
-    # num_workers: 8
-    # streaming: false
     collator:
       class_path: tite.datasets.TransformationCollator
       init_args:
@@ -24,8 +19,30 @@ data:
         - null
         max_length: 512
         student_string_transformations: null
-        teacher_string_transformations: null
-        student_token_transformations: null
+        teacher_string_transformations:
+        - class_path: tite.transformations.SentenceOffset
+          init_args:
+            transformation_prob: 1.0
+        - class_path: tite.transformations.SentenceSwapNeighboring
+          init_args:
+            swap_prob: 0.5
+            transformation_prob: 1.0
+        - class_path: tite.transformations.SentenceDelete
+          init_args:
+            delete_prob: 0.1
+            transformation_prob: 1.0
+        # - class_path: tite.transformations.CharacterDelete
+        #   init_args:
+        #     delete_prob: 0.01
+        #     transformation_prob: 1.0
+        # - class_path: tite.transformations.CharacterSwapNeighboring
+        #   init_args:
+        #     swap_prob: 0.01
+        #     transformation_prob: 1.0
+        # - class_path: tite.transformations.CharacterInsert
+        #   init_args:
+        #     insert_prob: 0.01
+        #     transformation_prob: 1.0
         student_token_transformations:
         - class_path: tite.transformations.MaskTokens
           init_args:

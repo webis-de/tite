@@ -17,7 +17,7 @@ data:
         text_keys:
         - text
         - null
-        max_length: 256
+        max_length: 512
         student_string_transformations: null
         teacher_string_transformations: null
         student_token_transformations:

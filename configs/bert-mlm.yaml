@@ -8,7 +8,7 @@ model:
           class_path: tite.bert.BertConfig
           init_args:
             num_hidden_layers: 12
-            unpadding: false
+            positional_embedding_type: rotary
     tokenizer:
       class_path: tite.tokenizer.TiteTokenizer
       init_args:

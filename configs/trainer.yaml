@@ -18,4 +18,5 @@ trainer:
         logging_interval: step
   max_steps: 70000
   enable_progress_bar: false
+  gradient_clip_val: 1.0
   num_sanity_val_steps: 0

@@ -20,7 +20,6 @@ data:
         max_length: 512
         student_string_transformations: null
         teacher_string_transformations: null
-        student_token_transformations: null
         student_token_transformations:
         - class_path: tite.transformations.MLMMaskTokens
           init_args:
