@@ -9,11 +9,11 @@ model:
           init_args:
             vocab_size: 30522
             num_hidden_layers: 12
-            hidden_size: [768, 768, 768, 768, 768, 768, 768, 768, 768, 768, 768, 768]
+            hidden_sizes: [768, 768, 768, 768, 768, 768, 768, 768, 768, 768, 768, 768]
             num_attention_heads: [12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12]
-            intermediate_size: [3072, 3072, 3072, 3072, 3072, 3072, 3072, 3072, 3072, 3072, 3072, 3072]
-            kernel_size: [null, 3, null, 3, null, 3, null, 3, null, 3, null, 3]
-            stride: [null, 3, null, 3, null, 3, null, 3, null, 3, null, 3]
+            intermediate_sizes: [3072, 3072, 3072, 3072, 3072, 3072, 3072, 3072, 3072, 3072, 3072, 3072]
+            kernel_sizes: [null, 3, null, 3, null, 3, null, 3, null, 3, null, 3]
+            strides: [null, 3, null, 3, null, 3, null, 3, null, 3, null, 3]
             positional_embedding_type: rotary
             upscale_hidden_sizes: true
             attention_based_pooling: true
