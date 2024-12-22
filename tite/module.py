@@ -87,6 +87,7 @@ class TiteModule(LightningModule):
         if self.trainer.limit_val_batches == 0:
             return
         add_special_tokens = self.trainer.datamodule.collator.add_special_tokens
+        enable_progress_bar = self.trainer.progress_bar_callback is not None
         # Train on GLUE
         if self.validate_on_glue:
             # for task in TASK_COLUMN_NAMES:
@@ -108,7 +109,7 @@ class TiteModule(LightningModule):
                     max_epochs=10,
                     enable_checkpointing=False,
                     num_sanity_val_steps=0,
-                    enable_progress_bar=False,
+                    enable_progress_bar=enable_progress_bar,
                 )
                 trainer.fit(glue_module, glue)
                 metrics = trainer.logged_metrics
@@ -137,7 +138,7 @@ class TiteModule(LightningModule):
                 enable_checkpointing=False,
                 num_sanity_val_steps=0,
                 val_check_interval=max_steps,
-                enable_progress_bar=False,
+                enable_progress_bar=enable_progress_bar,
             )
             trainer.fit(msmarco_module, msmarco)
             metrics = trainer.logged_metrics
