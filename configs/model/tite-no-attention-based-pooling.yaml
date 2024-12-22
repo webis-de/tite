@@ -9,7 +9,6 @@ model:
           init_args:
             vocab_size: 30522
             num_hidden_layers: 12
-            dropout_prob: 0.1
             hidden_sizes: [768, 768, 768, 768, 768, 768, 768, 768, 768, 768, 768, 768]
             num_attention_heads: [12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12]
             intermediate_sizes: [3072, 3072, 3072, 3072, 3072, 3072, 3072, 3072, 3072, 3072, 3072, 3072]
@@ -17,7 +16,7 @@ model:
             strides: [null, null, null, 2, 2, 2, 2, 2, 2, 2, 2, 2]
             positional_embedding_type: rotary
             upscale_hidden_sizes: true
-            attention_based_pooling: true
+            attention_based_pooling: false
             pooling_strategy: mean_conv
     tokenizer:
       class_path: tite.tokenizer.TiteTokenizer
@@ -33,16 +32,37 @@ model:
       dict_kwargs:
         model_max_length: 512
     teachers:
+    - class_path: tite.teacher.MAETeacher
+      init_args:
+        padid: 0
+        enhanced: true
     - class_path: tite.teacher.BOWTeacher
       init_args:
         vocab_size: 30522
         padid: 0
     predictors:
+    - class_path: tite.predictor.MAEEnhancedDecoder
+      init_args:
+        hidden_size: 768
+        num_attention_heads: 12
+        intermediate_size: 3072
+        # hidden_size: 1536
+        # num_attention_heads: 24
+        # intermediate_size: 6144
+        # hidden_size: 3072
+        # num_attention_heads: 48
+        # intermediate_size: 12288
+        query_strategy: embx
+        mask_id: 103
+        mask_prob: 0.5
     - class_path: tite.predictor.BOWDecoder
       init_args:
         vocab_size: 30522
         hidden_size: 768
     losses:
+    - class_path: tite.loss.MAECrossEntropy
+      init_args:
+        vocab_size: 30522
     - class_path: tite.loss.BOWBinaryCrossEntropy
       init_args:
         vocab_size: 30522
