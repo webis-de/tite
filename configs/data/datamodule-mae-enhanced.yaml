@@ -1,21 +1,12 @@
 data:
   class_path: tite.datasets.FineWebDataModule
   init_args:
-    # path: HuggingFaceFW/fineweb-edu
     path: arrow
     data_files:
-      train: /mnt/ceph/storage/corpora/corpora-thirdparty/corpus-fineweb-edu/default/0.0.0/5b89d1ea9319fe101b3cbdacd89a903aca1d6052/fineweb-edu-train-*.arrow
-    # path: parquet
-    # data_files:
-    #   train: /mnt/ceph/storage/corpora/corpora-thirdparty/corpus-fineweb-edu/snapshots/5b89d1ea9319fe101b3cbdacd89a903aca1d6052/data/CC-MAIN-*/train-*.parquet
+      train: ./HuggingFaceFW___fineweb-edu/default/0.0.0/fc9850dff5e2d0f8f776efe41b24a1c49556cfc5/fineweb-edu-train-*.arrow
     batch_size: 128
-    num_workers: 8
+    num_workers: 4
     streaming: true
-    # path: wikimedia/wikipedia
-    # name: 20231101.en
-    # batch_size: 128
-    # num_workers: 8
-    # streaming: false
     collator:
       class_path: tite.datasets.TransformationCollator
       init_args:
