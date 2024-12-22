@@ -48,7 +48,7 @@ class GlueModule(LightningModule):
         self.num_classes = NUM_CLASSES_MAP[task]
         last_dim = 768
         layers = []
-        hidden_size = model.config.last_hidden_size
+        hidden_size = model.config.hidden_size
         while True:
             if hidden_size == last_dim:
                 break
