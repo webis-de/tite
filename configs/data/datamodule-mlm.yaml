@@ -1,13 +1,9 @@
 data:
   class_path: tite.datasets.FineWebDataModule
   init_args:
-    # path: HuggingFaceFW/fineweb-edu
     path: arrow
     data_files:
-      train: /mnt/ceph/storage/corpora/corpora-thirdparty/corpus-fineweb-edu/default/0.0.0/5b89d1ea9319fe101b3cbdacd89a903aca1d6052/fineweb-edu-train-*.arrow
-    # path: parquet
-    # data_files:
-    #   train: /mnt/ceph/storage/corpora/corpora-thirdparty/corpus-fineweb-edu/snapshots/5b89d1ea9319fe101b3cbdacd89a903aca1d6052/data/CC-MAIN-*/train-*.parquet
+      train: /data/horse/ws/chsc842f-scads-german-llm-training/tite/data/hf-cache/datasets/HuggingFaceFW___fineweb-edu/default/0.0.0/fc9850dff5e2d0f8f776efe41b24a1c49556cfc5/fineweb-edu-train-*.arrow
     batch_size: 128
     num_workers: 8
     streaming: true
