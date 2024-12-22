@@ -33,8 +33,8 @@ class MSMARCOModule(LightningModule):
         self.validation_step_outputs = []
         self.ndcgs = []
         self.projection = None
-        if model.config.last_hidden_size != hidden_size:
-            self.projection = torch.nn.Linear(model.config.last_hidden_size, hidden_size)
+        if model.config.hidden_size != hidden_size:
+            self.projection = torch.nn.Linear(model.config.hidden_size, hidden_size)
 
     def forward(self, encoding) -> Tensor:
         emb = self.model(**encoding).last_hidden_state
