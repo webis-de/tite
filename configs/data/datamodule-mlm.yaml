@@ -3,7 +3,7 @@ data:
   init_args:
     path: arrow
     data_files:
-      train: ./HuggingFaceFW___fineweb-edu/default/0.0.0/fc9850dff5e2d0f8f776efe41b24a1c49556cfc5/fineweb-edu-train-*.arrow
+      train: ./HuggingFaceFW___fineweb-edu/default/0.0.0/*/fineweb-edu-train-*.arrow
     batch_size: 128
     num_workers: 4
     streaming: true
