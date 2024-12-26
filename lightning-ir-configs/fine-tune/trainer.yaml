@@ -18,8 +18,8 @@ trainer:
       logging_interval: step
   - class_path: tite.callbacks.DummyImportCallback
   max_epochs: null
-  max_steps: 50000
-  val_check_interval: 80000
+  max_steps: 20010
+  val_check_interval: 40000
   check_val_every_n_epoch: null
   num_sanity_val_steps: 2
   accumulate_grad_batches: 8

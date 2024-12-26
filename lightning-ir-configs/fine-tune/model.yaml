@@ -10,7 +10,7 @@ model:
         query_length: 32
         doc_length: 256
         embedding_dim: 768
-        projection: null
+        projection: linear
     loss_functions:
     - class_path: SupervisedMarginMSE
     - class_path: KLDivergence
