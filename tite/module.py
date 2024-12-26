@@ -29,8 +29,61 @@ class _DetachFromGrad(Module):
         return output.detach()  # Better safe than sorry
 
 
-def tie_weights(student_weight: torch.Tensor, teacher_weight: torch.Tensor) -> None:
-    student_weight.data = teacher_weight.data[:, : student_weight.data.shape[1]]
+class ComposedEmbedding(torch.nn.Embedding):
+    def __init__(
+        self,
+        num_embeddings: int,
+        small_embedding_dim: int,
+        large_embedding_dim: int,
+        padding_idx: int | None = None,
+        max_norm: float | None = None,
+        norm_type: float = 2,
+        scale_grad_by_freq: bool = False,
+        sparse: bool = False,
+        _weight: Tensor | None = None,
+        _freeze: bool = False,
+        device=None,
+        dtype=None,
+    ) -> None:
+        super().__init__(
+            num_embeddings,
+            large_embedding_dim,
+            padding_idx,
+            max_norm,
+            norm_type,
+            scale_grad_by_freq,
+            sparse,
+            _weight,
+            _freeze,
+            device,
+            dtype,
+        )
+        self.linear = None
+        if small_embedding_dim != large_embedding_dim:
+            self.linear = torch.nn.Linear(large_embedding_dim, small_embedding_dim, bias=False)
+
+    def forward(self, input: Tensor) -> Tensor:
+        embeddings = torch.nn.functional.embedding(
+            input, self.weight, self.padding_idx, self.max_norm, self.norm_type, self.scale_grad_by_freq, self.sparse
+        )
+        if self.linear is not None:
+            embeddings = self.linear(embeddings)
+        return embeddings
+
+
+def tie_weights(student_embedding: torch.nn.Embedding, teacher_weight: torch.nn.Parameter) -> torch.nn.Embedding:
+    if student_embedding.weight.data.shape == teacher_weight.data.shape:
+        student_embedding.weight.data = teacher_weight.data
+        return student_embedding
+    composed_embedding = ComposedEmbedding(
+        student_embedding.num_embeddings,
+        student_embedding.embedding_dim,
+        teacher_weight.data.shape[1],
+        student_embedding.padding_idx,
+        _weight=teacher_weight.data,
+    ).to(student_embedding.weight.device)
+    composed_embedding.weight.data = teacher_weight.data
+    return composed_embedding
 
 
 class TiteModule(LightningModule):
@@ -66,20 +119,44 @@ class TiteModule(LightningModule):
 
     def on_train_start(self) -> None:
         # tie weights
+        decoder = None
+        position_embeddings = None
         for predictor in self.predictors:
             if isinstance(predictor, (MLMDecoder, MAEDecoder, MAEEnhancedDecoder)):
-                # student.tie_decoder_weights(predictor.decoder)
-                tie_weights(self.student.embeddings.word_embeddings.weight, predictor.decoder.weight)
-                if isinstance(predictor, (MAEDecoder, MAEEnhancedDecoder)):
-                    predictor.embeddings.word_embeddings.weight.data = predictor.decoder.weight.data
-                    if (
-                        self.student.embeddings.position_embeddings is not None
-                        and predictor.embeddings.position_embeddings is not None
-                    ):
-                        tie_weights(
-                            self.student.embeddings.position_embeddings.weight,
-                            predictor.embeddings.position_embeddings.weight,
-                        )
+                if decoder is None:
+                    decoder = predictor.decoder
+                else:
+                    predictor.decoder = decoder
+                if getattr(predictor, "embeddings", None) is not None:
+                    predictor.embeddings.word_embeddings.weight.data = decoder.weight.data
+                    if predictor.embeddings.position_embeddings is not None:
+                        if position_embeddings is None:
+                            position_embeddings = predictor.embeddings.position_embeddings
+                        else:
+                            predictor.embeddings.position_embeddings = position_embeddings
+
+        self.student.embeddings.word_embeddings = tie_weights(self.student.embeddings.word_embeddings, decoder.weight)
+        if position_embeddings is not None and self.student.embeddings.position_embeddings is not None:
+            self.student.embeddings.position_embeddings = tie_weights(
+                self.student.embeddings.position_embeddings, position_embeddings.weight
+            )
+        assert all(decoder.weight.data_ptr() == predictor.decoder.weight.data_ptr() for predictor in self.predictors)
+        assert all(
+            getattr(predictor, "embeddings", None) is None
+            or decoder.weight.data_ptr() == predictor.embeddings.word_embeddings.weight.data_ptr()
+            for predictor in self.predictors
+        )
+        assert all(
+            getattr(predictor, "embeddings", None) is None
+            or predictor.embeddings.position_embeddings is None
+            or position_embeddings.weight.data_ptr() == predictor.embeddings.position_embeddings.weight.data_ptr()
+            for predictor in self.predictors
+        )
+        assert self.student.embeddings.word_embeddings.weight.data_ptr() == decoder.weight.data_ptr()
+        if self.student.embeddings.position_embeddings is not None and position_embeddings is not None:
+            assert (
+                self.student.embeddings.position_embeddings.weight.data_ptr() == position_embeddings.weight.data_ptr()
+            )
 
     def on_validation_start(self) -> None:
         if self.trainer is None:
