@@ -19,7 +19,6 @@ class MSMARCOModule(LightningModule):
         tokenizer: PreTrainedTokenizerBase | None = None,
         model_name_or_path: str | None = None,
         similarity: str = "dot",
-        hidden_size: int = 768,
     ) -> None:
         super().__init__()
         if model_name_or_path is not None:
@@ -33,8 +32,6 @@ class MSMARCOModule(LightningModule):
         self.validation_step_outputs = []
         self.ndcgs = []
         self.projection = None
-        if model.config.hidden_size != hidden_size:
-            self.projection = torch.nn.Linear(model.config.hidden_size, hidden_size)
 
     def forward(self, encoding) -> Tensor:
         emb = self.model(**encoding).last_hidden_state
