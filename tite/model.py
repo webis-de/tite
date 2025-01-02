@@ -54,8 +54,10 @@ class TiteConfig(PretrainedConfig):
         hidden_act: str = "gelu_pytorch_tanh",
         positional_embedding_type: Literal["absolute", "ALiBi", "rotary"] = "ALiBi",
         upscale_hidden_sizes: bool = False,
+        pooling_location: Literal["pre", "attention", "post"] = "attention",
         attention_based_pooling: bool = True,
         pooling_strategy: Literal["mean_conv", "select"] = "mean_conv",
+        pooling_implementation: Literal["unfold", "sum_pool2d"] = "unfold",
         **kwargs,
     ):
         super().__init__(pad_token_id=pad_token_id, **kwargs)
@@ -73,8 +75,11 @@ class TiteConfig(PretrainedConfig):
         self.hidden_act = hidden_act
         self.positional_embedding_type = positional_embedding_type
         self.upscale_hidden_sizes = upscale_hidden_sizes
-        self.attention_based_pooling = attention_based_pooling
+        self.pooling_location = pooling_location
+        if not attention_based_pooling:
+            self.pooling_location = "post"
         self.pooling_strategy = pooling_strategy
+        self.pooling_implementation = pooling_implementation
 
         iterator = zip(
             [
@@ -279,7 +284,7 @@ class TiteSelfAttention(torch.nn.Module):
         kernel_sizes = config.kernel_sizes[layer_idx]
         strides = config.strides[layer_idx]
         self.pooling = None
-        if kernel_sizes is not None and strides is not None and config.attention_based_pooling:
+        if kernel_sizes is not None and strides is not None and config.pooling_location == "attention":
             if config.pooling_strategy == "mean_conv":
                 self.pooling = MaskedAvgPool1d(kernel_sizes, strides)
             elif config.pooling_strategy == "select":
@@ -387,6 +392,7 @@ class TiteSelfOutput(torch.nn.Module):
     def __init__(self, config: TiteConfig, layer_idx: int):
         super().__init__()
         hidden_sizes = config.hidden_sizes[layer_idx]
+        self.config = config
         self.dense = torch.nn.Linear(hidden_sizes, hidden_sizes)
         self.LayerNorm = torch.nn.LayerNorm(hidden_sizes, eps=config.layer_norm_eps)
         self.dropout = torch.nn.Dropout(config.dropout_prob)
@@ -394,27 +400,26 @@ class TiteSelfOutput(torch.nn.Module):
         kernel_sizes = config.kernel_sizes[layer_idx]
         strides = config.strides[layer_idx]
         self.pooling = None
-        if kernel_sizes is not None and strides is not None:
+        if config.pooling_location in ("post", "attention") and kernel_sizes is not None and strides is not None:
             if config.pooling_strategy == "mean_conv":
                 self.pooling = MaskedAvgPool1d(kernel_sizes, strides)
             elif config.pooling_strategy == "select":
                 self.pooling = MaskedSelect(kernel_sizes, strides)
             else:
                 raise ValueError(f"Unknown pooling strategy {config.pooling_strategy}")
-        self.attention_based_pooling = config.attention_based_pooling
 
     def forward(
         self, hidden_states: torch.Tensor, attention_mask: torch.Tensor, input_tensor: torch.Tensor
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         hidden_states = self.dense(hidden_states)
         hidden_states = self.dropout(hidden_states)
-        if self.pooling is not None and self.attention_based_pooling:
+        if self.pooling is not None and self.config.pooling_location == "attention":
             input_tensor, attention_mask = self.pooling(input_tensor, attention_mask)
         if hidden_states.shape[-1] == input_tensor.shape[-1]:
             hidden_states = hidden_states + input_tensor
         else:
             hidden_states[..., : input_tensor.shape[-1]] = hidden_states[..., : input_tensor.shape[-1]] + input_tensor
-        if self.pooling is not None and not self.attention_based_pooling:
+        if self.pooling is not None and self.config.pooling_location == "post":
             hidden_states, attention_mask = self.pooling(hidden_states, attention_mask)
         hidden_states = self.LayerNorm(hidden_states)
         return hidden_states, attention_mask
@@ -426,7 +431,20 @@ class TiteAttention(torch.nn.Module):
         self.self = TiteSelfAttention(config, layer_idx)
         self.output = TiteSelfOutput(config, layer_idx)
 
+        kernel_sizes = config.kernel_sizes[layer_idx]
+        strides = config.strides[layer_idx]
+        self.pooling = None
+        if config.pooling_location == "pre" and kernel_sizes is not None and strides is not None:
+            if config.pooling_strategy == "mean_conv":
+                self.pooling = MaskedAvgPool1d(kernel_sizes, strides)
+            elif config.pooling_strategy == "select":
+                self.pooling = MaskedSelect(kernel_sizes, strides)
+            else:
+                raise ValueError(f"Unknown pooling strategy {config.pooling_strategy}")
+
     def forward(self, hidden_states: torch.Tensor, attention_mask: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+        if self.pooling is not None:
+            hidden_states, attention_mask = self.pooling(hidden_states, attention_mask)
         self_outputs, new_attention_mask = self.self(hidden_states, attention_mask)
         attn_output, new_attention_mask = self.output(self_outputs, attention_mask, hidden_states)
         return attn_output, new_attention_mask
