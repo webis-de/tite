@@ -195,17 +195,17 @@ def main(args=None):
     results["num_texts"] = results["batch_size"] * results["num_batches"]
     results["num_texts_per_sec"] = results["num_texts"] / results["time"]
     results["kb / text"] = results["mem"] / results["num_texts"] / 1024
+    results.to_json("efficiency.json")
     columns = ["text_type", "grad"]
     index = ["model"]
     values = ["num_texts_per_sec", "kb / text"]
     print(
         results.pivot_table(values=values, index=index, columns=columns)
-        .reorder_levels([1, 0], axis=1)
+        .reorder_levels([1, 2, 0], axis=1)
         .sort_index(axis=1)
         .round()
         .astype(int)
     )
-    results.to_json("efficiency.json")
 
 
 if __name__ == "__main__":
