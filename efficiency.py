@@ -176,15 +176,16 @@ def main(args=None):
             tokenizer = AutoTokenizer.from_pretrained(model.config.name_or_path)
         else:
             tokenizer = AutoTokenizer.from_pretrained("bert-base-uncased")
-        for text_type, text, max_length, grad in tqdm(
-            zip(["docs", "queries"], [docs, queries], [512, 32], (True, False)), position=1, leave=False, total=2
+        for text_type, text, max_length in tqdm(
+            zip(["docs", "queries"], [docs, queries], [512, 32]), position=1, leave=False, total=2
         ):
-            if grad:
-                model_results = run_model(model, tokenizer, text, max_length, args.profile)
-            else:
-                with torch.inference_mode():
+            for grad in tqdm((True, False), position=2, leave=False):
+                if grad:
                     model_results = run_model(model, tokenizer, text, max_length, args.profile)
-            _results[(config_name, text_type, grad)] = model_results
+                else:
+                    with torch.inference_mode():
+                        model_results = run_model(model, tokenizer, text, max_length, args.profile)
+                _results[(config_name, text_type, grad)] = model_results
 
     results = (
         pd.DataFrame(_results)
