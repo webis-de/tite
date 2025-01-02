@@ -385,5 +385,5 @@ $RECYCLE.BIN/
 # End of https://www.toptal.com/developers/gitignore/api/python,visualstudiocode,pycharm,macos,windows,linux
 
 logs
-models
+/*model*
 runs
