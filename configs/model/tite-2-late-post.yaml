@@ -11,15 +11,12 @@ model:
             num_hidden_layers: 12
             kernel_sizes: [null, null, null, 2, 2, 2, 2, 2, 2, 2, 2, 2]
             strides: [null, null, null, 2, 2, 2, 2, 2, 2, 2, 2, 2]
-            # hidden_sizes: [768, 768, 768, 768, 768, 768, 768, 768, 768, 768, 768, 768]
-            # num_attention_heads: [12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12]
-            # intermediate_sizes: [3072, 3072, 3072, 3072, 3072, 3072, 3072, 3072, 3072, 3072, 3072, 3072]
-            hidden_sizes: [768, 768, 768, 1024, 1024, 1024, 1280, 1280, 1280, 1536, 1536, 1536]
-            num_attention_heads: [12, 12, 12, 16, 16, 16, 20, 20, 20, 24, 24, 24]
-            intermediate_sizes: [3072, 3072, 3072, 4096, 4096, 4096, 5120, 5120, 5120, 6144, 6144, 6144]
+            hidden_sizes: [768, 768, 768, 768, 768, 768, 768, 768, 768, 768, 768, 768]
+            num_attention_heads: [12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12]
+            intermediate_sizes: [3072, 3072, 3072, 3072, 3072, 3072, 3072, 3072, 3072, 3072, 3072, 3072]
             positional_embedding_type: rotary
-            upscale_hidden_sizes: false
-            attention_based_pooling: true
+            upscale_hidden_sizes: true
+            pooling_location: post
             pooling_strategy: mean_conv
     tokenizer:
       class_path: tite.tokenizer.TiteTokenizer
@@ -46,12 +43,12 @@ model:
     predictors:
     - class_path: tite.predictor.MAEEnhancedDecoder
       init_args:
-        # hidden_size: 768
-        # num_attention_heads: 12
-        # intermediate_size: 3072
-        hidden_size: 1536
-        num_attention_heads: 24
-        intermediate_size: 6144
+        hidden_size: 768
+        num_attention_heads: 12
+        intermediate_size: 3072
+        # hidden_size: 1536
+        # num_attention_heads: 24
+        # intermediate_size: 6144
         # hidden_size: 3072
         # num_attention_heads: 48
         # intermediate_size: 12288
@@ -61,9 +58,7 @@ model:
     - class_path: tite.predictor.BOWDecoder
       init_args:
         vocab_size: 30522
-        # hidden_size: 768
-        hidden_size: 1536
-        # hidden_size: 3072
+        hidden_size: 768
     losses:
     - class_path: tite.loss.MAECrossEntropy
       init_args:
