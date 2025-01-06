@@ -65,7 +65,6 @@ class TiteConfig(PretrainedConfig):
         positional_embedding_type: Literal["absolute", "rotary"] = "rotary",
         upscale_hidden_sizes: bool = False,
         pooling_location: Literal["pre", "attention", "post"] = "attention",
-        attention_based_pooling: bool = True,
         pooling_strategy: Literal["mean_conv", "select"] = "mean_conv",
         pooling_implementation: Literal["unfold", "sum_pool2d"] = "unfold",
         rotary_interleaved: bool = False,
@@ -87,8 +86,6 @@ class TiteConfig(PretrainedConfig):
         self.positional_embedding_type = positional_embedding_type
         self.upscale_hidden_sizes = upscale_hidden_sizes
         self.pooling_location = pooling_location
-        if not attention_based_pooling:
-            self.pooling_location = "post"
         self.pooling_strategy = pooling_strategy
         self.pooling_implementation = pooling_implementation
         self.rotary_interleaved = rotary_interleaved
