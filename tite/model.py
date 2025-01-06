@@ -1,9 +1,9 @@
-import math
 from dataclasses import dataclass
 from typing import List, Literal, Tuple
 
 import torch
-from einops import einsum, rearrange, repeat
+from einops import rearrange
+from flash_attn import flash_attn_varlen_func
 from transformers import PretrainedConfig, PreTrainedModel
 from transformers.activations import ACT2FN
 from transformers.modeling_outputs import ModelOutput
@@ -11,8 +11,14 @@ from transformers.modeling_outputs import ModelOutput
 from .rope import RotaryPositionalEmbeddings
 
 
-def ceil_div(a: int, b: int) -> int:
+def ceil_div(a, b):
     return -(-a // b)
+
+
+def compute_output_shape(input_shape: int, kernel_size: int | None, stride: int | None) -> int:
+    if kernel_size is None or stride is None:
+        return input_shape
+    return ceil_div((max(0, input_shape - kernel_size)), stride) + 1
 
 
 def compute_output_shapes(
@@ -20,10 +26,7 @@ def compute_output_shapes(
 ) -> List[int]:
     output_shapes = [input_shape]
     for k, s in zip(kernel_sizes, strides):
-        if k is None or s is None:
-            output_shapes.append(output_shapes[-1])
-        else:
-            output_shapes.append(ceil_div((max(0, output_shapes[-1] - k)), s) + 1)
+        output_shapes.append(compute_output_shape(output_shapes[-1], k, s))
     return output_shapes
 
 
@@ -31,6 +34,13 @@ def compute_output_shapes(
 class TiteModelOutput(ModelOutput):
     last_hidden_state: torch.Tensor
     hidden_states: Tuple[torch.Tensor, ...] | None = None
+
+
+@dataclass
+class PackedMetaData:
+    seq_lens: torch.Tensor
+    cu_seq_lens: torch.Tensor
+    max_seq_len: int
 
 
 class TiteConfig(PretrainedConfig):
@@ -52,12 +62,13 @@ class TiteConfig(PretrainedConfig):
         layer_norm_eps: float = 1e-12,
         pad_token_id: int = 0,
         hidden_act: str = "gelu_pytorch_tanh",
-        positional_embedding_type: Literal["absolute", "ALiBi", "rotary"] = "ALiBi",
+        positional_embedding_type: Literal["absolute", "rotary"] = "rotary",
         upscale_hidden_sizes: bool = False,
         pooling_location: Literal["pre", "attention", "post"] = "attention",
         attention_based_pooling: bool = True,
         pooling_strategy: Literal["mean_conv", "select"] = "mean_conv",
         pooling_implementation: Literal["unfold", "sum_pool2d"] = "unfold",
+        rotary_interleaved: bool = False,
         **kwargs,
     ):
         super().__init__(pad_token_id=pad_token_id, **kwargs)
@@ -80,6 +91,7 @@ class TiteConfig(PretrainedConfig):
             self.pooling_location = "post"
         self.pooling_strategy = pooling_strategy
         self.pooling_implementation = pooling_implementation
+        self.rotary_interleaved = rotary_interleaved
 
         iterator = zip(
             [
@@ -100,8 +112,8 @@ class TiteConfig(PretrainedConfig):
 
         if self.output_shapes[0] != self.output_shapes[-1] and self.output_shapes[-1] != 1:
             raise ValueError(
-                "Kernel_sizes and strides are set, but do not reduce the maximum sequence length to 1. "
-                "Please adjust kernel_sizes and strides."
+                "kernel_sizes and strides are set, but do not reduce the maximum sequence length to 1. "
+                "Please adjust kernel_size and stride."
             )
 
     @property
@@ -159,49 +171,65 @@ class TiteModel(PreTrainedModel):
     ) -> TiteModelOutput:
         if attention_mask is None:
             attention_mask = torch.ones(1, input_ids.shape[1], device=input_ids.device, dtype=torch.bool)
-        attention_mask = attention_mask.bool()
         batch_size, seq_len = input_ids.shape
-        hidden_states = self.embeddings(input_ids, attention_mask)
-        hidden_states, all_hidden_states = self.encoder(hidden_states, attention_mask, output_hidden_states)
+        with torch.no_grad():
+            idcs = attention_mask.nonzero(as_tuple=True)
+            input_ids = input_ids[idcs]
+            attention_mask = attention_mask.bool()
+            seq_lens = attention_mask.sum(-1).int()
+            max_seq_len = int(seq_lens.max().item())
+            cu_seq_lens = torch.zeros(seq_lens.shape[0] + 1, dtype=seq_lens.dtype, device=seq_lens.device)
+            cu_seq_lens[1:] = torch.cumsum(seq_lens, dim=0, dtype=seq_lens.dtype)
+        hidden_states = self.embeddings(input_ids, idcs[1])
+        packed_meta_data = PackedMetaData(seq_lens, cu_seq_lens, max_seq_len)
+        hidden_states, all_hidden_states = self.encoder(hidden_states, packed_meta_data, output_hidden_states)
+        if hidden_states.shape[0] == seq_lens.shape[0]:
+            hidden_states = hidden_states.unsqueeze(1)
+        else:
+            repad_hidden_states = torch.zeros(
+                batch_size, seq_len, hidden_states.shape[-1], device=hidden_states.device, dtype=hidden_states.dtype
+            )
+            repad_hidden_states[idcs] = hidden_states
+            hidden_states = repad_hidden_states.view(batch_size, seq_len, -1)
         return TiteModelOutput(last_hidden_state=hidden_states, hidden_states=all_hidden_states)
 
 
 class TiteEmbeddings(torch.nn.Module):
     def __init__(self, config: TiteConfig):
         super().__init__()
-        hidden_sizes = config.hidden_sizes[0]
+        hidden_size = config.hidden_sizes[0]
         self.num_attention_heads = config.num_attention_heads
-        self.word_embeddings = torch.nn.Embedding(config.vocab_size, hidden_sizes, padding_idx=config.pad_token_id)
+        self.word_embeddings = torch.nn.Embedding(config.vocab_size, hidden_size, padding_idx=config.pad_token_id)
         self.position_embeddings = None
         if config.positional_embedding_type == "absolute":
-            self.position_embeddings = torch.nn.Embedding(config.max_position_embeddings, hidden_sizes)
-        self.LayerNorm = torch.nn.LayerNorm(hidden_sizes, eps=config.layer_norm_eps)
+            self.position_embeddings = torch.nn.Embedding(config.max_position_embeddings, hidden_size)
+        self.LayerNorm = torch.nn.LayerNorm(hidden_size, eps=config.layer_norm_eps)
         self.dropout = torch.nn.Dropout(config.dropout_prob)
 
-    def forward(self, input_ids: torch.Tensor, attention_mask: torch.Tensor) -> torch.Tensor:
+    @torch.compile(dynamic=True)
+    def forward(self, input_ids: torch.Tensor, position_idcs: torch.Tensor) -> torch.Tensor:
         embeddings = self.word_embeddings(input_ids)
         if self.position_embeddings is not None:
-            embeddings = embeddings + self.position_embeddings(
-                torch.arange(input_ids.shape[1], device=input_ids.device)
-            )
+            position_embeddings = self.position_embeddings(position_idcs)
+            embeddings = embeddings + position_embeddings
         embeddings = self.LayerNorm(embeddings)
         embeddings = self.dropout(embeddings)
         return embeddings
 
 
 def sum_pool2d(
-    input: torch.Tensor, kernel_sizes: tuple[int, int], strides: tuple[int, int], ceil_mode: bool = False
+    input: torch.Tensor, kernel_size: tuple[int, int], stride: tuple[int, int], ceil_mode: bool = False
 ) -> torch.Tensor:
     return torch.nn.functional.avg_pool2d(
-        input, kernel_sizes=kernel_sizes, strides=strides, ceil_mode=ceil_mode, divisor_override=1
+        input, kernel_size=kernel_size, stride=stride, ceil_mode=ceil_mode, divisor_override=1
     )
 
 
 class MaskedAvgPool1d(torch.nn.Module):
-    def __init__(self, kernel_sizes: int, strides: int, implementation: Literal["unfold", "sum_pool2d"] = "unfold"):
+    def __init__(self, kernel_size: int, stride: int, implementation: Literal["unfold", "sum_pool2d"] = "unfold"):
         super().__init__()
-        self.kernel_sizes = kernel_sizes
-        self.strides = strides
+        self.kernel_size = kernel_size
+        self.stride = stride
         self.implementation = implementation
 
     def forward(self, x: torch.Tensor, mask: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
@@ -215,27 +243,28 @@ class MaskedAvgPool1d(torch.nn.Module):
         if x.shape[-2] == 1:
             return x, mask
         x = torch.where(mask.unsqueeze(-1).expand((-1, -1, x.shape[-1])), x, 0)
-        kernel_sizes = min(self.kernel_sizes, mask.shape[-1])
+        kernel_size = min(self.kernel_size, mask.shape[-1])
         normalization = sum_pool2d(
-            mask.float().unsqueeze(-1), kernel_sizes=(kernel_sizes, 1), strides=(self.strides, 1), ceil_mode=True
+            mask.float().unsqueeze(-1), kernel_size=(kernel_size, 1), stride=(self.stride, 1), ceil_mode=True
         )
         y_mask = (normalization != 0).squeeze(-1)
         normalization[normalization == 0] = 1
-        sums = sum_pool2d(x, kernel_sizes=(kernel_sizes, 1), strides=(self.strides, 1), ceil_mode=True)
+        sums = sum_pool2d(x, kernel_size=(kernel_size, 1), stride=(self.stride, 1), ceil_mode=True)
         y = sums / normalization
         return y, y_mask
 
     def unfold_forward(self, x: torch.Tensor, mask: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         if x.shape[-2] == 1:
             return x, mask
-        padding = (x.shape[-2] - self.kernel_sizes) % self.strides
-        if self.kernel_sizes > x.shape[-2]:
-            padding = self.kernel_sizes - x.shape[-2]
+        if self.kernel_size > x.shape[-2]:
+            padding = self.kernel_size - x.shape[-2]
+        else:
+            padding = (x.shape[-2] - self.kernel_size) % self.stride
         if padding != 0:
             x = torch.nn.functional.pad(x, (0, 0, 0, padding))
             mask = torch.nn.functional.pad(mask, (0, padding))
-        x_blocks = x.unfold(-2, self.kernel_sizes, self.strides)
-        mask_blocks = mask.unfold(-1, self.kernel_sizes, self.strides).unsqueeze(-2)
+        x_blocks = x.unfold(-2, self.kernel_size, self.stride)
+        mask_blocks = mask.unfold(-1, self.kernel_size, self.stride).unsqueeze(-2)
         x_masked = x_blocks * mask_blocks
         normalization = mask_blocks.sum(-1)
         normalization[normalization == 0] = 1
@@ -244,19 +273,54 @@ class MaskedAvgPool1d(torch.nn.Module):
         return y, y_mask
 
 
+class PackedAvgPool1d(MaskedAvgPool1d):
+    def __init__(self, kernel_size: int, stride: int):
+        super().__init__(kernel_size, stride, implementation="unfold")
+        self.kernel_size = kernel_size
+        self.stride = stride
+
+    def forward(self, x: torch.Tensor, packed_meta_data: PackedMetaData) -> Tuple[torch.Tensor, PackedMetaData]:
+        if packed_meta_data.max_seq_len == 1:
+            return x, packed_meta_data
+        new_seq_lens = ceil_div(torch.clamp(packed_meta_data.seq_lens - self.kernel_size, min=0), self.stride) + 1
+        new_max_seq_len = compute_output_shape(packed_meta_data.max_seq_len, self.kernel_size, self.stride)
+        new_cu_seq_lens = torch.zeros(
+            new_seq_lens.shape[0] + 1, dtype=packed_meta_data.cu_seq_lens.dtype, device=x.device
+        )
+        new_cu_seq_lens[1:] = torch.cumsum(new_seq_lens, dim=0, dtype=packed_meta_data.cu_seq_lens.dtype)
+
+        padding = (self.kernel_size - packed_meta_data.seq_lens - self.stride) % self.stride
+
+        if padding.sum() != 0:
+            padded_x = torch.zeros(x.shape[0] + padding.sum(), *x.shape[1:], dtype=x.dtype, device=x.device)
+            idcs = torch.ones(x.shape[0], dtype=padding.dtype, device=padding.device)
+            idcs[packed_meta_data.cu_seq_lens[1:-1] - 1] = padding[:-1] + 1
+            idcs = (idcs).cumsum(0) - 1
+            padded_x[idcs] = x
+        else:
+            padded_x = x
+
+        normalization = torch.full((new_cu_seq_lens[-1],), self.kernel_size, dtype=x.dtype, device=x.device)
+        normalization[new_cu_seq_lens[1:] - 1] = (self.kernel_size - padding).to(normalization)
+        y = padded_x.unfold(0, self.kernel_size, self.stride).sum(-1) / normalization[:, None]
+        assert new_cu_seq_lens[-1] == y.shape[0]
+        packed_meta_data = PackedMetaData(new_seq_lens, new_cu_seq_lens, new_max_seq_len)
+        return y.to(x.dtype), packed_meta_data
+
+
 class MaskedSelect(torch.nn.Module):
-    def __init__(self, kernel_sizes: int, strides: int):
+    def __init__(self, kernel_size: int, stride: int):
         super().__init__()
-        self.kernel_sizes = kernel_sizes
-        self.strides = strides
-        if kernel_sizes != strides:
-            raise ValueError("Kernel size and strides must be equal for MaskedSelect")
+        self.kernel_size = kernel_size
+        self.stride = stride
+        if kernel_size != stride:
+            raise ValueError("Kernel size and stride must be equal for MaskedSelect")
 
     def forward(self, x: torch.Tensor, mask: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         if x.shape[-2] == 1:
             return x, mask
-        x = x[..., :: self.strides, :]
-        mask = mask[..., :: self.strides]
+        x = x[..., :: self.stride, :]
+        mask = mask[..., :: self.stride]
         return x, mask
 
 
@@ -271,228 +335,134 @@ class TiteSelfAttention(torch.nn.Module):
 
         to_hidden_sizes = config.hidden_sizes[layer_idx]
         if config.upscale_hidden_sizes:
-            from_hidden_sizes = to_hidden_sizes
+            from_hidden_size = to_hidden_sizes
         else:
-            from_hidden_sizes = config.hidden_sizes[max(0, layer_idx - 1)]
+            from_hidden_size = config.hidden_sizes[max(0, layer_idx - 1)]
         num_attention_heads = config.num_attention_heads[layer_idx]
         self.num_attention_heads = num_attention_heads
         self.attention_head_size = int(to_hidden_sizes / num_attention_heads)
         self.all_head_size = self.num_attention_heads * self.attention_head_size
 
-        self.Wqkv = torch.nn.Linear(from_hidden_sizes, 3 * self.all_head_size)
+        self.query = torch.nn.Linear(from_hidden_size, self.all_head_size)
+        self.key = torch.nn.Linear(from_hidden_size, self.all_head_size)
+        self.value = torch.nn.Linear(from_hidden_size, self.all_head_size)
 
-        kernel_sizes = config.kernel_sizes[layer_idx]
-        strides = config.strides[layer_idx]
+        kernel_size = config.kernel_sizes[layer_idx]
+        stride = config.strides[layer_idx]
         self.pooling = None
-        if kernel_sizes is not None and strides is not None and config.pooling_location == "attention":
-            if config.pooling_strategy == "mean_conv":
-                self.pooling = MaskedAvgPool1d(kernel_sizes, strides)
-            elif config.pooling_strategy == "select":
-                self.pooling = MaskedSelect(kernel_sizes, strides)
-            else:
-                raise ValueError(f"Unknown pooling strategy {config.pooling_strategy}")
+        if kernel_size is not None and stride is not None and config.pooling_location == "attention":
+            self.pooling = PackedAvgPool1d(kernel_size, stride)
 
         self.dropout_prob = config.dropout_prob
-        if config.positional_embedding_type == "ALiBi":
-            self.register_buffer(
-                "alibi", self.get_alibi_embeddings(config.output_shapes[layer_idx], self.num_attention_heads)
+        if config.positional_embedding_type == "rotary":
+            self.rope = RotaryPositionalEmbeddings(
+                self.attention_head_size, config.max_position_embeddings, config.rotary_interleaved
             )
-            self.rope = None
-        elif config.positional_embedding_type == "rotary":
-            self.alibi = None
-            self.rope = RotaryPositionalEmbeddings(self.attention_head_size, config.max_position_embeddings)
         else:
-            self.alibi = None
             self.rope = None
 
-    def get_alibi_embeddings(self, max_position_embeddings: int, num_attention_heads: int) -> torch.Tensor:
-        # https://github.com/mosaicml/examples/blob/daddaeff7a535273ff984b0134da4839c70a45b3/examples/benchmarks/bert/src/bert_layers.py#L432
-        # ALiBi
-        # Following https://github.com/ofirpress/attention_with_linear_biases/issues/5 (Implementation 1)
-        # In the causal case, you can exploit the fact that softmax is invariant to a uniform translation
-        # of the logits, which makes the math work out *after* applying causal masking. If no causal masking
-        # will be applied, it is necessary to construct the diagonal mask.
-        def _get_alibi_head_slopes(num_attention_heads: int) -> List[float]:
+    def forward(self, hidden_states: torch.Tensor, packed_meta_data: PackedMetaData) -> torch.Tensor:
+        value = self.value(hidden_states)
+        if packed_meta_data.max_seq_len == 1:
+            return value
 
-            def get_slopes_power_of_2(num_attention_heads: int) -> List[float]:
-                start = 2 ** (-(2 ** -(math.log2(num_attention_heads) - 3)))
-                ratio = start
-                return [start * ratio**i for i in range(num_attention_heads)]
+        query = self.query(hidden_states)
+        key = self.key(hidden_states)
 
-            # In the paper, they only train models that have 2^a heads for some a. This function
-            # has some good properties that only occur when the input is a power of 2. To
-            # maintain that even when the number of heads is not a power of 2, we use a
-            # workaround.
-            if math.log2(num_attention_heads).is_integer():
-                return get_slopes_power_of_2(num_attention_heads)
-
-            closest_power_of_2 = 2 ** math.floor(math.log2(num_attention_heads))
-            slopes_a = get_slopes_power_of_2(closest_power_of_2)
-            slopes_b = _get_alibi_head_slopes(2 * closest_power_of_2)
-            slopes_b = slopes_b[0::2][: num_attention_heads - closest_power_of_2]
-            return slopes_a + slopes_b
-
-        context_position = torch.arange(max_position_embeddings)[:, None]
-        memory_position = torch.arange(max_position_embeddings)[None, :]
-        relative_position = torch.abs(memory_position - context_position)
-        # [num_attention_heads, max_token_length, max_token_length]
-        relative_position = relative_position.unsqueeze(0).expand(num_attention_heads, -1, -1)
-        slopes = torch.tensor(_get_alibi_head_slopes(num_attention_heads), device=relative_position.device)
-        alibi = slopes.unsqueeze(1).unsqueeze(1) * -relative_position
-        # [1, num_attention_heads, max_token_length, max_token_length]
-        alibi = alibi.unsqueeze(0)
-        assert alibi.shape == torch.Size([1, num_attention_heads, max_position_embeddings, max_position_embeddings])
-
-        return alibi
-
-    def forward(self, hidden_states: torch.Tensor, attention_mask: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
-        batch_size, seq_len = attention_mask.shape
-        qkv = self.Wqkv(hidden_states)
-
-        qkv = rearrange(qkv, "b s (t h d) -> t b h s d", t=3, h=self.num_attention_heads, d=self.attention_head_size)
-
-        query, key, value = qkv.unbind(dim=0)
-
-        new_attention_mask = attention_mask
+        query_packed_meta_data = packed_meta_data
         if self.pooling is not None:
-            query = rearrange(query, "b h s d -> b s (h d)")
-            query, new_attention_mask = self.pooling(query, attention_mask)
-            query = rearrange(query, "b s (h d) -> b h s d", h=self.num_attention_heads, d=self.attention_head_size)
-        new_seq_len = new_attention_mask.shape[1]
+            query, query_packed_meta_data = self.pooling(query, packed_meta_data)
 
-        if value.shape[-2] > 1:
-            if self.rope is not None:
-                query = self.rope(query)
-                key = self.rope(key)
-            if attention_mask.shape != new_attention_mask.shape:
-                attn_weight = einsum(new_attention_mask, attention_mask, "b s1, b s2 -> b s1 s2")
-            else:
-                attn_weight = attention_mask[:, None].expand(batch_size, seq_len, seq_len)
-            attn_weight = repeat(
-                torch.where(attn_weight, 0, -10000.0), "b s1 s2 -> b h s1 s2", h=self.num_attention_heads
-            )
-            if self.alibi is not None:
-                attn_weight = attn_weight + self.alibi[:, :, : attn_weight.shape[-2], : attn_weight.shape[-1]]
+        query = rearrange(query, "t (h d) -> t h d", h=self.num_attention_heads, d=self.attention_head_size)
+        key = rearrange(key, "t (h d) -> t h d", h=self.num_attention_heads, d=self.attention_head_size)
+        value = rearrange(value, "t (h d) -> t h d", h=self.num_attention_heads, d=self.attention_head_size)
 
-            attn_output = torch.nn.functional.scaled_dot_product_attention(query, key, value, attn_weight)
-        else:
-            attn_output = value
-        attn_output = rearrange(
-            attn_output,
-            "b h s d -> b s (h d)",
-            b=batch_size,
-            h=self.num_attention_heads,
-            s=new_seq_len,
-            d=self.attention_head_size,
+        if self.rope is not None:
+            query = self.rope(query, query_packed_meta_data.cu_seq_lens, query_packed_meta_data.max_seq_len)
+            key = self.rope(key, packed_meta_data.cu_seq_lens, packed_meta_data.max_seq_len)
+        attn_output = flash_attn_varlen_func(
+            query,
+            key,
+            value,
+            query_packed_meta_data.cu_seq_lens,
+            packed_meta_data.cu_seq_lens,
+            query_packed_meta_data.max_seq_len,
+            packed_meta_data.max_seq_len,
         )
-        return attn_output, new_attention_mask
 
-
-class TiteSelfOutput(torch.nn.Module):
-    def __init__(self, config: TiteConfig, layer_idx: int):
-        super().__init__()
-        hidden_sizes = config.hidden_sizes[layer_idx]
-        self.config = config
-        self.dense = torch.nn.Linear(hidden_sizes, hidden_sizes)
-        self.LayerNorm = torch.nn.LayerNorm(hidden_sizes, eps=config.layer_norm_eps)
-        self.dropout = torch.nn.Dropout(config.dropout_prob)
-
-        kernel_sizes = config.kernel_sizes[layer_idx]
-        strides = config.strides[layer_idx]
-        self.pooling = None
-        if config.pooling_location in ("post", "attention") and kernel_sizes is not None and strides is not None:
-            if config.pooling_strategy == "mean_conv":
-                self.pooling = MaskedAvgPool1d(kernel_sizes, strides)
-            elif config.pooling_strategy == "select":
-                self.pooling = MaskedSelect(kernel_sizes, strides)
-            else:
-                raise ValueError(f"Unknown pooling strategy {config.pooling_strategy}")
-
-    def forward(
-        self, hidden_states: torch.Tensor, attention_mask: torch.Tensor, input_tensor: torch.Tensor
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
-        hidden_states = self.dense(hidden_states)
-        hidden_states = self.dropout(hidden_states)
-        if self.pooling is not None and self.config.pooling_location == "attention":
-            input_tensor, attention_mask = self.pooling(input_tensor, attention_mask)
-        if hidden_states.shape[-1] == input_tensor.shape[-1]:
-            hidden_states = hidden_states + input_tensor
-        else:
-            hidden_states[..., : input_tensor.shape[-1]] = hidden_states[..., : input_tensor.shape[-1]] + input_tensor
-        if self.pooling is not None and self.config.pooling_location == "post":
-            hidden_states, attention_mask = self.pooling(hidden_states, attention_mask)
-        hidden_states = self.LayerNorm(hidden_states)
-        return hidden_states, attention_mask
+        attn_output = rearrange(attn_output, "t h d -> t (h d)")
+        return attn_output
 
 
 class TiteAttention(torch.nn.Module):
     def __init__(self, config: TiteConfig, layer_idx: int):
         super().__init__()
+        self.config = config
+
         self.self = TiteSelfAttention(config, layer_idx)
-        self.output = TiteSelfOutput(config, layer_idx)
 
-        kernel_sizes = config.kernel_sizes[layer_idx]
-        strides = config.strides[layer_idx]
-        self.pooling = None
-        if config.pooling_location == "pre" and kernel_sizes is not None and strides is not None:
-            if config.pooling_strategy == "mean_conv":
-                self.pooling = MaskedAvgPool1d(kernel_sizes, strides)
-            elif config.pooling_strategy == "select":
-                self.pooling = MaskedSelect(kernel_sizes, strides)
-            else:
-                raise ValueError(f"Unknown pooling strategy {config.pooling_strategy}")
-
-    def forward(self, hidden_states: torch.Tensor, attention_mask: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
-        if self.pooling is not None:
-            hidden_states, attention_mask = self.pooling(hidden_states, attention_mask)
-        self_outputs, new_attention_mask = self.self(hidden_states, attention_mask)
-        attn_output, new_attention_mask = self.output(self_outputs, attention_mask, hidden_states)
-        return attn_output, new_attention_mask
-
-
-class TiteIntermediate(torch.nn.Module):
-    def __init__(self, config: TiteConfig, layer_idx: int):
-        super().__init__()
-        hidden_sizes = config.hidden_sizes[layer_idx]
-        intermediate_sizes = config.intermediate_sizes[layer_idx]
-        self.dense = torch.nn.Linear(hidden_sizes, intermediate_sizes)
-        self.intermediate_act_fn = ACT2FN[config.hidden_act]
-
-    def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
-        hidden_states = self.dense(hidden_states)
-        hidden_states = self.intermediate_act_fn(hidden_states)
-        return hidden_states
-
-
-class TiteOutput(torch.nn.Module):
-    def __init__(self, config: TiteConfig, layer_idx: int):
-        super().__init__()
-        hidden_sizes = config.hidden_sizes[layer_idx]
-        intermediate_sizes = config.intermediate_sizes[layer_idx]
-        self.dense = torch.nn.Linear(intermediate_sizes, hidden_sizes)
-        self.LayerNorm = torch.nn.LayerNorm(hidden_sizes, eps=config.layer_norm_eps)
+        hidden_size = config.hidden_sizes[layer_idx]
+        self.dense = torch.nn.Linear(hidden_size, hidden_size)
         self.dropout = torch.nn.Dropout(config.dropout_prob)
 
-    def forward(self, hidden_states: torch.Tensor, input_tensor: torch.Tensor) -> torch.Tensor:
-        hidden_states = self.dense(hidden_states)
-        hidden_states = self.dropout(hidden_states)
-        hidden_states = self.LayerNorm(hidden_states + input_tensor)
+        kernel_size = config.kernel_sizes[layer_idx]
+        stride = config.strides[layer_idx]
+        self.pooling = None
+        if kernel_size is not None and stride is not None:
+            self.pooling = PackedAvgPool1d(kernel_size, stride)
+
+    def forward(
+        self, hidden_states: torch.Tensor, packed_meta_data: PackedMetaData
+    ) -> Tuple[torch.Tensor, PackedMetaData]:
+        if self.pooling is not None and self.config.pooling_location == "pre":
+            hidden_states, packed_meta_data = self.pooling(hidden_states, packed_meta_data)
+
+        attn_output = self.self(hidden_states, packed_meta_data)
+        attn_output = self.dense(attn_output)
+        attn_output = self.dropout(attn_output)
+
+        if self.pooling is not None and self.config.pooling_location == "attention":
+            hidden_states, packed_meta_data = self.pooling(hidden_states, packed_meta_data)
+
+        attn_output[..., : hidden_states.shape[-1]] = attn_output[..., : hidden_states.shape[-1]] + hidden_states
+        if self.pooling is not None and self.config.pooling_location == "post":
+            attn_output, packed_meta_data = self.pooling(attn_output, packed_meta_data)
+
+        return hidden_states, packed_meta_data
+
+
+class TiteMLP(torch.nn.Module):
+    def __init__(self, config: TiteConfig, layer_idx: int):
+        super().__init__()
+        hidden_size = config.hidden_sizes[layer_idx]
+        intermediate_sizes = config.intermediate_sizes[layer_idx]
+        self.intermediate_dense = torch.nn.Linear(hidden_size, intermediate_sizes)
+        self.intermediate_act_fn = ACT2FN[config.hidden_act]
+        self.out_dense = torch.nn.Linear(intermediate_sizes, hidden_size)
+        self.dropout = torch.nn.Dropout(config.dropout_prob)
+
+    @torch.compile(dynamic=True)
+    def forward(self, norm_hidden_states: torch.Tensor, hidden_states: torch.Tensor) -> torch.Tensor:
+        mlp_output = self.intermediate_dense(norm_hidden_states)
+        mlp_output = self.intermediate_act_fn(mlp_output)
+        mlp_output = self.out_dense(mlp_output)
+        mlp_output = self.dropout(mlp_output)
+        hidden_states = mlp_output + hidden_states
         return hidden_states
 
 
 class TiteUpscale(torch.nn.Module):
     def __init__(self, config: TiteConfig, layer_idx: int):
         super().__init__()
-        hidden_sizes = config.hidden_sizes[layer_idx]
-        old_hidden_sizes = config.hidden_sizes[max(0, layer_idx - 1)]
-        self.upscale_layer = torch.nn.Linear(old_hidden_sizes, hidden_sizes)
+        hidden_size = config.hidden_sizes[layer_idx]
+        old_hidden_size = config.hidden_sizes[max(0, layer_idx - 1)]
+        self.upscale_layer = torch.nn.Linear(old_hidden_size, hidden_size)
         self.dropout = torch.nn.Dropout(config.dropout_prob)
-        self.LayerNorm = torch.nn.LayerNorm(hidden_sizes, eps=config.layer_norm_eps)
 
+    @torch.compile(dynamic=True)
     def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
         hidden_states = self.upscale_layer(hidden_states)
         hidden_states = self.dropout(hidden_states)
-        hidden_states = self.LayerNorm(hidden_states)
         return hidden_states
 
 
@@ -502,24 +472,29 @@ class TiteLayer(torch.nn.Module):
         self.chunk_size_feed_forward = config.chunk_size_feed_forward
         self.seq_len_dim = 1
         self.attention = TiteAttention(config, layer_idx)
-        self.intermediate = TiteIntermediate(config, layer_idx)
-        self.output = TiteOutput(config, layer_idx)
+        self.mlp = TiteMLP(config, layer_idx)
+        self.attention_norm = (
+            torch.nn.LayerNorm(config.hidden_sizes[layer_idx], eps=config.layer_norm_eps)
+            if layer_idx != 0
+            else torch.nn.Identity()
+        )
+        self.mlp_norm = torch.nn.LayerNorm(config.hidden_sizes[layer_idx], eps=config.layer_norm_eps)
 
-        hidden_sizes = config.hidden_sizes[layer_idx]
-        old_hidden_sizes = config.hidden_sizes[max(0, layer_idx - 1)]
-        self.upscale_layer = None
-        if config.upscale_hidden_sizes and old_hidden_sizes != hidden_sizes:
+        hidden_size = config.hidden_sizes[layer_idx]
+        old_hidden_size = config.hidden_sizes[max(0, layer_idx - 1)]
+        if config.upscale_hidden_sizes and old_hidden_size != hidden_size:
             self.upscale_layer = TiteUpscale(config, layer_idx)
+        else:
+            self.upscale_layer = torch.nn.Identity()
 
     def forward(
-        self, hidden_states: torch.Tensor, attention_mask: torch.BoolTensor
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        self, hidden_states: torch.Tensor, packed_meta_data: PackedMetaData
+    ) -> Tuple[torch.Tensor, PackedMetaData]:
         if self.upscale_layer is not None:
             hidden_states = self.upscale_layer(hidden_states)
-        attn_output, attention_mask = self.attention(hidden_states, attention_mask)
-        intermediate_output = self.intermediate(attn_output)
-        layer_output = self.output(intermediate_output, attn_output)
-        return layer_output, attention_mask
+        hidden_states, packed_meta_data = self.attention(self.attention_norm(hidden_states), packed_meta_data)
+        layer_output = self.mlp(self.mlp_norm(hidden_states), hidden_states)
+        return layer_output, packed_meta_data
 
 
 class TiteEncoder(torch.nn.Module):
@@ -531,11 +506,11 @@ class TiteEncoder(torch.nn.Module):
         )
 
     def forward(
-        self, hidden_states: torch.Tensor, attention_mask: torch.BoolTensor, output_hidden_states: bool = False
+        self, hidden_states: torch.Tensor, packed_meta_data: PackedMetaData, output_hidden_states: bool = False
     ) -> Tuple[torch.Tensor, Tuple[torch.Tensor, ...] | None]:
         all_hidden_states = [hidden_states] if output_hidden_states else None
-        for layer_module in self.layer:
-            hidden_states, attention_mask = layer_module(hidden_states, attention_mask)
+        for layer_idx, layer_module in enumerate(self.layer):
+            hidden_states, packed_meta_data = layer_module(hidden_states, packed_meta_data)
             if all_hidden_states is not None:
                 all_hidden_states.append(hidden_states)
         return (hidden_states, tuple(all_hidden_states) if all_hidden_states is not None else None)
