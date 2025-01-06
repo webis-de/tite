@@ -377,7 +377,7 @@ class TiteAttention(torch.nn.Module):
 
         value = self.value(hidden_states)
         if packed_meta_data.max_seq_len == 1:
-            return value
+            return value, packed_meta_data
 
         query = self.query(hidden_states)
         key = self.key(hidden_states)
