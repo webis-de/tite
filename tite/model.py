@@ -273,6 +273,8 @@ class MaskedAvgPool1d(torch.nn.Module):
 class PackedAvgPool1d(MaskedAvgPool1d):
     def __init__(self, kernel_size: int, stride: int):
         super().__init__(kernel_size, stride, implementation="unfold")
+        if kernel_size != stride:
+            raise ValueError("Kernel size and stride must be equal for PackedAvgPool1d")
         self.kernel_size = kernel_size
         self.stride = stride
 
@@ -299,8 +301,9 @@ class PackedAvgPool1d(MaskedAvgPool1d):
 
         normalization = torch.full((new_cu_seq_lens[-1],), self.kernel_size, dtype=x.dtype, device=x.device)
         normalization[new_cu_seq_lens[1:] - 1] = (self.kernel_size - padding).to(normalization)
-        y = padded_x.unfold(0, self.kernel_size, self.stride).sum(-1) / normalization[:, None]
-        assert new_cu_seq_lens[-1] == y.shape[0]
+        unfold_x = padded_x.unfold(0, self.kernel_size, self.stride).sum(-1)
+        assert new_cu_seq_lens[-1] == unfold_x.shape[0]
+        y = unfold_x / normalization[:, None]
         packed_meta_data = PackedMetaData(new_seq_lens, new_cu_seq_lens, new_max_seq_len)
         return y.to(x.dtype), packed_meta_data
 
