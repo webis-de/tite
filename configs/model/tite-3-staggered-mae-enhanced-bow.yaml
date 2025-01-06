@@ -16,7 +16,6 @@ model:
             strides: [null, 3, null, 3, null, 3, null, 3, null, 3, null, 3]
             positional_embedding_type: rotary
             upscale_hidden_sizes: true
-            attention_based_pooling: true
             pooling_strategy: mean_conv
     tokenizer:
       class_path: tite.tokenizer.TiteTokenizer
