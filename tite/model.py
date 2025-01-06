@@ -332,16 +332,16 @@ class TiteAttention(torch.nn.Module):
 
         self.config = config
 
-        if layer_idx == 0:
-            self.norm = torch.nn.Identity()
-        else:
-            self.norm = torch.nn.LayerNorm(config.hidden_sizes[layer_idx], eps=config.layer_norm_eps)
-
         to_hidden_size = config.hidden_sizes[layer_idx]
         if config.upscale_hidden_sizes:
             from_hidden_size = to_hidden_size
         else:
             from_hidden_size = config.hidden_sizes[max(0, layer_idx - 1)]
+
+        if layer_idx == 0:
+            self.norm = torch.nn.Identity()
+        else:
+            self.norm = torch.nn.LayerNorm(from_hidden_size, eps=config.layer_norm_eps)
         num_attention_heads = config.num_attention_heads[layer_idx]
         self.num_attention_heads = num_attention_heads
         self.attention_head_size = int(to_hidden_size / num_attention_heads)
