@@ -254,10 +254,8 @@ class MAEEnhancedDecoder(PreTrainedModel):
         else:
             raise ValueError(f"Unknown query strategy: {self.query_strategy}")
 
-        attention_output = self.attention(
-            self.attention_norm(query_hidden_states), key_value_hidden_states, attention_mask, embx
-        )
-        hidden_states = self.mlp(self.mlp_norm(attention_output), attention_output)
+        attention_output = self.attention(query_hidden_states, key_value_hidden_states, attention_mask, embx)
+        hidden_states = self.mlp(attention_output)
         logits = self.mlm_decoder(hidden_states)
         return logits
 
