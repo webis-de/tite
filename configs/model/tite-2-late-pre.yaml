@@ -16,7 +16,7 @@ model:
             intermediate_sizes: [3072, 3072, 3072, 3072, 3072, 3072, 3072, 3072, 3072, 3072, 3072, 3072]
             positional_embedding_type: rotary
             upscale_hidden_sizes: true
-            attention_based_pooling: false
+            pooling_location: pre
             pooling_strategy: mean_conv
     tokenizer:
       class_path: tite.tokenizer.TiteTokenizer

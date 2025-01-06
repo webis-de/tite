@@ -9,7 +9,7 @@ from transformers import BertForMaskedLM, PreTrainedModel
 from transformers.activations import ACT2FN
 
 from .bert import BertConfig, BertModel
-from .model import TiteConfig, TiteEmbeddings, TiteIntermediate, TiteLayer, TiteOutput, TiteSelfOutput
+from .model import TiteConfig, TiteLayer, TiteMLP
 
 
 class MLMDecoder(Module):
@@ -118,25 +118,14 @@ class MAESelfAttention(torch.nn.Module):
         return attn_output
 
 
-class MAESelfOutput(TiteSelfOutput):
-
-    def __init__(self, config: TiteConfig, layer_idx: int, enhanced: bool = True):
-        super().__init__(config, layer_idx)
-        self.enhanced = enhanced
-
-    def forward(self, hidden_states: torch.Tensor, query_hidden_states: torch.Tensor) -> torch.Tensor:
-        hidden_states = self.dense(hidden_states)
-        hidden_states = self.dropout(hidden_states)
-        hidden_states = hidden_states + query_hidden_states
-        hidden_states = self.LayerNorm(hidden_states)
-        return hidden_states
-
-
 class MAEAttention(torch.nn.Module):
     def __init__(self, config: TiteConfig, layer_idx: int, mask_prob: float = 0.0):
         super().__init__()
         self.self = MAESelfAttention(config, layer_idx, mask_prob)
-        self.output = MAESelfOutput(config, layer_idx)
+        hidden_size = config.hidden_sizes[layer_idx]
+        self.dense = torch.nn.Linear(hidden_size, hidden_size)
+        self.LayerNorm = torch.nn.LayerNorm(hidden_size, eps=config.layer_norm_eps)
+        self.dropout = torch.nn.Dropout(config.dropout_prob)
 
     def forward(
         self,
@@ -145,9 +134,35 @@ class MAEAttention(torch.nn.Module):
         attention_mask: torch.Tensor,
         embx: torch.Tensor,
     ) -> torch.Tensor:
-        self_outputs = self.self(query_hidden_states, key_value_hidden_states, attention_mask, embx)
-        attn_output = self.output(self_outputs, query_hidden_states)
-        return attn_output
+        hidden_states = self.self(query_hidden_states, key_value_hidden_states, attention_mask, embx)
+        hidden_states = self.dense(hidden_states)
+        hidden_states = self.dropout(hidden_states)
+        hidden_states = hidden_states + query_hidden_states
+        hidden_states = self.LayerNorm(hidden_states)
+        return hidden_states
+
+
+class MAEEnhancedEmbeddings(torch.nn.Module):
+    def __init__(self, config: TiteConfig):
+        super().__init__()
+        hidden_size = config.hidden_sizes[0]
+        self.num_attention_heads = config.num_attention_heads
+        self.word_embeddings = torch.nn.Embedding(config.vocab_size, hidden_size, padding_idx=config.pad_token_id)
+        self.position_embeddings = None
+        if config.positional_embedding_type == "absolute":
+            self.position_embeddings = torch.nn.Embedding(config.max_position_embeddings, hidden_size)
+        self.LayerNorm = torch.nn.LayerNorm(hidden_size, eps=config.layer_norm_eps)
+        self.dropout = torch.nn.Dropout(config.dropout_prob)
+
+    def forward(self, input_ids: torch.Tensor) -> torch.Tensor:
+        embeddings = self.word_embeddings(input_ids)
+        if self.position_embeddings is not None:
+            embeddings = embeddings + self.position_embeddings(
+                torch.arange(input_ids.shape[1], device=input_ids.device)
+            )
+        embeddings = self.LayerNorm(embeddings)
+        embeddings = self.dropout(embeddings)
+        return embeddings
 
 
 class MAEEnhancedDecoder(PreTrainedModel):
@@ -174,28 +189,11 @@ class MAEEnhancedDecoder(PreTrainedModel):
         self.query_strategy = query_strategy
         self.subvectors = subvectors
 
-        self.embeddings = TiteEmbeddings(config)
+        self.embeddings = MAEEnhancedEmbeddings(config)
         self.attention = MAEAttention(config, 0, mask_prob)
-        self.intermediate = TiteIntermediate(config, 0)
-        self.output = TiteOutput(config, 0)
-
-        # if orig_hidden_size != embx_hidden_size:
-        #     if subvectors:
-        #         if embx_hidden_size % orig_hidden_size != 0:
-        #             raise ValueError("Incompatible hidden sizes")
-        #         self.downscale = torch.nn.Sequential(
-        #             torch.nn.Linear(embx_hidden_size, orig_hidden_size), torch.nn.LayerNorm(orig_hidden_size)
-        #         )
-        #     else:
-        #         if embx_hidden_size != hidden_size:
-        #             raise ValueError("Incompatible hidden sizes")
-        #         self.upscale = torch.nn.Sequential(
-        #             torch.nn.Linear(orig_hidden_size, hidden_size), torch.nn.LayerNorm(hidden_size)
-        #         )
-        #         if self.embeddings.position_embeddings is not None:
-        #             self.upscale_position_embeddings = torch.nn.Sequential(
-        #                 torch.nn.Linear(orig_hidden_size, hidden_size), torch.nn.LayerNorm(hidden_size)
-        #             )
+        self.mlp = TiteMLP(config, 0)
+        self.attention_norm = torch.nn.LayerNorm(hidden_size, eps=config.layer_norm_eps)
+        self.mlp_norm = torch.nn.LayerNorm(hidden_size, eps=config.layer_norm_eps)
 
         self.mlm_decoder = MLMDecoder(config.vocab_size, hidden_size, config.hidden_act)
         self.decoder = self.mlm_decoder.decoder
@@ -243,7 +241,7 @@ class MAEEnhancedDecoder(PreTrainedModel):
             special_tokens_mask = torch.zeros_like(input_ids, dtype=torch.bool)
         attention_mask = attention_mask.bool() & ~special_tokens_mask.bool()
 
-        key_value_hidden_states = self.embeddings(input_ids, attention_mask)
+        key_value_hidden_states = self.embeddings(input_ids)
         if self.query_strategy == "embx":
             query_hidden_states = embx.expand_as(key_value_hidden_states)
             if self.embeddings.position_embeddings is not None:
@@ -256,9 +254,10 @@ class MAEEnhancedDecoder(PreTrainedModel):
         else:
             raise ValueError(f"Unknown query strategy: {self.query_strategy}")
 
-        attention_output = self.attention(query_hidden_states, key_value_hidden_states, attention_mask, embx)
-        intermediate_output = self.intermediate(attention_output)
-        hidden_states = self.output(intermediate_output, attention_output)
+        attention_output = self.attention(
+            self.attention_norm(query_hidden_states), key_value_hidden_states, attention_mask, embx
+        )
+        hidden_states = self.mlp(self.mlp_norm(attention_output), attention_output)
         logits = self.mlm_decoder(hidden_states)
         return logits
 

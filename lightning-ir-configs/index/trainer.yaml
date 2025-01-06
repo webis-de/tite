@@ -2,6 +2,7 @@ trainer:
   accelerator: auto
   strategy: auto
   devices: auto
+  precision: bf16-mixed
   num_nodes: 1
   callbacks:
   - class_path: tite.callbacks.DummyImportCallback
