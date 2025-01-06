@@ -5,7 +5,7 @@ data:
     data_files:
       train: ./HuggingFaceFW___fineweb-edu/default/0.0.0/*/fineweb-edu-train-*.arrow
     batch_size: 128
-    num_workers: 4
+    num_workers: 8
     streaming: true
     collator:
       class_path: tite.datasets.TransformationCollator
