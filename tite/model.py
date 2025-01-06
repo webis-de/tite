@@ -501,6 +501,7 @@ class TiteEncoder(torch.nn.Module):
         self.layer = torch.nn.ModuleList(
             [TiteLayer(config, layer_idx) for layer_idx in range(config.num_hidden_layers)]
         )
+        self.norm = torch.nn.LayerNorm(config.hidden_sizes[-1], eps=config.layer_norm_eps)
 
     def forward(
         self, hidden_states: torch.Tensor, packed_meta_data: PackedMetaData, output_hidden_states: bool = False
@@ -510,4 +511,5 @@ class TiteEncoder(torch.nn.Module):
             hidden_states, packed_meta_data = layer_module(hidden_states, packed_meta_data)
             if all_hidden_states is not None:
                 all_hidden_states.append(hidden_states)
+        hidden_states = self.norm(hidden_states)
         return (hidden_states, tuple(all_hidden_states) if all_hidden_states is not None else None)
