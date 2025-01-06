@@ -187,6 +187,8 @@ class TiteModule(LightningModule):
                     enable_checkpointing=False,
                     num_sanity_val_steps=0,
                     enable_progress_bar=enable_progress_bar,
+                    limit_train_batches=2 if self.trainer is not None and self.trainer.sanity_checking else None,
+                    limit_val_batches=2 if self.trainer is not None and self.trainer.sanity_checking else None,
                 )
                 trainer.fit(glue_module, glue)
                 metrics = trainer.logged_metrics
@@ -200,7 +202,7 @@ class TiteModule(LightningModule):
                 add_special_tokens=add_special_tokens,
                 trainset=("msmarco-passage/train/triples-small", "triples"),
                 valset=("msmarco-passage/trec-dl-2019/judged", "scoreddocs"),
-                batch_size=128,
+                batch_size=32,
                 inference_batch_size=256,
             )
             copy_student = deepcopy(self.student).train()
@@ -212,10 +214,13 @@ class TiteModule(LightningModule):
                 logger=False,
                 precision=(self.trainer.precision if self.trainer is not None else "bf16-mixed"),
                 max_steps=max_steps,
+                max_epochs=1,
                 enable_checkpointing=False,
                 num_sanity_val_steps=0,
-                val_check_interval=max_steps,
+                val_check_interval=2 if self.trainer is not None and self.trainer.sanity_checking else max_steps,
                 enable_progress_bar=enable_progress_bar,
+                limit_train_batches=2 if self.trainer is not None and self.trainer.sanity_checking else None,
+                limit_val_batches=2 if self.trainer is not None and self.trainer.sanity_checking else None,
             )
             trainer.fit(msmarco_module, msmarco)
             metrics = trainer.logged_metrics
