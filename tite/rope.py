@@ -13,7 +13,7 @@ from torch import Tensor, nn
 # https://pytorch.org/torchtune/0.2/_modules/torchtune/modules/position_embeddings.html#RotaryPositionalEmbeddings
 
 
-class _RotaryPositionalEmbeddings(nn.Module):
+class LegacyRotaryPositionalEmbeddings(nn.Module):
     """
     This class implements Rotary Positional Embeddings (RoPE)
     proposed in https://arxiv.org/abs/2104.09864.
@@ -69,57 +69,30 @@ class _RotaryPositionalEmbeddings(nn.Module):
         cache = torch.stack([torch.cos(idx_theta), torch.sin(idx_theta)], dim=-1)
         self.register_buffer("cache", cache, persistent=False)
 
-    def forward(self, x: Tensor, *, input_pos: Optional[Tensor] = None) -> Tensor:
-        """
-        Args:
-            x (Tensor): input tensor with shape
-                [b, s, n_h, h_d]
-            input_pos (Optional[Tensor]): Optional tensor which contains the position ids
-                of each token. During training, this is used to indicate the positions
-                of each token relative to its sample when packed, shape [b, s].
-                During inference, this indicates the position of the current token.
-                If none, assume the index of the token is its position id. Default is None.
-
-        Returns:
-            Tensor: output tensor with RoPE applied
-
-        Notation used for tensor shapes:
-            - b: batch size
-            - s: sequence length
-            - n_h: num heads
-            - h_d: head dim
-
-        TODO: The implementation below can be made more efficient
-        for inference.
-        """
-        # input tensor has shape [b, s, n_h, h_d]
-        seq_len = x.size(1)
+    def forward(self, x: Tensor) -> Tensor:
+        # input tensor has shape [b, n_h, s, h_d]
+        seq_len = x.shape[2]
 
         # extract the values based on whether input_pos is set or not
-        rope_cache = self.cache[:seq_len] if input_pos is None else self.cache[input_pos]
+        rope_cache = self.cache[:seq_len]
 
         # reshape input; the last dimension is used for computing the output.
         # Cast to float to match the reference implementation
-        # tensor has shape [b, s, n_h, h_d // 2, 2]
-        xshaped = x.float().reshape(*x.shape[:-1], -1, 2)
+        xshaped = x.view(*x.shape[:-1], self.dim // 2, 2)
 
         # reshape the cache for broadcasting
-        # tensor has shape [b, s, 1, h_d // 2, 2] if packed samples,
-        # otherwise has shape [1, s, 1, h_d // 2, 2]
-        rope_cache = rope_cache.view(-1, xshaped.size(1), 1, xshaped.size(3), 2)
+        rope_cache = rope_cache.view(seq_len, self.dim // 2, 2)
 
-        # tensor has shape [b, s, n_h, h_d // 2, 2]
         x_out = torch.stack(
             [
                 xshaped[..., 0] * rope_cache[..., 0] - xshaped[..., 1] * rope_cache[..., 1],
-                xshaped[..., 0] * rope_cache[..., 1] + xshaped[..., 1] * rope_cache[..., 0],
+                xshaped[..., 1] * rope_cache[..., 0] + xshaped[..., 0] * rope_cache[..., 1],
             ],
             -1,
         )
 
-        # tensor has shape [b, s, n_h, h_d]
         x_out = x_out.flatten(3)
-        return x_out.type_as(x)
+        return x_out
 
 
 class RotaryPositionalEmbeddings(torch.nn.Module):
@@ -203,17 +176,17 @@ def main(args=None):
     seq_len = 128
     num_attention_heads = 12
     head_dim = 64
-    hidden_states = torch.ones(batch_size, seq_len, num_attention_heads, head_dim, device="cuda")
-    _rope = _RotaryPositionalEmbeddings(head_dim, 512).to("cuda")
+    hidden_states = torch.ones(batch_size, seq_len, num_attention_heads, head_dim, device="cuda", dtype=torch.bfloat16)
+    legacy_rope = LegacyRotaryPositionalEmbeddings(head_dim, 512).to("cuda")
     rope = RotaryPositionalEmbeddings(head_dim).to("cuda")
 
-    _rope_hidden_states = _rope(hidden_states)
+    legacy_rope_hidden_states = legacy_rope(hidden_states.transpose(1, 2)).transpose(1, 2)
     cu_seq_lens = torch.arange(0, (batch_size + 1) * seq_len, step=seq_len, device="cuda", dtype=torch.int32)
     rope_hidden_states = rope(
         hidden_states.view(-1, num_attention_heads, head_dim).clone(), cu_seq_lens, seq_len
-    ).view_as(_rope_hidden_states)
+    ).view_as(legacy_rope_hidden_states)
 
-    assert torch.allclose(_rope_hidden_states, rope_hidden_states)
+    assert torch.allclose(legacy_rope_hidden_states, rope_hidden_states, atol=1e-6)
 
 
 if __name__ == "__main__":

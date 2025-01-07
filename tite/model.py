@@ -67,7 +67,8 @@ class TiteConfig(PretrainedConfig):
         pooling_location: Literal["pre", "attention", "post"] = "attention",
         pooling_strategy: Literal["mean_conv", "select"] = "mean_conv",
         pooling_implementation: Literal["unfold", "sum_pool2d"] = "unfold",
-        rotary_interleaved: bool = False,
+        rotary_interleaved: bool = True,
+        pre_norm: bool = False,
         **kwargs,
     ):
         super().__init__(pad_token_id=pad_token_id, **kwargs)
@@ -89,6 +90,7 @@ class TiteConfig(PretrainedConfig):
         self.pooling_strategy = pooling_strategy
         self.pooling_implementation = pooling_implementation
         self.rotary_interleaved = rotary_interleaved
+        self.pre_norm = pre_norm
 
         iterator = zip(
             [
@@ -190,6 +192,41 @@ class TiteModel(PreTrainedModel):
             hidden_states = repad_hidden_states.view(batch_size, seq_len, -1)
         return TiteModelOutput(last_hidden_state=hidden_states, hidden_states=all_hidden_states)
 
+    @classmethod
+    def _load_pretrained_model(
+        cls, model, state_dict, loaded_keys, resolved_archive_file, pretrained_model_name_or_path, *args, **kwargs
+    ):
+        new_state_dict = {}
+        for key, value in state_dict.items():
+            new_key = key
+            new_key = new_key.replace("LayerNorm", "norm")
+            new_key = new_key.replace("attention.self", "attention")
+            new_key = new_key.replace("attention.output", "attention")
+            new_key = new_key.replace("intermediate.dense", "mlp.intermediate_dense")
+            new_key = new_key.replace("output.dense", "mlp.out_dense")
+            new_key = new_key.replace("output", "mlp")
+            if "Wqkv" in key:
+                q, k, v = value.chunk(3, dim=0)
+                new_state_dict[new_key.replace("Wqkv", "query")] = q
+                new_state_dict[new_key.replace("Wqkv", "key")] = k
+                new_state_dict[new_key.replace("Wqkv", "value")] = v
+            else:
+                new_state_dict[new_key] = value
+        missing_keys = set(model.state_dict().keys()) - set(new_state_dict.keys())
+        unexpected_keys = set(new_state_dict.keys()) - set(model.state_dict().keys())
+        missing_keys = missing_keys - {"encoder.norm.weight", "encoder.norm.bias"}
+        unexpected_keys = unexpected_keys - {
+            "encoder.layer.0.attention.norm.weight",
+            "encoder.layer.0.attention.norm.bias",
+        }
+        assert not missing_keys, f"Missing keys: {missing_keys}"
+        assert not unexpected_keys, f"Unexpected keys: {unexpected_keys}"
+        loaded_keys = list(new_state_dict.keys())
+        model, *out = super()._load_pretrained_model(
+            model, new_state_dict, loaded_keys, resolved_archive_file, pretrained_model_name_or_path, *args, **kwargs
+        )
+        return (model, *out)
+
 
 class TiteEmbeddings(torch.nn.Module):
     def __init__(self, config: TiteConfig):
@@ -200,16 +237,16 @@ class TiteEmbeddings(torch.nn.Module):
         self.position_embeddings = None
         if config.positional_embedding_type == "absolute":
             self.position_embeddings = torch.nn.Embedding(config.max_position_embeddings, hidden_size)
-        self.LayerNorm = torch.nn.LayerNorm(hidden_size, eps=config.layer_norm_eps)
+        self.norm = torch.nn.LayerNorm(hidden_size, eps=config.layer_norm_eps)
         self.dropout = torch.nn.Dropout(config.dropout_prob)
 
-    @torch.compile(dynamic=True)
+    # @torch.compile(dynamic=True)
     def forward(self, input_ids: torch.Tensor, position_idcs: torch.Tensor) -> torch.Tensor:
         embeddings = self.word_embeddings(input_ids)
         if self.position_embeddings is not None:
             position_embeddings = self.position_embeddings(position_idcs)
             embeddings = embeddings + position_embeddings
-        embeddings = self.LayerNorm(embeddings)
+        embeddings = self.norm(embeddings)
         embeddings = self.dropout(embeddings)
         return embeddings
 
@@ -341,7 +378,7 @@ class TiteAttention(torch.nn.Module):
         else:
             from_hidden_size = config.hidden_sizes[max(0, layer_idx - 1)]
 
-        if layer_idx == 0:
+        if layer_idx == 0 and config.pre_norm:
             self.norm = torch.nn.Identity()
         else:
             self.norm = torch.nn.LayerNorm(from_hidden_size, eps=config.layer_norm_eps)
@@ -376,7 +413,8 @@ class TiteAttention(torch.nn.Module):
         if self.pooling is not None and self.config.pooling_location == "pre":
             hidden_states, packed_meta_data = self.pooling(hidden_states, packed_meta_data)
 
-        hidden_states = self.norm(hidden_states)
+        if self.config.pre_norm:
+            hidden_states = self.norm(hidden_states)
 
         value = self.value(hidden_states)
         if packed_meta_data.max_seq_len == 1:
@@ -406,6 +444,21 @@ class TiteAttention(torch.nn.Module):
             packed_meta_data.max_seq_len,
         )
 
+        # unpacked_query = rearrange(
+        #     query, "(b s) h d -> b h s d", b=len(packed_meta_data.seq_lens), s=packed_meta_data.max_seq_len
+        # )
+        # unpacked_key = rearrange(
+        #     key, "(b s) h d -> b h s d", b=len(packed_meta_data.seq_lens), s=packed_meta_data.max_seq_len
+        # )
+        # unpacked_value = rearrange(
+        #     value, "(b s) h d -> b h s d", b=len(packed_meta_data.seq_lens), s=packed_meta_data.max_seq_len
+        # )
+        # o = (
+        #     torch.nn.functional.scaled_dot_product_attention(unpacked_query, unpacked_key, unpacked_value)
+        #     .transpose(1, 2)
+        #     .reshape_as(attn_output)
+        # )
+
         attn_output = rearrange(attn_output, "t h d -> t (h d)")
 
         attn_output = self.dense(attn_output)
@@ -419,6 +472,8 @@ class TiteAttention(torch.nn.Module):
         if self.pooling is not None and self.config.pooling_location == "post":
             attn_output, packed_meta_data = self.pooling(attn_output, packed_meta_data)
 
+        if not self.config.pre_norm:
+            hidden_states = self.norm(attn_output)
         return attn_output, packed_meta_data
 
 
@@ -427,21 +482,26 @@ class TiteMLP(torch.nn.Module):
         super().__init__()
         hidden_size = config.hidden_sizes[layer_idx]
         intermediate_sizes = config.intermediate_sizes[layer_idx]
+        self.config = config
         self.norm = torch.nn.LayerNorm(hidden_size, eps=config.layer_norm_eps)
         self.intermediate_dense = torch.nn.Linear(hidden_size, intermediate_sizes)
         self.intermediate_act_fn = ACT2FN[config.hidden_act]
         self.out_dense = torch.nn.Linear(intermediate_sizes, hidden_size)
         self.dropout = torch.nn.Dropout(config.dropout_prob)
 
-    @torch.compile(dynamic=True)
+    # @torch.compile(dynamic=True)
     def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
-        mlp_output = self.norm(hidden_states)
+        mlp_output = hidden_states
+        if self.config.pre_norm:
+            mlp_output = self.norm(mlp_output)
         mlp_output = self.intermediate_dense(mlp_output)
         mlp_output = self.intermediate_act_fn(mlp_output)
         mlp_output = self.out_dense(mlp_output)
         mlp_output = self.dropout(mlp_output)
-        hidden_states = mlp_output + hidden_states
-        return hidden_states
+        mlp_output = mlp_output + hidden_states
+        if not self.config.pre_norm:
+            mlp_output = self.norm(mlp_output)
+        return mlp_output
 
 
 class TiteUpscale(torch.nn.Module):
@@ -452,7 +512,7 @@ class TiteUpscale(torch.nn.Module):
         self.upscale_layer = torch.nn.Linear(old_hidden_size, hidden_size)
         self.dropout = torch.nn.Dropout(config.dropout_prob)
 
-    @torch.compile(dynamic=True)
+    # @torch.compile(dynamic=True)
     def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
         hidden_states = self.upscale_layer(hidden_states)
         hidden_states = self.dropout(hidden_states)
@@ -491,7 +551,10 @@ class TiteEncoder(torch.nn.Module):
         self.layer = torch.nn.ModuleList(
             [TiteLayer(config, layer_idx) for layer_idx in range(config.num_hidden_layers)]
         )
-        self.norm = torch.nn.LayerNorm(config.hidden_sizes[-1], eps=config.layer_norm_eps)
+        if config.pre_norm:
+            self.norm = torch.nn.LayerNorm(config.hidden_sizes[-1], eps=config.layer_norm_eps)
+        else:
+            self.norm = torch.nn.Identity()
 
     def forward(
         self, hidden_states: torch.Tensor, packed_meta_data: PackedMetaData, output_hidden_states: bool = False
