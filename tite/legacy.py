@@ -150,6 +150,19 @@ class TiteModel(PreTrainedModel):
             module.bias.data.zero_()
             module.weight.data.fill_(1.0)
 
+    @classmethod
+    def _load_pretrained_model(
+        cls, model, state_dict, loaded_keys, resolved_archive_file, pretrained_model_name_or_path, *args, **kwargs
+    ):
+        if "embeddings.word_embeddings.linear.weight" in state_dict:
+            linear = state_dict["embeddings.word_embeddings.linear.weight"]
+            weight = state_dict["embeddings.word_embeddings.weight"]
+            state_dict["embeddings.word_embeddings.weight"] = torch.matmul(weight, linear.transpose(0, 1))
+        model, *out = super()._load_pretrained_model(
+            model, state_dict, loaded_keys, resolved_archive_file, pretrained_model_name_or_path, *args, **kwargs
+        )
+        return model, *out
+
     def forward(
         self,
         input_ids: torch.Tensor,
