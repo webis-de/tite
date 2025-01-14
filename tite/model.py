@@ -240,7 +240,7 @@ class TiteEmbeddings(torch.nn.Module):
         self.norm = torch.nn.LayerNorm(hidden_size, eps=config.layer_norm_eps)
         self.dropout = torch.nn.Dropout(config.dropout_prob)
 
-    # @torch.compile(dynamic=True)
+    @torch.compile(dynamic=True)
     def forward(self, input_ids: torch.Tensor, position_idcs: torch.Tensor) -> torch.Tensor:
         embeddings = self.word_embeddings(input_ids)
         if self.position_embeddings is not None:
@@ -444,21 +444,6 @@ class TiteAttention(torch.nn.Module):
             packed_meta_data.max_seq_len,
         )
 
-        # unpacked_query = rearrange(
-        #     query, "(b s) h d -> b h s d", b=len(packed_meta_data.seq_lens), s=packed_meta_data.max_seq_len
-        # )
-        # unpacked_key = rearrange(
-        #     key, "(b s) h d -> b h s d", b=len(packed_meta_data.seq_lens), s=packed_meta_data.max_seq_len
-        # )
-        # unpacked_value = rearrange(
-        #     value, "(b s) h d -> b h s d", b=len(packed_meta_data.seq_lens), s=packed_meta_data.max_seq_len
-        # )
-        # o = (
-        #     torch.nn.functional.scaled_dot_product_attention(unpacked_query, unpacked_key, unpacked_value)
-        #     .transpose(1, 2)
-        #     .reshape_as(attn_output)
-        # )
-
         attn_output = rearrange(attn_output, "t h d -> t (h d)")
 
         attn_output = self.dense(attn_output)
@@ -489,7 +474,7 @@ class TiteMLP(torch.nn.Module):
         self.out_dense = torch.nn.Linear(intermediate_sizes, hidden_size)
         self.dropout = torch.nn.Dropout(config.dropout_prob)
 
-    # @torch.compile(dynamic=True)
+    @torch.compile(dynamic=True)
     def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
         mlp_output = hidden_states
         if self.config.pre_norm:
@@ -512,7 +497,7 @@ class TiteUpscale(torch.nn.Module):
         self.upscale_layer = torch.nn.Linear(old_hidden_size, hidden_size)
         self.dropout = torch.nn.Dropout(config.dropout_prob)
 
-    # @torch.compile(dynamic=True)
+    @torch.compile(dynamic=True)
     def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
         hidden_states = self.upscale_layer(hidden_states)
         hidden_states = self.dropout(hidden_states)
