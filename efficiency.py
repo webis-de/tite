@@ -94,7 +94,7 @@ def run_model(
 
 def main(args=None):
     parser = ArgumentParser()
-    parser.add_argument("--num_texts", type=int, default=10_000)
+    parser.add_argument("--num_texts", type=int, default=50_000)
     parser.add_argument("--profile", action="store_true")
 
     args = parser.parse_args(args)
@@ -139,6 +139,20 @@ def main(args=None):
                 positional_embedding_type="rotary",
                 pooling_location="post",
             ),
+        ),
+        (
+            (
+                "tite-2-late-rope-higher-dims",
+                TiteConfig(
+                    strides=(None, None, None, 2, 2, 2, 2, 2, 2, 2, 2, 2),
+                    kernel_sizes=(None, None, None, 2, 2, 2, 2, 2, 2, 2, 2, 2),
+                    hidden_sizes=(768, 768, 768, 1024, 1024, 1024, 1280, 1280, 1280, 1536, 1536, 1536),
+                    num_attention_heads=(12, 12, 12, 16, 16, 16, 20, 20, 20, 24, 24, 24),
+                    intermediate_sizes=(3072, 3072, 3072, 4096, 4096, 4096, 5120, 5120, 5120, 6144, 6144, 6144),
+                    positional_embedding_type="rotary",
+                    pooling_location="post",
+                ),
+            )
         ),
         (
             "tite-3-late-rope",
