@@ -4,6 +4,7 @@ from typing import Any, Callable, NamedTuple
 from torch import Tensor
 from torch.nn import Module
 
+from tite.legacy import TiteModelOutput as LegacyTiteModelOutput
 from tite.model import TiteModelOutput
 from tite.teacher import CopyStudent
 
@@ -41,7 +42,7 @@ class JEPA(Module):
         student_aux = {k[8:]: v for k, v in aux.items() if k.startswith("student_")}
         teacher_aux = {k[8:]: v for k, v in aux.items() if k.startswith("teacher_")}
         output = self.student(**input)
-        if isinstance(output, TiteModelOutput):
+        if isinstance(output, (TiteModelOutput, LegacyTiteModelOutput)):
             embx = output.last_hidden_state
         else:
             embx = output
