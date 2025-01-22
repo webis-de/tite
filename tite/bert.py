@@ -5,7 +5,7 @@ from torch.nn import Module
 from transformers import BertConfig as HFBertConfig
 from transformers import BertModel as HFBert
 
-from .model import TiteConfig, TiteModel, TiteModelOutput
+from .legacy import TiteConfig, TiteModel, TiteModelOutput
 
 
 class BertConfig(TiteConfig):
