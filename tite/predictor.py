@@ -184,6 +184,7 @@ class MAEEnhancedDecoder(PreTrainedModel):
             intermediate_size=intermediate_size,
             positional_embedding_type="absolute",
         )
+        config.pre_norm = False
         super().__init__(config)
         self.mask_id = mask_id
         self.query_strategy = query_strategy
