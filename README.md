@@ -1,15 +1,7 @@
 # TITE
 
-## Todo
+This repository contains the code for the paper "TITE: Token-Independent Text Encoder for Information Retrieval"
 
-- [ ] save state_dict in dataset
-- [x] Remove CLS + SEP tokens
-- [x] Add delete, insert, and replace random token transformation
-- [x] Add transformation for teacher
-- [x] Allow multiple transformations
-- [x] Add barlow twins projection
+The `tite` directory contains all code for modeling, data processing, and pre-training. The `main.py` script is the entrypoint for pre-training and uses [PyTorch Lightning](https://lightning.ai/docs/pytorch/stable/) to manage training.
 
-- [ ] String level transformations
-    - [ ] Character: delete, insert, swap neighboring, replace
-    - [ ] Sentence: delete, swap neighboring, shuffle
-- [ ] MS MARCO module for validation
+Fine-tuning is done using [Lightning IR]([https://](https://webis.de/lightning-ir/index.html)). The configuration files for fine-tuning are in the `lightning-ir-configs` directory.
