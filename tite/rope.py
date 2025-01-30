@@ -39,24 +39,25 @@ class LegacyRotaryPositionalEmbeddings(nn.Module):
         dim: int,
         max_seq_len: int = 4096,
         base: int = 10_000,
+        dtype: Optional[torch.dtype] = None,
     ) -> None:
         super().__init__()
         self.dim = dim
         self.base = base
         self.max_seq_len = max_seq_len
-        self._rope_init()
+        self._rope_init(dtype)
 
     # We need to explicitly define reset_parameters for FSDP initialization, see
     # https://github.com/pytorch/pytorch/blob/797d4fbdf423dd9320ebe383fb57ffb1135c4a99/torch/distributed/fsdp/_init_utils.py#L885
     def reset_parameters(self):
         self._rope_init()
 
-    def _rope_init(self):
+    def _rope_init(self, dtype: Optional[torch.dtype] = None) -> None:
         theta = 1.0 / (self.base ** (torch.arange(0, self.dim, 2)[: (self.dim // 2)].float() / self.dim))
         self.register_buffer("theta", theta, persistent=False)
-        self.build_rope_cache(self.max_seq_len)
+        self.build_rope_cache(self.max_seq_len, dtype)
 
-    def build_rope_cache(self, max_seq_len: int = 4096) -> None:
+    def build_rope_cache(self, max_seq_len: int = 4096, dtype: Optional[torch.dtype] = None) -> None:
         # Create position indexes `[0, 1, ..., max_seq_len - 1]`
         seq_idx = torch.arange(max_seq_len, dtype=self.theta.dtype, device=self.theta.device)
 
@@ -66,7 +67,7 @@ class LegacyRotaryPositionalEmbeddings(nn.Module):
 
         # cache includes both the cos and sin components and so the output shape is
         # [max_seq_len, dim // 2, 2]
-        cache = torch.stack([torch.cos(idx_theta), torch.sin(idx_theta)], dim=-1)
+        cache = torch.stack([torch.cos(idx_theta), torch.sin(idx_theta)], dim=-1).to(dtype)
         self.register_buffer("cache", cache, persistent=False)
 
     def forward(self, x: Tensor) -> Tensor:
@@ -176,8 +177,8 @@ def main(args=None):
     seq_len = 128
     num_attention_heads = 12
     head_dim = 64
-    hidden_states = torch.ones(batch_size, seq_len, num_attention_heads, head_dim, device="cuda", dtype=torch.bfloat16)
-    legacy_rope = LegacyRotaryPositionalEmbeddings(head_dim, 512).to("cuda")
+    hidden_states = torch.rand(batch_size, seq_len, num_attention_heads, head_dim, device="cuda", dtype=torch.float16)
+    legacy_rope = LegacyRotaryPositionalEmbeddings(head_dim, 512, dtype=hidden_states.dtype).to("cuda")
     rope = RotaryPositionalEmbeddings(head_dim).to("cuda")
 
     legacy_rope_hidden_states = legacy_rope(hidden_states.transpose(1, 2)).transpose(1, 2)

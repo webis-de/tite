@@ -4,21 +4,45 @@ from typing import List, Literal, Tuple
 import torch
 from einops import rearrange
 from flash_attn import flash_attn_varlen_func
+from flash_attn.ops.activations import SwiGLUFunction
 from transformers import PretrainedConfig, PreTrainedModel
 from transformers.activations import ACT2FN
 from transformers.modeling_outputs import ModelOutput
 
+from .pool import PackedAvgPool1d, PackedMetaData, compute_output_shape
 from .rope import RotaryPositionalEmbeddings
 
 
-def ceil_div(a, b):
-    return -(-a // b)
+class RMSNorm(torch.nn.Module):
+    """Llama2 RMSNorm implementation"""
+
+    def __init__(self, normalized_shape: int, eps: float = 1e-5):
+        super().__init__()
+        self.eps = eps
+        self.weight = torch.nn.Parameter(torch.ones(normalized_shape))
+
+    def _norm(self, x):
+        return x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + self.eps)
+
+    def forward(self, x):
+        output = self._norm(x.float()).type_as(x)
+        return output * self.weight
+
+    def _init_weights(self, reset_params: bool = False):
+        torch.nn.init.ones_(self.weight)
 
 
-def compute_output_shape(input_shape: int, kernel_size: int | None, stride: int | None) -> int:
-    if kernel_size is None or stride is None:
-        return input_shape
-    return ceil_div((max(0, input_shape - kernel_size)), stride) + 1
+class SwiGLU(torch.nn.Module):
+
+    def __init__(self) -> None:
+        super().__init__()
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x, y = x.chunk(2, dim=-1)
+        return SwiGLUFunction.apply(x, y)
+
+
+ACT2FN["swiglu"] = SwiGLU
 
 
 def compute_output_shapes(
@@ -34,13 +58,6 @@ def compute_output_shapes(
 class TiteModelOutput(ModelOutput):
     last_hidden_state: torch.Tensor
     hidden_states: Tuple[torch.Tensor, ...] | None = None
-
-
-@dataclass
-class PackedMetaData:
-    seq_lens: torch.Tensor
-    cu_seq_lens: torch.Tensor
-    max_seq_len: int
 
 
 class TiteConfig(PretrainedConfig):
@@ -61,14 +78,15 @@ class TiteConfig(PretrainedConfig):
         initializer_range: float = 0.02,
         layer_norm_eps: float = 1e-12,
         pad_token_id: int = 0,
-        hidden_act: str = "gelu_pytorch_tanh",
-        positional_embedding_type: Literal["absolute", "rotary"] = "rotary",
+        hidden_act: str = "swiglu",
+        positional_embedding_type: Literal["absolute", "rotary", "alibi"] = "rotary",
         upscale_hidden_sizes: bool = False,
         pooling_location: Literal["pre", "attention", "post"] = "attention",
         pooling_strategy: Literal["mean_conv", "select"] = "mean_conv",
         pooling_implementation: Literal["unfold", "sum_pool2d"] = "unfold",
-        rotary_interleaved: bool = True,
-        pre_norm: bool = False,
+        rotary_interleaved: bool = False,
+        pre_norm: bool = True,
+        norm_type: Literal["rms", "layer"] = "rms",
         **kwargs,
     ):
         super().__init__(pad_token_id=pad_token_id, **kwargs)
@@ -91,6 +109,7 @@ class TiteConfig(PretrainedConfig):
         self.pooling_implementation = pooling_implementation
         self.rotary_interleaved = rotary_interleaved
         self.pre_norm = pre_norm
+        self.norm_type = norm_type
 
         iterator = zip(
             [
@@ -157,8 +176,9 @@ class TiteModel(PreTrainedModel):
             module.weight.data.normal_(mean=0.0, std=self.config.initializer_range)
             if module.padding_idx is not None:
                 module.weight.data[module.padding_idx].zero_()
-        elif isinstance(module, torch.nn.LayerNorm):
-            module.bias.data.zero_()
+        elif isinstance(module, (torch.nn.LayerNorm, RMSNorm)):
+            if isinstance(module, torch.nn.LayerNorm):
+                module.bias.data.zero_()
             module.weight.data.fill_(1.0)
 
     def forward(
@@ -192,41 +212,6 @@ class TiteModel(PreTrainedModel):
             hidden_states = repad_hidden_states.view(batch_size, seq_len, -1)
         return TiteModelOutput(last_hidden_state=hidden_states, hidden_states=all_hidden_states)
 
-    @classmethod
-    def _load_pretrained_model(
-        cls, model, state_dict, loaded_keys, resolved_archive_file, pretrained_model_name_or_path, *args, **kwargs
-    ):
-        new_state_dict = {}
-        for key, value in state_dict.items():
-            new_key = key
-            new_key = new_key.replace("LayerNorm", "norm")
-            new_key = new_key.replace("attention.self", "attention")
-            new_key = new_key.replace("attention.output", "attention")
-            new_key = new_key.replace("intermediate.dense", "mlp.intermediate_dense")
-            new_key = new_key.replace("output.dense", "mlp.out_dense")
-            new_key = new_key.replace("output", "mlp")
-            if "Wqkv" in key:
-                q, k, v = value.chunk(3, dim=0)
-                new_state_dict[new_key.replace("Wqkv", "query")] = q
-                new_state_dict[new_key.replace("Wqkv", "key")] = k
-                new_state_dict[new_key.replace("Wqkv", "value")] = v
-            else:
-                new_state_dict[new_key] = value
-        missing_keys = set(model.state_dict().keys()) - set(new_state_dict.keys())
-        unexpected_keys = set(new_state_dict.keys()) - set(model.state_dict().keys())
-        missing_keys = missing_keys - {"encoder.norm.weight", "encoder.norm.bias"}
-        unexpected_keys = unexpected_keys - {
-            "encoder.layer.0.attention.norm.weight",
-            "encoder.layer.0.attention.norm.bias",
-        }
-        assert not missing_keys, f"Missing keys: {missing_keys}"
-        assert not unexpected_keys, f"Unexpected keys: {unexpected_keys}"
-        loaded_keys = list(new_state_dict.keys())
-        model, *out = super()._load_pretrained_model(
-            model, new_state_dict, loaded_keys, resolved_archive_file, pretrained_model_name_or_path, *args, **kwargs
-        )
-        return (model, *out)
-
 
 class TiteEmbeddings(torch.nn.Module):
     def __init__(self, config: TiteConfig):
@@ -237,10 +222,15 @@ class TiteEmbeddings(torch.nn.Module):
         self.position_embeddings = None
         if config.positional_embedding_type == "absolute":
             self.position_embeddings = torch.nn.Embedding(config.max_position_embeddings, hidden_size)
-        self.norm = torch.nn.LayerNorm(hidden_size, eps=config.layer_norm_eps)
+        if config.norm_type == "layer":
+            self.norm = torch.nn.LayerNorm(hidden_size, eps=config.layer_norm_eps)
+        elif config.norm_type == "rms":
+            self.norm = RMSNorm(hidden_size, eps=config.layer_norm_eps)
+        else:
+            raise ValueError(f"Unknown norm type: {config.norm_type}")
         self.dropout = torch.nn.Dropout(config.dropout_prob)
 
-    @torch.compile(dynamic=True)
+    # @torch.compile(dynamic=True)
     def forward(self, input_ids: torch.Tensor, position_idcs: torch.Tensor) -> torch.Tensor:
         embeddings = self.word_embeddings(input_ids)
         if self.position_embeddings is not None:
@@ -249,116 +239,6 @@ class TiteEmbeddings(torch.nn.Module):
         embeddings = self.norm(embeddings)
         embeddings = self.dropout(embeddings)
         return embeddings
-
-
-def sum_pool2d(
-    input: torch.Tensor, kernel_size: tuple[int, int], stride: tuple[int, int], ceil_mode: bool = False
-) -> torch.Tensor:
-    return torch.nn.functional.avg_pool2d(
-        input, kernel_size=kernel_size, stride=stride, ceil_mode=ceil_mode, divisor_override=1
-    )
-
-
-class MaskedAvgPool1d(torch.nn.Module):
-    def __init__(self, kernel_size: int, stride: int, implementation: Literal["unfold", "sum_pool2d"] = "unfold"):
-        super().__init__()
-        self.kernel_size = kernel_size
-        self.stride = stride
-        self.implementation = implementation
-
-    def forward(self, x: torch.Tensor, mask: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
-        if self.implementation == "unfold":
-            return self.unfold_forward(x, mask)
-        if self.implementation == "sum_pool2d":
-            return self.sum_pool2d_forward(x, mask)
-        raise ValueError(f"Unknown implementation {self.implementation}")
-
-    def sum_pool2d_forward(self, x: torch.Tensor, mask: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
-        if x.shape[-2] == 1:
-            return x, mask
-        x = torch.where(mask.unsqueeze(-1).expand((-1, -1, x.shape[-1])), x, 0)
-        kernel_size = min(self.kernel_size, mask.shape[-1])
-        normalization = sum_pool2d(
-            mask.float().unsqueeze(-1), kernel_size=(kernel_size, 1), stride=(self.stride, 1), ceil_mode=True
-        )
-        y_mask = (normalization != 0).squeeze(-1)
-        normalization[normalization == 0] = 1
-        sums = sum_pool2d(x, kernel_size=(kernel_size, 1), stride=(self.stride, 1), ceil_mode=True)
-        y = sums / normalization
-        return y, y_mask
-
-    def unfold_forward(self, x: torch.Tensor, mask: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
-        if x.shape[-2] == 1:
-            return x, mask
-        if self.kernel_size > x.shape[-2]:
-            padding = self.kernel_size - x.shape[-2]
-        else:
-            padding = (x.shape[-2] - self.kernel_size) % self.stride
-        if padding != 0:
-            x = torch.nn.functional.pad(x, (0, 0, 0, padding))
-            mask = torch.nn.functional.pad(mask, (0, padding))
-        x_blocks = x.unfold(-2, self.kernel_size, self.stride)
-        mask_blocks = mask.unfold(-1, self.kernel_size, self.stride).unsqueeze(-2)
-        x_masked = x_blocks * mask_blocks
-        normalization = mask_blocks.sum(-1)
-        normalization[normalization == 0] = 1
-        y = x_masked.sum(-1) / normalization
-        y_mask = mask_blocks.amax(-1).squeeze(-1)
-        return y, y_mask
-
-
-class PackedAvgPool1d(MaskedAvgPool1d):
-    def __init__(self, kernel_size: int, stride: int):
-        super().__init__(kernel_size, stride, implementation="unfold")
-        if kernel_size != stride:
-            raise ValueError("Kernel size and stride must be equal for PackedAvgPool1d")
-        self.kernel_size = kernel_size
-        self.stride = stride
-
-    def forward(self, x: torch.Tensor, packed_meta_data: PackedMetaData) -> Tuple[torch.Tensor, PackedMetaData]:
-        if packed_meta_data.max_seq_len == 1:
-            return x, packed_meta_data
-        new_seq_lens = ceil_div(torch.clamp(packed_meta_data.seq_lens - self.kernel_size, min=0), self.stride) + 1
-        new_max_seq_len = compute_output_shape(packed_meta_data.max_seq_len, self.kernel_size, self.stride)
-        new_cu_seq_lens = torch.zeros(
-            new_seq_lens.shape[0] + 1, dtype=packed_meta_data.cu_seq_lens.dtype, device=x.device
-        )
-        new_cu_seq_lens[1:] = torch.cumsum(new_seq_lens, dim=0, dtype=packed_meta_data.cu_seq_lens.dtype)
-
-        padding = (self.kernel_size - packed_meta_data.seq_lens - self.stride) % self.stride
-
-        if padding.sum() != 0:
-            padded_x = torch.zeros(x.shape[0] + padding.sum(), *x.shape[1:], dtype=x.dtype, device=x.device)
-            idcs = torch.ones(x.shape[0], dtype=padding.dtype, device=padding.device)
-            idcs[packed_meta_data.cu_seq_lens[1:-1] - 1] = padding[:-1] + 1
-            idcs = (idcs).cumsum(0) - 1
-            padded_x[idcs] = x
-        else:
-            padded_x = x
-
-        normalization = torch.full((new_cu_seq_lens[-1],), self.kernel_size, dtype=x.dtype, device=x.device)
-        normalization[new_cu_seq_lens[1:] - 1] = (self.kernel_size - padding).to(normalization)
-        unfold_x = padded_x.unfold(0, self.kernel_size, self.stride).sum(-1)
-        assert new_cu_seq_lens[-1] == unfold_x.shape[0]
-        y = unfold_x / normalization[:, None]
-        packed_meta_data = PackedMetaData(new_seq_lens, new_cu_seq_lens, new_max_seq_len)
-        return y.to(x.dtype), packed_meta_data
-
-
-class MaskedSelect(torch.nn.Module):
-    def __init__(self, kernel_size: int, stride: int):
-        super().__init__()
-        self.kernel_size = kernel_size
-        self.stride = stride
-        if kernel_size != stride:
-            raise ValueError("Kernel size and stride must be equal for MaskedSelect")
-
-    def forward(self, x: torch.Tensor, mask: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
-        if x.shape[-2] == 1:
-            return x, mask
-        x = x[..., :: self.stride, :]
-        mask = mask[..., :: self.stride]
-        return x, mask
 
 
 class TiteAttention(torch.nn.Module):
@@ -407,8 +287,15 @@ class TiteAttention(torch.nn.Module):
             self.rope = RotaryPositionalEmbeddings(
                 self.attention_head_size, config.max_position_embeddings, config.rotary_interleaved
             )
+            self.alibi = None
+        elif config.positional_embedding_type == "alibi":
+            x = (2**8) ** (1 / num_attention_heads)
+            self.register_buffer(
+                "alibi", torch.tensor([1 / x ** (i + 1) for i in range(num_attention_heads)]), persistent=False
+            )
         else:
             self.rope = None
+            self.alibi = None
 
     def forward(
         self, hidden_states: torch.Tensor, packed_meta_data: PackedMetaData
@@ -445,6 +332,7 @@ class TiteAttention(torch.nn.Module):
             packed_meta_data.cu_seq_lens,
             query_packed_meta_data.max_seq_len,
             packed_meta_data.max_seq_len,
+            alibi_slopes=self.alibi,
         )
 
         attn_output = rearrange(attn_output, "t h d -> t (h d)")
@@ -469,15 +357,22 @@ class TiteMLP(torch.nn.Module):
     def __init__(self, config: TiteConfig, layer_idx: int):
         super().__init__()
         hidden_size = config.hidden_sizes[layer_idx]
-        intermediate_sizes = config.intermediate_sizes[layer_idx]
+        intermediate_size = config.intermediate_sizes[layer_idx]
         self.config = config
-        self.norm = torch.nn.LayerNorm(hidden_size, eps=config.layer_norm_eps)
-        self.intermediate_dense = torch.nn.Linear(hidden_size, intermediate_sizes)
+        if config.norm_type == "layer":
+            self.norm = torch.nn.LayerNorm(hidden_size, eps=config.layer_norm_eps)
+        elif config.norm_type == "rms":
+            self.norm = RMSNorm(hidden_size, eps=config.layer_norm_eps)
+        else:
+            raise ValueError(f"Unknown norm type: {config.norm_type}")
+        self.intermediate_dense = torch.nn.Linear(
+            hidden_size, intermediate_size * 2 if config.hidden_act == "swiglu" else intermediate_size
+        )
         self.intermediate_act_fn = ACT2FN[config.hidden_act]
-        self.out_dense = torch.nn.Linear(intermediate_sizes, hidden_size)
+        self.out_dense = torch.nn.Linear(intermediate_size, hidden_size)
         self.dropout = torch.nn.Dropout(config.dropout_prob)
 
-    @torch.compile(dynamic=True)
+    # @torch.compile(dynamic=True)
     def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
         mlp_output = hidden_states
         if self.config.pre_norm:
@@ -500,7 +395,7 @@ class TiteUpscale(torch.nn.Module):
         self.upscale_layer = torch.nn.Linear(old_hidden_size, hidden_size)
         self.dropout = torch.nn.Dropout(config.dropout_prob)
 
-    @torch.compile(dynamic=True)
+    # @torch.compile(dynamic=True)
     def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
         hidden_states = self.upscale_layer(hidden_states)
         hidden_states = self.dropout(hidden_states)
@@ -540,7 +435,12 @@ class TiteEncoder(torch.nn.Module):
             [TiteLayer(config, layer_idx) for layer_idx in range(config.num_hidden_layers)]
         )
         if config.pre_norm:
-            self.norm = torch.nn.LayerNorm(config.hidden_sizes[-1], eps=config.layer_norm_eps)
+            if config.norm_type == "layer":
+                self.norm = torch.nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps)
+            elif config.norm_type == "rms":
+                self.norm = RMSNorm(config.hidden_size, eps=config.layer_norm_eps)
+            else:
+                raise ValueError(f"Unknown norm type: {config.norm_type}")
         else:
             self.norm = torch.nn.Identity()
 

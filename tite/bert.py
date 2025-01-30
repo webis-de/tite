@@ -5,7 +5,8 @@ from torch.nn import Module
 from transformers import BertConfig as HFBertConfig
 from transformers import BertModel as HFBert
 
-from .legacy import TiteConfig, TiteModel, TiteModelOutput
+# from .legacy import TiteConfig, TiteModel, TiteModelOutput
+from .model import TiteConfig, TiteModel, TiteModelOutput
 
 
 class BertConfig(TiteConfig):
@@ -21,26 +22,32 @@ class BertConfig(TiteConfig):
         initializer_range: float = 0.02,
         layer_norm_eps: float = 1e-12,
         pad_token_id: int = 0,
-        hidden_act: str = "gelu_pytorch_tanh",
-        positional_embedding_type: Literal["absolute", "ALiBi", "rotary"] = "ALiBi",
+        hidden_act: str = "swiglu",
+        positional_embedding_type: Literal["absolute", "rotary"] = "rotary",
+        rotary_interleaved: bool = False,
+        pre_norm: bool = True,
+        norm_type: Literal["rms", "layer"] = "rms",
         pooling: Literal["mean", "first"] | None = None,
         **kwargs
     ):
         super().__init__(
-            vocab_size,
-            num_hidden_layers,
-            (hidden_size,) * num_hidden_layers,
-            (num_attention_heads,) * num_hidden_layers,
-            (intermediate_size,) * num_hidden_layers,
-            (None,) * num_hidden_layers,
-            (None,) * num_hidden_layers,
-            dropout_prob,
-            max_position_embeddings,
-            initializer_range,
-            layer_norm_eps,
-            pad_token_id,
-            hidden_act,
-            positional_embedding_type,
+            vocab_size=vocab_size,
+            num_hidden_layers=num_hidden_layers,
+            hidden_sizes=(hidden_size,) * num_hidden_layers,
+            num_attention_heads=(num_attention_heads,) * num_hidden_layers,
+            intermediate_sizes=(intermediate_size,) * num_hidden_layers,
+            kernel_sizes=(None,) * num_hidden_layers,
+            strides=(None,) * num_hidden_layers,
+            dropout_prob=dropout_prob,
+            max_position_embeddings=max_position_embeddings,
+            initializer_range=initializer_range,
+            layer_norm_eps=layer_norm_eps,
+            pad_token_id=pad_token_id,
+            hidden_act=hidden_act,
+            positional_embedding_type=positional_embedding_type,
+            rotary_interleaved=rotary_interleaved,
+            pre_norm=pre_norm,
+            norm_type=norm_type,
             **kwargs
         )
         self.pooling = pooling
