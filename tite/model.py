@@ -301,6 +301,9 @@ class TiteAttention(torch.nn.Module):
     def forward(
         self, hidden_states: torch.Tensor, packed_meta_data: PackedMetaData
     ) -> Tuple[torch.Tensor, PackedMetaData]:
+        if self.alibi is not None:
+            self.alibi = self.alibi.to(torch.float32)
+
         if self.pooling is not None and self.config.pooling_location == "pre":
             hidden_states, packed_meta_data = self.pooling(hidden_states, packed_meta_data)
 
