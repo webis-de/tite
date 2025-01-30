@@ -289,6 +289,7 @@ class TiteAttention(torch.nn.Module):
             )
             self.alibi = None
         elif config.positional_embedding_type == "alibi":
+            self.rope = None
             x = (2**8) ** (1 / num_attention_heads)
             self.register_buffer(
                 "alibi", torch.tensor([1 / x ** (i + 1) for i in range(num_attention_heads)]), persistent=False

@@ -23,7 +23,7 @@ class BertConfig(TiteConfig):
         layer_norm_eps: float = 1e-12,
         pad_token_id: int = 0,
         hidden_act: str = "swiglu",
-        positional_embedding_type: Literal["absolute", "rotary"] = "rotary",
+        positional_embedding_type: Literal["absolute", "rotary", "alibi"] = "rotary",
         rotary_interleaved: bool = False,
         pre_norm: bool = True,
         norm_type: Literal["rms", "layer"] = "rms",
