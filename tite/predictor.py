@@ -1,7 +1,7 @@
 from typing import Literal
 
 import torch
-from einops import rearrange, repeat
+from einops import rearrange
 from torch import Tensor
 from torch.nn import Module
 from transformers import BertConfig as OriginalBertConfig
@@ -9,15 +9,26 @@ from transformers import BertForMaskedLM, PreTrainedModel
 from transformers.activations import ACT2FN
 
 from .bert import BertConfig, BertModel
-from .model import TiteConfig, TiteLayer, TiteMLP
+from .model import RMSNorm, TiteConfig, TiteLayer, TiteMLP
 
 
 class MLMDecoder(Module):
-    def __init__(self, vocab_size: int, hidden_size: int, hidden_act: str = "gelu_pytorch_tanh") -> None:
+    def __init__(
+        self,
+        vocab_size: int,
+        hidden_size: int,
+        hidden_act: str = "gelu_pytorch_tanh",
+        norm_type: Literal["layer", "rms"] = "rms",
+    ) -> None:
         super().__init__()
         self.dense = torch.nn.Linear(hidden_size, hidden_size)
         self.transform_act_fn = ACT2FN[hidden_act]
-        self.LayerNorm = torch.nn.LayerNorm(hidden_size, eps=1e-12)
+        if norm_type == "layer":
+            self.norm = torch.nn.LayerNorm(hidden_size, eps=1e-12)
+        elif norm_type == "rms":
+            self.norm = RMSNorm(hidden_size, eps=1e-12)
+        else:
+            raise ValueError(f"Unknown norm type: {norm_type}")
         self.decoder = torch.nn.Linear(hidden_size, vocab_size)
 
         self.bias = torch.nn.Parameter(torch.zeros(vocab_size))
@@ -28,7 +39,7 @@ class MLMDecoder(Module):
     def forward(self, hidden_states: torch.Tensor, *args, **kwargs) -> torch.Tensor:
         hidden_states = self.dense(hidden_states)
         hidden_states = self.transform_act_fn(hidden_states)
-        hidden_states = self.LayerNorm(hidden_states)
+        hidden_states = self.norm(hidden_states)
         logits = self.decoder(hidden_states)
         return logits
 
@@ -98,14 +109,8 @@ class MAESelfAttention(torch.nn.Module):
         enhanced_decoding_mask = attention_mask[:, None].logical_and(decoding_mask).logical_and(diag_mask)
         enhanced_decoding_mask = torch.nn.functional.pad(enhanced_decoding_mask, (embx.shape[1], 0, 0, 0), value=True)
 
-        attn_weight = repeat(
-            torch.where(enhanced_decoding_mask, 0, -10000.0),
-            "b s1 s2 -> b h s1 s2",
-            h=self.num_attention_heads,
-        )
-
         attn_output = torch.nn.functional.scaled_dot_product_attention(
-            query, key, value, attn_weight, self.dropout_prob if self.training else 0.0
+            query, key, value, enhanced_decoding_mask[:, None]
         )
         attn_output = rearrange(
             attn_output,
@@ -121,10 +126,16 @@ class MAESelfAttention(torch.nn.Module):
 class MAEAttention(torch.nn.Module):
     def __init__(self, config: TiteConfig, layer_idx: int, mask_prob: float = 0.0):
         super().__init__()
+        self.config = config
         self.self = MAESelfAttention(config, layer_idx, mask_prob)
         hidden_size = config.hidden_sizes[layer_idx]
         self.dense = torch.nn.Linear(hidden_size, hidden_size)
-        self.LayerNorm = torch.nn.LayerNorm(hidden_size, eps=config.layer_norm_eps)
+        if config.norm_type == "layer":
+            self.norm = torch.nn.LayerNorm(hidden_size, eps=config.layer_norm_eps)
+        elif config.norm_type == "rms":
+            self.norm = RMSNorm(hidden_size, eps=config.layer_norm_eps)
+        else:
+            raise ValueError(f"Unknown norm type: {config.norm_type}")
         self.dropout = torch.nn.Dropout(config.dropout_prob)
 
     def forward(
@@ -134,11 +145,15 @@ class MAEAttention(torch.nn.Module):
         attention_mask: torch.Tensor,
         embx: torch.Tensor,
     ) -> torch.Tensor:
+        if self.config.pre_norm:
+            query_hidden_states = self.norm(query_hidden_states)
+            key_value_hidden_states = self.norm(key_value_hidden_states)
         hidden_states = self.self(query_hidden_states, key_value_hidden_states, attention_mask, embx)
         hidden_states = self.dense(hidden_states)
         hidden_states = self.dropout(hidden_states)
         hidden_states = hidden_states + query_hidden_states
-        hidden_states = self.LayerNorm(hidden_states)
+        if not self.config.pre_norm:
+            hidden_states = self.norm(hidden_states)
         return hidden_states
 
 
@@ -184,7 +199,6 @@ class MAEEnhancedDecoder(PreTrainedModel):
             intermediate_size=intermediate_size,
             positional_embedding_type="absolute",
         )
-        config.pre_norm = False
         super().__init__(config)
         self.mask_id = mask_id
         self.query_strategy = query_strategy
@@ -193,8 +207,16 @@ class MAEEnhancedDecoder(PreTrainedModel):
         self.embeddings = MAEEnhancedEmbeddings(config)
         self.attention = MAEAttention(config, 0, mask_prob)
         self.mlp = TiteMLP(config, 0)
-        self.attention_norm = torch.nn.LayerNorm(hidden_size, eps=config.layer_norm_eps)
-        self.mlp_norm = torch.nn.LayerNorm(hidden_size, eps=config.layer_norm_eps)
+
+        if config.pre_norm:
+            if config.norm_type == "layer":
+                self.norm = torch.nn.LayerNorm(hidden_size, eps=config.layer_norm_eps)
+            elif config.norm_type == "rms":
+                self.norm = RMSNorm(hidden_size, eps=config.layer_norm_eps)
+            else:
+                raise ValueError(f"Unknown norm type: {config.norm_type}")
+        else:
+            self.norm = torch.nn.Identity()
 
         self.mlm_decoder = MLMDecoder(config.vocab_size, hidden_size, config.hidden_act)
         self.decoder = self.mlm_decoder.decoder
@@ -223,8 +245,9 @@ class MAEEnhancedDecoder(PreTrainedModel):
             module.weight.data.normal_(mean=0.0, std=self.config.initializer_range)
             if module.padding_idx is not None:
                 module.weight.data[module.padding_idx].zero_()
-        elif isinstance(module, torch.nn.LayerNorm):
-            module.bias.data.zero_()
+        elif isinstance(module, (torch.nn.LayerNorm, RMSNorm)):
+            if isinstance(module, torch.nn.LayerNorm):
+                module.bias.data.zero_()
             module.weight.data.fill_(1.0)
 
     def forward(
@@ -255,8 +278,9 @@ class MAEEnhancedDecoder(PreTrainedModel):
         else:
             raise ValueError(f"Unknown query strategy: {self.query_strategy}")
 
-        attention_output = self.attention(query_hidden_states, key_value_hidden_states, attention_mask, embx)
-        hidden_states = self.mlp(attention_output)
+        hidden_states = self.attention(query_hidden_states, key_value_hidden_states, attention_mask, embx)
+        hidden_states = self.mlp(hidden_states)
+        hidden_states = self.norm(hidden_states)
         logits = self.mlm_decoder(hidden_states)
         return logits
 
