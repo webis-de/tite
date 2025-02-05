@@ -78,12 +78,10 @@ class TiteConfig(PretrainedConfig):
         initializer_range: float = 0.02,
         layer_norm_eps: float = 1e-12,
         pad_token_id: int = 0,
-        hidden_act: str = "swiglu",
+        hidden_act: str = "pytorch_tanh_gelu",
         positional_embedding_type: Literal["absolute", "rotary", "alibi"] = "rotary",
         upscale_hidden_sizes: bool = False,
         pooling_location: Literal["pre", "attention", "post"] = "attention",
-        pooling_strategy: Literal["mean_conv", "select"] = "mean_conv",
-        pooling_implementation: Literal["unfold", "sum_pool2d"] = "unfold",
         rotary_interleaved: bool = False,
         pre_norm: bool = True,
         norm_type: Literal["rms", "layer"] = "rms",
@@ -105,8 +103,6 @@ class TiteConfig(PretrainedConfig):
         self.positional_embedding_type = positional_embedding_type
         self.upscale_hidden_sizes = upscale_hidden_sizes
         self.pooling_location = pooling_location
-        self.pooling_strategy = pooling_strategy
-        self.pooling_implementation = pooling_implementation
         self.rotary_interleaved = rotary_interleaved
         self.pre_norm = pre_norm
         self.norm_type = norm_type
@@ -230,7 +226,7 @@ class TiteEmbeddings(torch.nn.Module):
             raise ValueError(f"Unknown norm type: {config.norm_type}")
         self.dropout = torch.nn.Dropout(config.dropout_prob)
 
-    # @torch.compile(dynamic=True)
+    @torch.compile(dynamic=True)
     def forward(self, input_ids: torch.Tensor, position_idcs: torch.Tensor) -> torch.Tensor:
         embeddings = self.word_embeddings(input_ids)
         if self.position_embeddings is not None:
@@ -376,7 +372,7 @@ class TiteMLP(torch.nn.Module):
         self.out_dense = torch.nn.Linear(intermediate_size, hidden_size)
         self.dropout = torch.nn.Dropout(config.dropout_prob)
 
-    # @torch.compile(dynamic=True)
+    @torch.compile(dynamic=True)
     def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
         mlp_output = hidden_states
         if self.config.pre_norm:
@@ -399,7 +395,7 @@ class TiteUpscale(torch.nn.Module):
         self.upscale_layer = torch.nn.Linear(old_hidden_size, hidden_size)
         self.dropout = torch.nn.Dropout(config.dropout_prob)
 
-    # @torch.compile(dynamic=True)
+    @torch.compile(dynamic=True)
     def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
         hidden_states = self.upscale_layer(hidden_states)
         hidden_states = self.dropout(hidden_states)

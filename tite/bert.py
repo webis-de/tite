@@ -22,7 +22,7 @@ class BertConfig(TiteConfig):
         initializer_range: float = 0.02,
         layer_norm_eps: float = 1e-12,
         pad_token_id: int = 0,
-        hidden_act: str = "swiglu",
+        hidden_act: str = "gelu_pytorch_tanh",
         positional_embedding_type: Literal["absolute", "rotary", "alibi"] = "rotary",
         rotary_interleaved: bool = False,
         pre_norm: bool = True,
