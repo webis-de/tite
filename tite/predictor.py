@@ -166,7 +166,7 @@ class MAEEnhancedEmbeddings(torch.nn.Module):
         self.position_embeddings = None
         if config.positional_embedding_type == "absolute":
             self.position_embeddings = torch.nn.Embedding(config.max_position_embeddings, hidden_size)
-        self.LayerNorm = torch.nn.LayerNorm(hidden_size, eps=config.layer_norm_eps)
+        self.norm = torch.nn.LayerNorm(hidden_size, eps=config.layer_norm_eps)
         self.dropout = torch.nn.Dropout(config.dropout_prob)
 
     def forward(self, input_ids: torch.Tensor) -> torch.Tensor:
@@ -175,7 +175,7 @@ class MAEEnhancedEmbeddings(torch.nn.Module):
             embeddings = embeddings + self.position_embeddings(
                 torch.arange(input_ids.shape[1], device=input_ids.device)
             )
-        embeddings = self.LayerNorm(embeddings)
+        embeddings = self.norm(embeddings)
         embeddings = self.dropout(embeddings)
         return embeddings
 
