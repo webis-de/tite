@@ -62,20 +62,19 @@ def forward_pooling_kernel(
 ):
     pid_m = tl.program_id(axis=0)
     pid_batch = tl.program_id(axis=1)
-    pid_window = tl.program_id(axis=2)
+    pid_k = tl.program_id(axis=2)
 
     X_start_idx = tl.load(X_CU_SEQ_LENS + pid_batch)
     Y_start_idx = tl.load(Y_CU_SEQ_LENS + pid_batch)
     x_seq_len = tl.load(X_CU_SEQ_LENS + pid_batch + 1) - X_start_idx
     y_seq_len = tl.load(Y_CU_SEQ_LENS + pid_batch + 1) - Y_start_idx
-    X = X + X_start_idx * stride_x_seq_len + pid_window * stride_x_dim * stride
-    Y = Y + Y_start_idx * stride_y_seq_len + pid_window * stride_y_dim
+    X = X + X_start_idx * stride_x_seq_len
+    Y = Y + Y_start_idx * stride_y_seq_len
 
     if pid_m * BLOCK_M >= y_seq_len:
         return
     rm = pid_m * BLOCK_M + tl.arange(0, BLOCK_M)
-    rk = tl.arange(0, BLOCK_K)
-
+    rk = pid_k * BLOCK_K + tl.arange(0, BLOCK_K)
     acc = tl.zeros((BLOCK_M, BLOCK_K), dtype=tl.float32)
 
     for i in range(kernel_size):
@@ -104,7 +103,7 @@ def apply_forward_pooling(
 
     BLOCK_M = 8 if dim <= 128 else 4
     BLOCK_K = 32 if dim <= 32 else (64 if dim <= 64 else (128 if dim <= 128 else 256))
-    grid = lambda META: (triton.cdiv(y_max_seq_len, META["BLOCK_M"]), batch)  # noqa
+    grid = lambda META: (triton.cdiv(y_max_seq_len, META["BLOCK_M"]), batch, triton.cdiv(dim, META["BLOCK_K"]))  # noqa
 
     # Need this, otherwise Triton tries to launch from cuda:0 and we get
     # ValueError: Pointer argument (at 0) cannot be accessed from Triton (cpu tensor?)
@@ -159,14 +158,14 @@ def backward_pooling_kernel(
     # https://medium.com/@mayank.utexas/backpropagation-for-convolution-with-strides-8137e4fc2710
     pid_m = tl.program_id(axis=0)
     pid_batch = tl.program_id(axis=1)
-    pid_window = tl.program_id(axis=2)
+    pid_k = tl.program_id(axis=2)
 
     X_start_idx = tl.load(X_CU_SEQ_LENS + pid_batch)
     Y_start_idx = tl.load(Y_CU_SEQ_LENS + pid_batch)
     x_seq_len = tl.load(X_CU_SEQ_LENS + pid_batch + 1) - X_start_idx
     y_seq_len = tl.load(Y_CU_SEQ_LENS + pid_batch + 1) - Y_start_idx
-    X = X + X_start_idx * stride_x_seq_len + pid_window * stride_x_dim
-    Y = Y + Y_start_idx * stride_y_seq_len + pid_window * stride_y_dim
+    X = X + X_start_idx * stride_x_seq_len
+    Y = Y + Y_start_idx * stride_y_seq_len
 
     padding = kernel_size - 1
     dilation = stride - 1
@@ -174,8 +173,7 @@ def backward_pooling_kernel(
     if pid_m * BLOCK_M >= y_seq_len:
         return
     rm = pid_m * BLOCK_M + tl.arange(0, BLOCK_M)
-    rk = tl.arange(0, BLOCK_K)
-
+    rk = pid_k * BLOCK_K + tl.arange(0, BLOCK_K)
     acc = tl.zeros((BLOCK_M, BLOCK_K), dtype=tl.float32)
 
     for i in range(kernel_size):
@@ -207,7 +205,7 @@ def apply_backward_pooling(
 
     BLOCK_M = 8 if dim <= 128 else 4
     BLOCK_K = 32 if dim <= 32 else (64 if dim <= 64 else (128 if dim <= 128 else 256))
-    grid = lambda META: (triton.cdiv(y_max_seq_len, META["BLOCK_M"]), batch)  # noqa
+    grid = lambda META: (triton.cdiv(y_max_seq_len, META["BLOCK_M"]), batch, triton.cdiv(dim, META["BLOCK_K"]))  # noqa
 
     # Need this, otherwise Triton tries to launch from cuda:0 and we get
     # ValueError: Pointer argument (at 0) cannot be accessed from Triton (cpu tensor?)
