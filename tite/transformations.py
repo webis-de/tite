@@ -204,17 +204,6 @@ class CharacterTransformation(StringTransformation):
         return bytes(bytearray(encoded.tolist())).decode("utf-8")
 
 
-class SentenceTransformation(StringTransformation):
-
-    def __init__(self, transformation_prob: float = 1.0) -> None:
-        super().__init__(transformation_prob)
-        self.tokenizer: PunktSentenceTokenizer = nltk.load("tokenizers/punkt/english.pickle")
-        assert isinstance(self.tokenizer, PunktSentenceTokenizer)
-
-    def split(self, text: str) -> list[str]:
-        return self.tokenizer.tokenize(text)
-
-
 class CharacterDelete(CharacterTransformation):
 
     def __init__(self, delete_prob: float = 0.3, transformation_prob: float = 1.0):
@@ -280,6 +269,17 @@ class CharacterSwapNeighboring(CharacterTransformation):
             i = random.randint(0, len(text) - 2)
             transformed_text[i], transformed_text[i + 1] = transformed_text[i + 1], transformed_text[i]
         return ["".join(transformed_text)]
+
+
+class SentenceTransformation(StringTransformation):
+
+    def __init__(self, transformation_prob: float = 1.0) -> None:
+        super().__init__(transformation_prob)
+        self.tokenizer: PunktSentenceTokenizer = nltk.load("tokenizers/punkt/english.pickle")
+        assert isinstance(self.tokenizer, PunktSentenceTokenizer)
+
+    def split(self, text: str) -> list[str]:
+        return self.tokenizer.tokenize(text)
 
 
 class SentenceDelete(SentenceTransformation):
@@ -373,7 +373,7 @@ class SentenceBlock(SentenceTransformation):
         return merged_sentences
 
     def _group_into_blocks(self, sentences: list[str]) -> list[str]:
-        sentences = self.merge_short_sentences(sentences)
+        sentences = self._merge_short_sentences(sentences)
         if len(sentences) < 2:
             sentences = [sentences[0][: len(sentences[0]) // 2], sentences[0][len(sentences[0]) // 2 :]]
         num_sentences = len(sentences)
