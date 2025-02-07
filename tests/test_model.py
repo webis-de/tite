@@ -1,10 +1,8 @@
-from copy import deepcopy
-
 import pytest
 import torch
 from transformers import BertConfig, BertModel
 
-from tite.model import MaskedAvgPool1d, TiteConfig, TiteModel, compute_output_shapes
+from tite.model import TiteConfig, TiteModel
 
 
 @pytest.fixture
@@ -23,63 +21,6 @@ def config() -> TiteConfig:
     return config
 
 
-@pytest.mark.parametrize("kernel_size, stride, seq_length", [(3, 1, 8), (3, 2, 8), (3, 3, 8)])
-def test_masked_avg_pool1d_backward(kernel_size: int, stride: int, seq_length: int):
-    layer_unfold = MaskedAvgPool1d(kernel_size, stride, "unfold")
-    layer_sum_pool2d = MaskedAvgPool1d(kernel_size, stride, "sum_pool2d")
-
-    x_unfold = torch.randn(2, seq_length, 4, requires_grad=True)
-    x_sum_pool2d = x_unfold.detach().clone()
-    x_sum_pool2d.requires_grad = True
-    mask = torch.ones(2, seq_length, dtype=torch.bool)
-    mask[0, -seq_length // 2 :] = False
-
-    output_unfold, _ = layer_unfold(x_unfold, mask)
-    output_sum_pool2d, _ = layer_sum_pool2d(x_sum_pool2d, mask)
-    output_unfold.sum().backward()
-    output_sum_pool2d.sum().backward()
-    assert torch.allclose(x_unfold.grad, x_sum_pool2d.grad, atol=1e-6)
-
-
-@pytest.mark.parametrize("kernel_size, stride, seq_length", [(3, 1, 8), (3, 2, 8), (3, 3, 8)])
-def test_masked_avg_pool1d_dimensions(kernel_size: int, stride: int, seq_length: int):
-    layer = MaskedAvgPool1d(kernel_size, stride)
-
-    x = torch.randn(2, seq_length, 4)
-    mask = torch.ones(2, seq_length, dtype=torch.bool)
-    mask[0, -seq_length // 2 :] = False
-
-    output_shapes = compute_output_shapes(seq_length, (kernel_size,), (stride,))
-
-    output, output_mask = layer(x, mask)
-    assert output.shape[1] == output_shapes[-1]
-    assert ((output != 0).all(-1) == output_mask).all()
-    assert output_mask.shape[1] == output_shapes[-1]
-
-
-def test_masked_avg_pool1d_2_5_4_3_3():
-    layer = MaskedAvgPool1d(3, 3)
-    x = torch.arange(2 * 5 * 4, dtype=torch.float32).reshape(2, 5, 4)
-    mask = torch.tensor([[True, True, True, True, True], [True, True, True, False, False]])
-    out, out_mask = layer(x, mask)
-    assert torch.allclose(
-        out,
-        torch.tensor(
-            [[[4.0, 5.0, 6.0, 7.0], [14.0, 15.0, 16.0, 17.0]], [[24.0, 25.0, 26.0, 27.0], [0.0, 0.0, 0.0, 0.0]]]
-        ),
-    )
-    assert torch.equal(out_mask, torch.tensor([[True, True], [True, False]]))
-
-
-def test_masked_avg_pool1d_2_5_4_8_1():
-    layer = MaskedAvgPool1d(8, 1)
-    x = torch.arange(2 * 5 * 4, dtype=torch.float32).reshape(2, 5, 4)
-    mask = torch.tensor([[True, True, True, True, True], [True, True, True, False, False]])
-    out, out_mask = layer(x, mask)
-    assert torch.allclose(out, torch.tensor([[[8.0, 9.0, 10.0, 11.0]], [[24.0, 25.0, 26.0, 27.0]]]))
-    assert torch.equal(out_mask, torch.tensor([[True], [True]]))
-
-
 @pytest.mark.parametrize("positional_embedding_type", ["absolute", "ALiBi"])
 def test_tite_model(config: TiteConfig, positional_embedding_type: str):
     pytest.MonkeyPatch().setattr(config, "positional_embedding_type", positional_embedding_type)
@@ -92,51 +33,46 @@ def test_tite_model(config: TiteConfig, positional_embedding_type: str):
     assert output.requires_grad
 
 
-def test_same_as_bert(config: TiteConfig):
-    config = deepcopy(config)
-    config.kernel_size = (None, None)
-    config.stride = (None, None)
-    model = TiteModel(config).eval()
+@torch.no_grad()
+def test_same_as_bert():
+    hidden_size = 16
+    num_hidden_layers = 2
+    num_attention_heads = 2
+    intermediate_size = 64
+    bert = BertModel(
+        BertConfig(
+            hidden_size=hidden_size,
+            num_hidden_layers=num_hidden_layers,
+            num_attention_heads=num_attention_heads,
+            intermediate_size=intermediate_size,
+        )
+    ).eval()
+    bert.embeddings.token_type_embeddings.weight.zero_()
+    tite = TiteModel(
+        TiteConfig(
+            hidden_sizes=(hidden_size,) * num_hidden_layers,
+            num_hidden_layers=num_hidden_layers,
+            num_attention_heads=(num_attention_heads,) * num_hidden_layers,
+            intermediate_sizes=(intermediate_size,) * num_hidden_layers,
+            kernel_sizes=(None,) * num_hidden_layers,
+            strides=(None,) * num_hidden_layers,
+            positional_embedding_type="absolute",
+            pre_norm=False,
+            norm_type="layer",
+            attn_implementation="sdpa",
+        )
+    ).eval()
+    config = tite.config
 
-    bert_kwargs = config.to_dict()
-    bert_kwargs["hidden_size"] = bert_kwargs["hidden_size"][0]
-    bert_kwargs["num_attention_heads"] = bert_kwargs["num_attention_heads"][0]
-    bert_kwargs["intermediate_size"] = bert_kwargs["intermediate_size"][0]
-    bert_kwargs.pop("kernel_size")
-    bert_kwargs.pop("stride")
-    bert_config = BertConfig(**bert_kwargs)
-    bert_model = BertModel(bert_config).eval()
+    tite.load_state_dict(tite._update_state_dict(bert.state_dict()))
 
-    bert_model.embeddings.token_type_embeddings.weight.data.zero_()
-
-    missing_keys = []
-    qkv_weight = []
-    qkv_bias = []
-    for key, value in bert_model.state_dict().items():
-        if key in model.state_dict():
-            model.state_dict()[key].copy_(value)
-        else:
-            if "query" in key or "key" in key or "value" in key:
-                if "weight" in key:
-                    qkv_weight.append(value)
-                else:
-                    qkv_bias.append(value)
-            else:
-                missing_keys.append(key)
-            if "value" in key:
-                if "weight" in key:
-                    model.state_dict()[key.replace("value", "Wqkv")].copy_(torch.cat(qkv_weight, 0))
-                    qkv_weight = []
-                if "bias" in key:
-                    model.state_dict()[key.replace("value", "Wqkv")].copy_(torch.cat(qkv_bias, 0))
-                    qkv_bias = []
     input_ids = torch.randint(0, config.vocab_size, (2, config.max_position_embeddings))
 
     attention_mask = torch.ones_like(input_ids, dtype=torch.bool)
     attention_mask[1, -config.max_position_embeddings // 2 :] = False
 
-    with torch.no_grad():
-        tite_output = model(input_ids, attention_mask)
-        bert_output = bert_model(input_ids, attention_mask)
+    bert_output = bert(input_ids, attention_mask, output_hidden_states=True)
+    tite_output = tite(input_ids, attention_mask, output_hidden_states=True)
 
-    assert torch.allclose(tite_output[attention_mask], bert_output.last_hidden_state[attention_mask], atol=1e-6)
+    for i in range(config.num_hidden_layers):
+        assert torch.allclose(tite_output.hidden_states[i], bert_output.hidden_states[i][attention_mask], atol=1e-6)
