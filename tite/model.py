@@ -3,8 +3,13 @@ from typing import List, Literal, Tuple
 
 import torch
 from einops import rearrange
-from flash_attn import flash_attn_varlen_func
-from flash_attn.ops.activations import SwiGLUFunction
+
+try:
+    from flash_attn import flash_attn_varlen_func
+    from flash_attn.ops.activations import SwiGLUFunction
+except ImportError:
+    flash_attn_varlen_func = None
+    SwiGLUFunction = None
 from transformers import PretrainedConfig, PreTrainedModel
 from transformers.activations import ACT2FN
 from transformers.modeling_outputs import ModelOutput
@@ -39,6 +44,8 @@ class SwiGLU(torch.nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         x, y = x.chunk(2, dim=-1)
+        if SwiGLUFunction is None:
+            return torch.nn.functional.silu(x) * y
         return SwiGLUFunction.apply(x, y)
 
 
@@ -57,7 +64,8 @@ def compute_output_shapes(
 @dataclass
 class TiteModelOutput(ModelOutput):
     last_hidden_state: torch.Tensor
-    hidden_states: Tuple[torch.Tensor, ...] | None = None
+    hidden_states: List[torch.Tensor] | None = None
+    attentions: List[torch.Tensor] | None = None
 
 
 class TiteConfig(PretrainedConfig):
@@ -83,7 +91,7 @@ class TiteConfig(PretrainedConfig):
         upscale_hidden_sizes: bool = False,
         pooling_location: Literal["pre", "attention", "post"] = "attention",
         rotary_interleaved: bool = False,
-        pre_norm: bool = True,
+        norm_location: Literal["pre", "post"] = "pre",
         norm_type: Literal["rms", "layer"] = "rms",
         attn_implementation: Literal["flash_attention_2", "sdpa", "eager"] = "flash_attention_2",
         **kwargs,
@@ -105,7 +113,7 @@ class TiteConfig(PretrainedConfig):
         self.upscale_hidden_sizes = upscale_hidden_sizes
         self.pooling_location = pooling_location
         self.rotary_interleaved = rotary_interleaved
-        self.pre_norm = pre_norm
+        self.norm_location = norm_location
         self.norm_type = norm_type
 
         iterator = zip(
@@ -189,6 +197,7 @@ class TiteModel(PreTrainedModel):
         input_ids: torch.Tensor,
         attention_mask: torch.Tensor | None = None,
         output_hidden_states: bool = False,
+        output_attentions: bool = False,
         **kwargs,
     ) -> TiteModelOutput:
         if attention_mask is None:
@@ -209,7 +218,9 @@ class TiteModel(PreTrainedModel):
             max_seq_len,
             idcs if self.config._attn_implementation != "flash_attention_2" else None,
         )
-        hidden_states, all_hidden_states = self.encoder(hidden_states, packed_meta_data, output_hidden_states)
+        hidden_states, all_hidden_states, all_attentions = self.encoder(
+            hidden_states, packed_meta_data, output_hidden_states, output_attentions
+        )
         if hidden_states.shape[0] == seq_lens.shape[0]:
             hidden_states = hidden_states.unsqueeze(1)
         else:
@@ -218,7 +229,9 @@ class TiteModel(PreTrainedModel):
             )
             repad_hidden_states[idcs] = hidden_states
             hidden_states = repad_hidden_states.view(batch_size, seq_len, -1)
-        return TiteModelOutput(last_hidden_state=hidden_states, hidden_states=all_hidden_states)
+        return TiteModelOutput(
+            last_hidden_state=hidden_states, hidden_states=all_hidden_states, attentions=all_attentions
+        )
 
     @staticmethod
     def _update_state_dict(state_dict):
@@ -314,8 +327,9 @@ class TiteAttention(torch.nn.Module):
             from_hidden_size = to_hidden_size
         else:
             from_hidden_size = config.hidden_sizes[max(0, layer_idx - 1)]
+        self.hidden_size_diff = to_hidden_size - from_hidden_size
 
-        if config.pre_norm:
+        if config.norm_location == "pre":
             if layer_idx == 0:
                 self.norm = torch.nn.Identity()
             else:
@@ -355,6 +369,10 @@ class TiteAttention(torch.nn.Module):
             self.rope = None
             self.alibi = None
 
+        if config._attn_implementation == "flash_attention_2" and flash_attn_varlen_func is None:
+            raise ValueError(
+                "Flash Attention 2 is not installed. Please install or use a different attention implementation"
+            )
         self.attention_function = getattr(self, self.ATTENTION_FUNCTIONS[config._attn_implementation])
 
     def flash_attn_forward(
@@ -364,7 +382,8 @@ class TiteAttention(torch.nn.Module):
         value: torch.Tensor,
         query_packed_meta_data: PackedMetaData,
         packed_meta_data: PackedMetaData,
-    ) -> torch.Tensor:
+        output_attention: bool = False,
+    ) -> Tuple[torch.Tensor, None]:
         attn_output = flash_attn_varlen_func(
             query,
             key,
@@ -375,7 +394,7 @@ class TiteAttention(torch.nn.Module):
             packed_meta_data.max_seq_len,
             alibi_slopes=self.alibi,
         )
-        return attn_output
+        return attn_output, None
 
     def _unpad(self, x: torch.Tensor, packed_meta_data: PackedMetaData) -> torch.Tensor:
         pad_x = torch.zeros(
@@ -395,7 +414,8 @@ class TiteAttention(torch.nn.Module):
         value: torch.Tensor,
         query_packed_meta_data: PackedMetaData,
         packed_meta_data: PackedMetaData,
-    ) -> torch.Tensor:
+        output_attention: bool = False,
+    ) -> Tuple[torch.Tensor, None]:
         if self.alibi is not None:
             raise ValueError("ALiBi is not supported with SDPA")
         pad_query = self._unpad(query, query_packed_meta_data).transpose(1, 2)
@@ -411,7 +431,7 @@ class TiteAttention(torch.nn.Module):
         )
         attn_output = attn_output.transpose(1, 2)
         attn_output = self._repad(attn_output, packed_meta_data)
-        return attn_output
+        return attn_output, None
 
     def eager_forward(
         self,
@@ -420,7 +440,8 @@ class TiteAttention(torch.nn.Module):
         value: torch.Tensor,
         query_packed_meta_data: PackedMetaData,
         packed_meta_data: PackedMetaData,
-    ) -> torch.Tensor:
+        output_attention: bool = False,
+    ) -> Tuple[torch.Tensor, torch.Tensor | None]:
         pad_query = self._unpad(query, query_packed_meta_data).transpose(1, 2)
         pad_key = self._unpad(key, packed_meta_data).transpose(1, 2)
         pad_value = self._unpad(value, packed_meta_data).transpose(1, 2)
@@ -432,28 +453,31 @@ class TiteAttention(torch.nn.Module):
 
         attn_values = pad_query @ pad_key.transpose(-2, -1)
         attn_values = attn_values / (self.attention_head_size**0.5)
-        attn_values = attn_values.masked_fill(~mask[:, None], -10_000)
-        attn_values = torch.nn.functional.softmax(attn_values, dim=-1)
-        attn_output = attn_values @ pad_value
+        attn_values = attn_values.masked_fill(~mask[:, None], torch.finfo(attn_values.dtype).min)
+        attn_probs = torch.nn.functional.softmax(attn_values, dim=-1)
+        attn_output = attn_probs @ pad_value
         attn_output = attn_output.transpose(1, 2)
         attn_output = self._repad(attn_output, packed_meta_data)
-        return attn_output
+        if output_attention:
+            return attn_output, attn_probs
+        return attn_output, None
 
     def forward(
-        self, hidden_states: torch.Tensor, packed_meta_data: PackedMetaData
-    ) -> Tuple[torch.Tensor, PackedMetaData]:
+        self, hidden_states: torch.Tensor, packed_meta_data: PackedMetaData, output_attention: bool = False
+    ) -> Tuple[torch.Tensor, torch.Tensor | None, PackedMetaData]:
         if self.alibi is not None:
             self.alibi = self.alibi.to(torch.float32)
 
         if self.pooling is not None and self.config.pooling_location == "pre":
             hidden_states, packed_meta_data = self.pooling(hidden_states, packed_meta_data)
+        input_hidden_states = hidden_states
 
-        if self.config.pre_norm:
+        if self.config.norm_location == "pre":
             hidden_states = self.norm(hidden_states)
 
         value = self.value(hidden_states)
         if packed_meta_data.max_seq_len == 1:
-            return value, packed_meta_data
+            return value, None, packed_meta_data
 
         query = self.query(hidden_states)
         key = self.key(hidden_states)
@@ -470,24 +494,30 @@ class TiteAttention(torch.nn.Module):
             query = self.rope(query, query_packed_meta_data.cu_seq_lens, query_packed_meta_data.max_seq_len)
             key = self.rope(key, packed_meta_data.cu_seq_lens, packed_meta_data.max_seq_len)
 
-        attn_output = self.attention_function(query, key, value, query_packed_meta_data, packed_meta_data)
+        hidden_states, attn_probs = self.attention_function(
+            query, key, value, query_packed_meta_data, packed_meta_data, output_attention
+        )
 
-        attn_output = rearrange(attn_output, "t h d -> t (h d)")
+        hidden_states = rearrange(hidden_states, "t h d -> t (h d)")
 
-        attn_output = self.dense(attn_output)
-        attn_output = self.dropout(attn_output)
+        hidden_states = self.dense(hidden_states)
+        hidden_states = self.dropout(hidden_states)
 
         if self.pooling is not None and self.config.pooling_location == "attention":
-            hidden_states, packed_meta_data = self.pooling(hidden_states, packed_meta_data)
+            input_hidden_states, packed_meta_data = self.pooling(input_hidden_states, packed_meta_data)
 
-        attn_output[..., : hidden_states.shape[-1]] = attn_output[..., : hidden_states.shape[-1]] + hidden_states
+        if self.hidden_size_diff > 0:
+            input_hidden_states = torch.nn.functional.pad(input_hidden_states, (0, self.hidden_size_diff))
+        elif self.hidden_size_diff < 0:
+            hidden_states = torch.nn.functional.pad(hidden_states, (0, -self.hidden_size_diff))
+        hidden_states = hidden_states + input_hidden_states
 
         if self.pooling is not None and self.config.pooling_location == "post":
-            attn_output, packed_meta_data = self.pooling(attn_output, packed_meta_data)
+            hidden_states, packed_meta_data = self.pooling(hidden_states, packed_meta_data)
 
-        if not self.config.pre_norm:
-            hidden_states = self.norm(attn_output)
-        return attn_output, packed_meta_data
+        if self.config.norm_location == "post":
+            hidden_states = self.norm(hidden_states)
+        return hidden_states, attn_probs, packed_meta_data
 
 
 class TiteMLP(torch.nn.Module):
@@ -511,17 +541,17 @@ class TiteMLP(torch.nn.Module):
 
     @torch.compile(dynamic=True)
     def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
-        mlp_output = hidden_states
-        if self.config.pre_norm:
-            mlp_output = self.norm(mlp_output)
-        mlp_output = self.intermediate_dense(mlp_output)
-        mlp_output = self.intermediate_act_fn(mlp_output)
-        mlp_output = self.out_dense(mlp_output)
-        mlp_output = self.dropout(mlp_output)
-        mlp_output = mlp_output + hidden_states
-        if not self.config.pre_norm:
-            mlp_output = self.norm(mlp_output)
-        return mlp_output
+        input_hidden_states = hidden_states
+        if self.config.norm_location == "pre":
+            hidden_states = self.norm(hidden_states)
+        hidden_states = self.intermediate_dense(hidden_states)
+        hidden_states = self.intermediate_act_fn(hidden_states)
+        hidden_states = self.out_dense(hidden_states)
+        hidden_states = self.dropout(hidden_states)
+        hidden_states = hidden_states + input_hidden_states
+        if self.config.norm_location == "post":
+            hidden_states = self.norm(hidden_states)
+        return hidden_states
 
 
 class TiteUpscale(torch.nn.Module):
@@ -555,13 +585,13 @@ class TiteLayer(torch.nn.Module):
             self.upscale_layer = torch.nn.Identity()
 
     def forward(
-        self, hidden_states: torch.Tensor, packed_meta_data: PackedMetaData
-    ) -> Tuple[torch.Tensor, PackedMetaData]:
+        self, hidden_states: torch.Tensor, packed_meta_data: PackedMetaData, output_attention: bool = False
+    ) -> Tuple[torch.Tensor, torch.Tensor | None, PackedMetaData]:
         if self.upscale_layer is not None:
             hidden_states = self.upscale_layer(hidden_states)
-        hidden_states, packed_meta_data = self.attention(hidden_states, packed_meta_data)
+        hidden_states, attention, packed_meta_data = self.attention(hidden_states, packed_meta_data, output_attention)
         layer_output = self.mlp(hidden_states)
-        return layer_output, packed_meta_data
+        return layer_output, attention, packed_meta_data
 
 
 class TiteEncoder(torch.nn.Module):
@@ -571,7 +601,8 @@ class TiteEncoder(torch.nn.Module):
         self.layer = torch.nn.ModuleList(
             [TiteLayer(config, layer_idx) for layer_idx in range(config.num_hidden_layers)]
         )
-        if config.pre_norm:
+        self.norm: torch.nn.Module
+        if config.norm_location == "pre":
             if config.norm_type == "layer":
                 self.norm = torch.nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps)
             elif config.norm_type == "rms":
@@ -582,12 +613,21 @@ class TiteEncoder(torch.nn.Module):
             self.norm = torch.nn.Identity()
 
     def forward(
-        self, hidden_states: torch.Tensor, packed_meta_data: PackedMetaData, output_hidden_states: bool = False
-    ) -> Tuple[torch.Tensor, Tuple[torch.Tensor, ...] | None]:
+        self,
+        hidden_states: torch.Tensor,
+        packed_meta_data: PackedMetaData,
+        output_hidden_states: bool = False,
+        output_attentions: bool = False,
+    ) -> Tuple[torch.Tensor, List[torch.Tensor] | None, List[torch.Tensor] | None]:
         all_hidden_states = [hidden_states] if output_hidden_states else None
+        all_attentions: List[torch.Tensor] | None = [] if output_attentions else None
         for layer_idx, layer_module in enumerate(self.layer):
-            hidden_states, packed_meta_data = layer_module(hidden_states, packed_meta_data)
+            hidden_states, attention, packed_meta_data = layer_module(
+                hidden_states, packed_meta_data, output_attentions
+            )
             if all_hidden_states is not None:
                 all_hidden_states.append(hidden_states)
+            if all_attentions is not None:
+                all_attentions.append(attention)
         hidden_states = self.norm(hidden_states)
-        return (hidden_states, tuple(all_hidden_states) if all_hidden_states is not None else None)
+        return hidden_states, all_hidden_states, all_attentions

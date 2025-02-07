@@ -7,13 +7,19 @@
 from typing import Optional
 
 import torch
-from flash_attn.layers.rotary import apply_rotary_emb
+
+try:
+    from flash_attn.layers.rotary import apply_rotary_emb
+except ImportError:
+    apply_rotary_emb = None
 from torch import Tensor, nn
+
+from .pool import PackedMetaData
 
 # https://pytorch.org/torchtune/0.2/_modules/torchtune/modules/position_embeddings.html#RotaryPositionalEmbeddings
 
 
-class LegacyRotaryPositionalEmbeddings(nn.Module):
+class EagerRotaryPositionalEmbeddings(nn.Module):
     """
     This class implements Rotary Positional Embeddings (RoPE)
     proposed in https://arxiv.org/abs/2104.09864.
@@ -70,12 +76,12 @@ class LegacyRotaryPositionalEmbeddings(nn.Module):
         cache = torch.stack([torch.cos(idx_theta), torch.sin(idx_theta)], dim=-1).to(dtype)
         self.register_buffer("cache", cache, persistent=False)
 
-    def forward(self, x: Tensor) -> Tensor:
-        # input tensor has shape [b, n_h, s, h_d]
+    def forward(self, x: Tensor, packed_meta_data: PackedMetaData) -> Tensor:
+        # input tensor has shape [b*n_h, s, h_d]
         seq_len = x.shape[2]
 
         # extract the values based on whether input_pos is set or not
-        rope_cache = self.cache[:seq_len]
+        rope_cache = self.cache[packed_meta_data.idcs]
 
         # reshape input; the last dimension is used for computing the output.
         # Cast to float to match the reference implementation
@@ -96,7 +102,7 @@ class LegacyRotaryPositionalEmbeddings(nn.Module):
         return x_out
 
 
-class RotaryPositionalEmbeddings(torch.nn.Module):
+class TritonRotaryPositionalEmbeddings(torch.nn.Module):
 
     def __init__(
         self,
@@ -158,18 +164,24 @@ class RotaryPositionalEmbeddings(torch.nn.Module):
             self._cos_cached = torch.cos(freqs).to(dtype)
             self._sin_cached = torch.sin(freqs).to(dtype)
 
-    def forward(self, x: torch.Tensor, cu_seq_lens: torch.Tensor, max_seq_len: int) -> torch.Tensor:
-        self._update_cos_sin_cache(max_seq_len, device=x.device, dtype=x.dtype)
+    def forward(self, x: torch.Tensor, packed_meta_data: PackedMetaData) -> torch.Tensor:
+        self._update_cos_sin_cache(packed_meta_data.max_seq_len, device=x.device, dtype=x.dtype)
         x = apply_rotary_emb(
             x,
             self._cos_cached,
             self._sin_cached,
             inplace=True,
             interleaved=self.interleaved,
-            cu_seqlens=cu_seq_lens,
-            max_seqlen=max_seq_len,
+            cu_seqlens=packed_meta_data.cu_seq_lens,
+            max_seqlen=packed_meta_data.max_seq_len,
         )
         return x
+
+
+if apply_rotary_emb is not None:
+    RotaryPositionalEmbeddings = TritonRotaryPositionalEmbeddings
+else:
+    RotaryPositionalEmbeddings = EagerRotaryPositionalEmbeddings
 
 
 def main(args=None):
@@ -178,7 +190,7 @@ def main(args=None):
     num_attention_heads = 12
     head_dim = 64
     hidden_states = torch.rand(batch_size, seq_len, num_attention_heads, head_dim, device="cuda", dtype=torch.float16)
-    legacy_rope = LegacyRotaryPositionalEmbeddings(head_dim, 512, dtype=hidden_states.dtype).to("cuda")
+    legacy_rope = EagerRotaryPositionalEmbeddings(head_dim, 512, dtype=hidden_states.dtype).to("cuda")
     rope = RotaryPositionalEmbeddings(head_dim).to("cuda")
 
     legacy_rope_hidden_states = legacy_rope(hidden_states.transpose(1, 2)).transpose(1, 2)

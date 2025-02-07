@@ -33,10 +33,11 @@ def test_tite_model(config: TiteConfig, positional_embedding_type: str):
     assert output.requires_grad
 
 
+@pytest.mark.parametrize("attn_implementation", ["sdpa", "eager"], ids=["sdpa", "eager"])
 @torch.no_grad()
-def test_same_as_bert():
+def test_same_as_bert(attn_implementation: str):
     hidden_size = 16
-    num_hidden_layers = 2
+    num_hidden_layers = 12
     num_attention_heads = 2
     intermediate_size = 64
     bert = BertModel(
@@ -45,6 +46,7 @@ def test_same_as_bert():
             num_hidden_layers=num_hidden_layers,
             num_attention_heads=num_attention_heads,
             intermediate_size=intermediate_size,
+            attn_implementation=attn_implementation,
         )
     ).eval()
     bert.embeddings.token_type_embeddings.weight.zero_()
@@ -56,10 +58,11 @@ def test_same_as_bert():
             intermediate_sizes=(intermediate_size,) * num_hidden_layers,
             kernel_sizes=(None,) * num_hidden_layers,
             strides=(None,) * num_hidden_layers,
+            hidden_act="gelu",
             positional_embedding_type="absolute",
-            pre_norm=False,
+            norm_location="post",
             norm_type="layer",
-            attn_implementation="sdpa",
+            attn_implementation=attn_implementation,
         )
     ).eval()
     config = tite.config
@@ -69,10 +72,19 @@ def test_same_as_bert():
     input_ids = torch.randint(0, config.vocab_size, (2, config.max_position_embeddings))
 
     attention_mask = torch.ones_like(input_ids, dtype=torch.bool)
-    attention_mask[1, -config.max_position_embeddings // 2 :] = False
+    # attention_mask[1, -config.max_position_embeddings // 2 :] = False
 
-    bert_output = bert(input_ids, attention_mask, output_hidden_states=True)
-    tite_output = tite(input_ids, attention_mask, output_hidden_states=True)
+    bert_output = bert(
+        input_ids, attention_mask, output_hidden_states=True, output_attentions=attn_implementation == "eager"
+    )
+    tite_output = tite(
+        input_ids, attention_mask, output_hidden_states=True, output_attentions=attn_implementation == "eager"
+    )
 
     for i in range(config.num_hidden_layers):
+        if tite_output.attentions is not None:
+            assert torch.allclose(tite_output.attentions[i], bert_output.attentions[i], atol=1e-6)
         assert torch.allclose(tite_output.hidden_states[i], bert_output.hidden_states[i][attention_mask], atol=1e-6)
+    assert torch.allclose(
+        tite_output.last_hidden_state[attention_mask], bert_output.last_hidden_state[attention_mask], atol=1e-6
+    )

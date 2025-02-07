@@ -8,7 +8,7 @@ from transformers import PretrainedConfig, PreTrainedModel
 from transformers.activations import ACT2FN
 from transformers.modeling_outputs import ModelOutput
 
-from .rope import LegacyRotaryPositionalEmbeddings
+from .rope import RotaryPositionalEmbeddings
 
 
 def ceil_div(a: int, b: int) -> int:
@@ -313,7 +313,7 @@ class TiteSelfAttention(torch.nn.Module):
             self.rope = None
         elif config.positional_embedding_type == "rotary":
             self.alibi = None
-            self.rope = LegacyRotaryPositionalEmbeddings(self.attention_head_size, config.max_position_embeddings)
+            self.rope = RotaryPositionalEmbeddings(self.attention_head_size, config.max_position_embeddings)
         else:
             self.alibi = None
             self.rope = None
