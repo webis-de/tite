@@ -38,6 +38,7 @@ class PackedMetaData:
     seq_lens: torch.Tensor
     cu_seq_lens: torch.Tensor
     max_seq_len: int
+    idcs: Tuple[torch.Tensor, ...] | None
 
 
 @triton.jit

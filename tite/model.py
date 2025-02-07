@@ -78,16 +78,17 @@ class TiteConfig(PretrainedConfig):
         initializer_range: float = 0.02,
         layer_norm_eps: float = 1e-12,
         pad_token_id: int = 0,
-        hidden_act: str = "pytorch_tanh_gelu",
+        hidden_act: str = "gelu_pytorch_tanh",
         positional_embedding_type: Literal["absolute", "rotary", "alibi"] = "rotary",
         upscale_hidden_sizes: bool = False,
         pooling_location: Literal["pre", "attention", "post"] = "attention",
         rotary_interleaved: bool = False,
         pre_norm: bool = True,
         norm_type: Literal["rms", "layer"] = "rms",
+        attn_implementation: Literal["flash_attention_2", "sdpa", "eager"] = "flash_attention_2",
         **kwargs,
     ):
-        super().__init__(pad_token_id=pad_token_id, **kwargs)
+        super().__init__(pad_token_id=pad_token_id, attn_implementation=attn_implementation, **kwargs)
         self.vocab_size = vocab_size
         self.num_hidden_layers = num_hidden_layers
         self.hidden_sizes = hidden_sizes
@@ -141,6 +142,12 @@ class TiteConfig(PretrainedConfig):
 
 class TiteModel(PreTrainedModel):
     config_class = TiteConfig
+
+    # Flash Attention 2 support
+    _supports_flash_attn_2 = True
+
+    # SDPA support
+    _supports_sdpa = True
 
     def __init__(self, config: TiteConfig):
         super().__init__(config)
@@ -196,7 +203,12 @@ class TiteModel(PreTrainedModel):
             cu_seq_lens = torch.zeros(seq_lens.shape[0] + 1, dtype=seq_lens.dtype, device=seq_lens.device)
             cu_seq_lens[1:] = torch.cumsum(seq_lens, dim=0, dtype=seq_lens.dtype)
         hidden_states = self.embeddings(input_ids, idcs[1])
-        packed_meta_data = PackedMetaData(seq_lens, cu_seq_lens, max_seq_len)
+        packed_meta_data = PackedMetaData(
+            seq_lens,
+            cu_seq_lens,
+            max_seq_len,
+            idcs if self.config._attn_implementation != "flash_attention_2" else None,
+        )
         hidden_states, all_hidden_states = self.encoder(hidden_states, packed_meta_data, output_hidden_states)
         if hidden_states.shape[0] == seq_lens.shape[0]:
             hidden_states = hidden_states.unsqueeze(1)
@@ -207,6 +219,48 @@ class TiteModel(PreTrainedModel):
             repad_hidden_states[idcs] = hidden_states
             hidden_states = repad_hidden_states.view(batch_size, seq_len, -1)
         return TiteModelOutput(last_hidden_state=hidden_states, hidden_states=all_hidden_states)
+
+    @staticmethod
+    def _update_state_dict(state_dict):
+        new_state_dict = {}
+        for key, value in state_dict.items():
+            if key in ("pooler.dense.weight", "pooler.dense.bias", "embeddings.token_type_embeddings.weight"):
+                continue
+            new_key = key
+            new_key = new_key.replace("LayerNorm", "norm")
+            new_key = new_key.replace("attention.self", "attention")
+            new_key = new_key.replace("attention.output", "attention")
+            new_key = new_key.replace("intermediate.dense", "mlp.intermediate_dense")
+            new_key = new_key.replace("output.dense", "mlp.out_dense")
+            new_key = new_key.replace("output", "mlp")
+            if "Wqkv" in key:
+                q, k, v = value.chunk(3, dim=0)
+                new_state_dict[new_key.replace("Wqkv", "query")] = q
+                new_state_dict[new_key.replace("Wqkv", "key")] = k
+                new_state_dict[new_key.replace("Wqkv", "value")] = v
+            else:
+                new_state_dict[new_key] = value
+        return new_state_dict
+
+    @classmethod
+    def _load_pretrained_model(
+        cls, model, state_dict, loaded_keys, resolved_archive_file, pretrained_model_name_or_path, *args, **kwargs
+    ):
+        new_state_dict = cls._update_state_dict(state_dict)
+        missing_keys = set(model.state_dict().keys()) - set(new_state_dict.keys())
+        unexpected_keys = set(new_state_dict.keys()) - set(model.state_dict().keys())
+        missing_keys = missing_keys - {"encoder.norm.weight", "encoder.norm.bias"}
+        unexpected_keys = unexpected_keys - {
+            "encoder.layer.0.attention.norm.weight",
+            "encoder.layer.0.attention.norm.bias",
+        }
+        assert not missing_keys, f"Missing keys: {missing_keys}"
+        assert not unexpected_keys, f"Unexpected keys: {unexpected_keys}"
+        loaded_keys = list(new_state_dict.keys())
+        model, *out = super()._load_pretrained_model(
+            model, new_state_dict, loaded_keys, resolved_archive_file, pretrained_model_name_or_path, *args, **kwargs
+        )
+        return (model, *out)
 
 
 class TiteEmbeddings(torch.nn.Module):
@@ -238,6 +292,13 @@ class TiteEmbeddings(torch.nn.Module):
 
 
 class TiteAttention(torch.nn.Module):
+
+    ATTENTION_FUNCTIONS = {
+        "flash_attention_2": "flash_attn_forward",
+        "sdpa": "sdpa_forward",
+        "eager": "eager_forward",
+    }
+
     def __init__(self, config: TiteConfig, layer_idx: int):
         super().__init__()
         if config.hidden_sizes[layer_idx] % config.num_attention_heads[layer_idx] != 0:
@@ -294,6 +355,90 @@ class TiteAttention(torch.nn.Module):
             self.rope = None
             self.alibi = None
 
+        self.attention_function = getattr(self, self.ATTENTION_FUNCTIONS[config._attn_implementation])
+
+    def flash_attn_forward(
+        self,
+        query: torch.Tensor,
+        key: torch.Tensor,
+        value: torch.Tensor,
+        query_packed_meta_data: PackedMetaData,
+        packed_meta_data: PackedMetaData,
+    ) -> torch.Tensor:
+        attn_output = flash_attn_varlen_func(
+            query,
+            key,
+            value,
+            query_packed_meta_data.cu_seq_lens,
+            packed_meta_data.cu_seq_lens,
+            query_packed_meta_data.max_seq_len,
+            packed_meta_data.max_seq_len,
+            alibi_slopes=self.alibi,
+        )
+        return attn_output
+
+    def _unpad(self, x: torch.Tensor, packed_meta_data: PackedMetaData) -> torch.Tensor:
+        pad_x = torch.zeros(
+            len(packed_meta_data.seq_lens), packed_meta_data.max_seq_len, *x.shape[1:], dtype=x.dtype, device=x.device
+        )
+        pad_x[packed_meta_data.idcs] = x
+        return pad_x
+
+    def _repad(self, x: torch.Tensor, packed_meta_data: PackedMetaData) -> torch.Tensor:
+        packed_x = x[packed_meta_data.idcs]
+        return packed_x
+
+    def sdpa_forward(
+        self,
+        query: torch.Tensor,
+        key: torch.Tensor,
+        value: torch.Tensor,
+        query_packed_meta_data: PackedMetaData,
+        packed_meta_data: PackedMetaData,
+    ) -> torch.Tensor:
+        if self.alibi is not None:
+            raise ValueError("ALiBi is not supported with SDPA")
+        pad_query = self._unpad(query, query_packed_meta_data).transpose(1, 2)
+        pad_key = self._unpad(key, packed_meta_data).transpose(1, 2)
+        pad_value = self._unpad(value, packed_meta_data).transpose(1, 2)
+        query_mask = self._unpad(
+            torch.ones(query.shape[0], device=pad_query.device, dtype=torch.bool), query_packed_meta_data
+        )
+        key_mask = self._unpad(torch.ones(key.shape[0], device=pad_key.device, dtype=torch.bool), packed_meta_data)
+        mask = query_mask.unsqueeze(-1) & key_mask.unsqueeze(-2)
+        attn_output = torch.nn.functional.scaled_dot_product_attention(
+            pad_query, pad_key, pad_value, attn_mask=mask[:, None]
+        )
+        attn_output = attn_output.transpose(1, 2)
+        attn_output = self._repad(attn_output, packed_meta_data)
+        return attn_output
+
+    def eager_forward(
+        self,
+        query: torch.Tensor,
+        key: torch.Tensor,
+        value: torch.Tensor,
+        query_packed_meta_data: PackedMetaData,
+        packed_meta_data: PackedMetaData,
+    ) -> torch.Tensor:
+        pad_query = self._unpad(query, query_packed_meta_data).transpose(1, 2)
+        pad_key = self._unpad(key, packed_meta_data).transpose(1, 2)
+        pad_value = self._unpad(value, packed_meta_data).transpose(1, 2)
+        query_mask = self._unpad(
+            torch.ones(query.shape[0], device=pad_query.device, dtype=torch.bool), query_packed_meta_data
+        )
+        key_mask = self._unpad(torch.ones(key.shape[0], device=pad_key.device, dtype=torch.bool), packed_meta_data)
+        mask = query_mask.unsqueeze(-1) & key_mask.unsqueeze(-2)
+
+        attn_values = pad_query @ pad_key.transpose(-2, -1)
+        attn_values = attn_values / (self.attention_head_size**0.5)
+        attn_values = attn_values.masked_fill(~mask[:, None], -10_000)
+        attn_values = torch.nn.functional.softmax(attn_values, dim=-1)
+        attn_output = attn_values @ pad_value
+        attn_output = attn_output.transpose(1, 2)
+        attn_output = self._repad(attn_output, packed_meta_data)
+        return attn_output
+
     def forward(
         self, hidden_states: torch.Tensor, packed_meta_data: PackedMetaData
     ) -> Tuple[torch.Tensor, PackedMetaData]:
@@ -324,16 +469,8 @@ class TiteAttention(torch.nn.Module):
         if self.rope is not None:
             query = self.rope(query, query_packed_meta_data.cu_seq_lens, query_packed_meta_data.max_seq_len)
             key = self.rope(key, packed_meta_data.cu_seq_lens, packed_meta_data.max_seq_len)
-        attn_output = flash_attn_varlen_func(
-            query,
-            key,
-            value,
-            query_packed_meta_data.cu_seq_lens,
-            packed_meta_data.cu_seq_lens,
-            query_packed_meta_data.max_seq_len,
-            packed_meta_data.max_seq_len,
-            alibi_slopes=self.alibi,
-        )
+
+        attn_output = self.attention_function(query, key, value, query_packed_meta_data, packed_meta_data)
 
         attn_output = rearrange(attn_output, "t h d -> t (h d)")
 
