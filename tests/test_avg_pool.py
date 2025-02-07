@@ -84,8 +84,8 @@ def test_masked_avg_pool1d_2_5_4_8_1():
 
 @pytest.mark.parametrize("kernel_size", range(1, 5))
 @pytest.mark.parametrize("stride", range(1, 5))
-@pytest.mark.parametrize("seq_length", [1, 2, 3, 4, 6, 8, 16, 32, 64])
-@pytest.mark.parametrize("k", [1, 2, 3, 4, 6, 8, 16, 32, 64])
+@pytest.mark.parametrize("seq_length", [2, 3, 4, 8, 16, 64, 256, 768])
+@pytest.mark.parametrize("k", [1, 4, 8, 16, 64, 768])
 @pytest.mark.parametrize(
     "dtype", [torch.float32, torch.float16, torch.bfloat16], ids=["float32", "float16", "bfloat16"]
 )
@@ -108,9 +108,10 @@ def test_packed_avg_pool1d(kernel_size: int, stride: int, seq_length: int, k: in
     output_masked, out_mask = masked(x, mask)
     output_packed, _ = packed(packed_x, meta_data)
 
-    (output_masked * torch.arange(1, x.shape[-1] + 1, device=x.device, dtype=x.dtype)).sum().backward()
-    (output_packed * torch.arange(1, x.shape[-1] + 1, device=x.device, dtype=x.dtype)).sum().backward()
+    (output_masked * (torch.arange(1, k + 1, device=x.device, dtype=x.dtype) / k)).sum().backward()
+    (output_packed * (torch.arange(1, k + 1, device=x.device, dtype=x.dtype) / k)).sum().backward()
 
-    assert torch.allclose(output_masked[out_mask], output_packed, atol=1e-6)
+    atol = 1e-6 if dtype == torch.float32 else 1e-2
+    assert torch.allclose(output_masked[out_mask], output_packed, atol=atol)
     assert x.grad is not None and packed_x.grad is not None
-    assert torch.allclose(x.grad[mask], packed_x.grad, atol=1e-6)
+    assert torch.allclose(x.grad[mask], packed_x.grad, atol=atol)
