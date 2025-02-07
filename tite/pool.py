@@ -237,7 +237,10 @@ class ApplyPooling_(torch.autograd.Function):
         y_max_seq_len = compute_output_shape(packed_meta_data.max_seq_len, kernel_size, stride)
         y_cu_seq_lens = torch.zeros(y_seq_lens.shape[0] + 1, dtype=packed_meta_data.cu_seq_lens.dtype, device=x.device)
         y_cu_seq_lens[1:] = torch.cumsum(y_seq_lens, dim=0, dtype=packed_meta_data.cu_seq_lens.dtype)
-        y_packed_meta_data = PackedMetaData(y_seq_lens, y_cu_seq_lens, y_max_seq_len)
+        idcs = packed_meta_data.idcs
+        if idcs is not None:
+            raise NotImplementedError("pooling is not yet supported with eager or sdpa attention")
+        y_packed_meta_data = PackedMetaData(y_seq_lens, y_cu_seq_lens, y_max_seq_len, idcs)
 
         dim = x.shape[-1]
         y = torch.zeros(y_cu_seq_lens[-1], dim, device=x.device, dtype=x.dtype)

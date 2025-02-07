@@ -491,8 +491,8 @@ class TiteAttention(torch.nn.Module):
         value = rearrange(value, "t (h d) -> t h d", h=self.num_attention_heads, d=self.attention_head_size)
 
         if self.rope is not None:
-            query = self.rope(query, query_packed_meta_data.cu_seq_lens, query_packed_meta_data.max_seq_len)
-            key = self.rope(key, packed_meta_data.cu_seq_lens, packed_meta_data.max_seq_len)
+            query = self.rope(query, query_packed_meta_data)
+            key = self.rope(key, packed_meta_data)
 
         hidden_states, attn_probs = self.attention_function(
             query, key, value, query_packed_meta_data, packed_meta_data, output_attention
