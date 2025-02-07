@@ -182,6 +182,8 @@ class MAEEnhancedEmbeddings(torch.nn.Module):
 
 class MAEEnhancedDecoder(PreTrainedModel):
 
+    _supports_sdpa = True
+
     def __init__(
         self,
         hidden_size: int,
@@ -198,6 +200,7 @@ class MAEEnhancedDecoder(PreTrainedModel):
             num_attention_heads=num_attention_heads,
             intermediate_size=intermediate_size,
             positional_embedding_type="absolute",
+            attn_implementation="sdpa",
         )
         super().__init__(config)
         self.mask_id = mask_id
