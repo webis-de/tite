@@ -235,7 +235,6 @@ def apply_backward_pooling(
         n_padding = 0
     else:
         n_padding = max(1, kernel_size - 2 * stride + 1)
-    print("n_padding: ", n_padding)
 
     # Need this, otherwise Triton tries to launch from cuda:0 and we get
     # ValueError: Pointer argument (at 0) cannot be accessed from Triton (cpu tensor?)
