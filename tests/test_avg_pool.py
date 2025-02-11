@@ -3,7 +3,7 @@ from typing import Tuple
 import pytest
 import torch
 
-from tite.model import compute_output_shapes
+from tite.model import compute_output_shape, compute_output_shapes
 from tite.pool import PackedAvgPool1d, PackedMetaData
 
 
@@ -17,6 +17,7 @@ class ReferenceMaskedAvgPool1d(torch.nn.Module):
         if x.shape[-2] == 1:
             return x, mask
 
+        x = x.masked_fill(~mask[..., None].expand_as(x), 0)
         batch_size, _, dim = x.shape
 
         seq_lens = mask.sum(-1)
@@ -25,20 +26,19 @@ class ReferenceMaskedAvgPool1d(torch.nn.Module):
         else:
             padding = (self.kernel_size - seq_lens - self.stride) % self.stride
 
-        new_seq_lens = seq_lens + padding
-        pad_x = torch.zeros(batch_size, int(new_seq_lens.max().item()), dim, device=x.device, dtype=x.dtype)
-        pad_mask = torch.zeros(batch_size, int(new_seq_lens.max().item()), device=mask.device, dtype=mask.dtype)
-        for batch_idx in range(batch_size):
-            seq_len = seq_lens[batch_idx]
-            new_seq_len = new_seq_lens[batch_idx]
-            pad_x[batch_idx, :seq_len] = x[batch_idx, :seq_len]
-            pad_mask[batch_idx, :new_seq_len] = True
+        output_seq_lens = compute_output_shape(seq_lens, self.kernel_size, self.stride)
+
+        pad_seq_lens = seq_lens + padding
+        pad_x = torch.zeros(batch_size, int(pad_seq_lens.max().item()), dim, device=x.device, dtype=x.dtype)
+        pad_mask = torch.zeros(batch_size, int(pad_seq_lens.max().item()), device=mask.device, dtype=mask.dtype)
+        pad_x[:, : x.shape[-2]] = x
+        pad_mask[:, : x.shape[-2]] = mask
 
         x_blocks = pad_x.unfold(-2, self.kernel_size, self.stride)
         mask_blocks = pad_mask.unfold(-1, self.kernel_size, self.stride).unsqueeze(-2)
-        y = x_blocks.mean(-1)
-        mask_blocks[:, 0, 0, :] = 1
-        y_mask = mask_blocks.amin(-1).squeeze(-1)
+        norm = mask_blocks.sum(-1).clamp_min(1)
+        y = x_blocks.sum(-1) / norm
+        y_mask = torch.arange(y.shape[1], device=y.device)[None].expand(y.shape[0], -1) < output_seq_lens[:, None]
         y = y.masked_fill(~y_mask[..., None].expand_as(y), 0)
         return y, y_mask
 
@@ -82,18 +82,23 @@ def test_masked_avg_pool1d_2_5_4_8_1():
     assert torch.equal(out_mask, torch.tensor([[True], [True]]))
 
 
-@pytest.mark.parametrize("kernel_size", range(1, 5))
-@pytest.mark.parametrize("stride", range(1, 5))
+@pytest.mark.parametrize("dim", [1, 4, 8, 16, 64, 768])
 @pytest.mark.parametrize("seq_length", [2, 3, 4, 8, 16, 64, 256, 768])
-@pytest.mark.parametrize("k", [1, 4, 8, 16, 64, 768])
+@pytest.mark.parametrize("stride", range(1, 10))
+@pytest.mark.parametrize("kernel_size", range(1, 10))
 @pytest.mark.parametrize(
     "dtype", [torch.float32, torch.float16, torch.bfloat16], ids=["float32", "float16", "bfloat16"]
 )
-def test_packed_avg_pool1d(kernel_size: int, stride: int, seq_length: int, k: int, dtype: torch.dtype):
+def test_packed_avg_pool1d(kernel_size: int, stride: int, seq_length: int, dim: int, dtype: torch.dtype):
+    if stride > kernel_size:
+        with pytest.raises(ValueError):
+            packed = PackedAvgPool1d(kernel_size, stride)
+        return
+
     masked = ReferenceMaskedAvgPool1d(kernel_size, stride)
     packed = PackedAvgPool1d(kernel_size, stride)
 
-    x = torch.randn(2, seq_length, k, requires_grad=True, device="cuda", dtype=dtype)
+    x = torch.randn(2, seq_length, dim, requires_grad=True, device="cuda", dtype=dtype)
     mask = torch.ones(2, seq_length, dtype=torch.bool, device="cuda")
     mask[0, min(-1, -seq_length // 2) :] = False
     seq_lens = mask.sum(-1)
@@ -103,13 +108,13 @@ def test_packed_avg_pool1d(kernel_size: int, stride: int, seq_length: int, k: in
     idcs = mask.nonzero(as_tuple=True)
     packed_x = x[idcs].detach().clone().requires_grad_(True)
 
-    meta_data = PackedMetaData(seq_lens, cu_seq_lens, int(seq_lens.max().int()))
+    meta_data = PackedMetaData(seq_lens, cu_seq_lens, int(seq_lens.max().int()), None)
 
     output_masked, out_mask = masked(x, mask)
-    output_packed, _ = packed(packed_x, meta_data)
+    output_packed, new_meta_data = packed(packed_x, meta_data)
 
-    (output_masked * (torch.arange(1, k + 1, device=x.device, dtype=x.dtype) / k)).sum().backward()
-    (output_packed * (torch.arange(1, k + 1, device=x.device, dtype=x.dtype) / k)).sum().backward()
+    (output_masked * (torch.arange(1, dim + 1, device=x.device, dtype=x.dtype) / dim)).sum().backward()
+    (output_packed * (torch.arange(1, dim + 1, device=x.device, dtype=x.dtype) / dim)).sum().backward()
 
     atol = 1e-6 if dtype == torch.float32 else 1e-2
     assert torch.allclose(output_masked[out_mask], output_packed, atol=atol)
