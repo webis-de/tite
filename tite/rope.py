@@ -77,18 +77,13 @@ class EagerRotaryPositionalEmbeddings(nn.Module):
         self.register_buffer("cache", cache, persistent=False)
 
     def forward(self, x: Tensor, packed_meta_data: PackedMetaData) -> Tensor:
-        # input tensor has shape [b*n_h, s, h_d]
-        seq_len = x.shape[2]
+        t_seq_len = x.shape[0]
+        position_idcs = torch.ones(t_seq_len, device=x.device, dtype=torch.int32)
+        position_idcs[packed_meta_data.seq_lens[:-1]] = -packed_meta_data.seq_lens[:-1] + 1
+        position_idcs = position_idcs.cumsum(0) - 1
+        rope_cache = self.cache[position_idcs].view(t_seq_len, 1, self.dim // 2, 2)
 
-        # extract the values based on whether input_pos is set or not
-        rope_cache = self.cache[packed_meta_data.idcs]
-
-        # reshape input; the last dimension is used for computing the output.
-        # Cast to float to match the reference implementation
         xshaped = x.view(*x.shape[:-1], self.dim // 2, 2)
-
-        # reshape the cache for broadcasting
-        rope_cache = rope_cache.view(seq_len, self.dim // 2, 2)
 
         x_out = torch.stack(
             [
@@ -98,8 +93,7 @@ class EagerRotaryPositionalEmbeddings(nn.Module):
             -1,
         )
 
-        x_out = x_out.flatten(3)
-        return x_out
+        return x_out.view_as(x).to(x)
 
 
 class TritonRotaryPositionalEmbeddings(torch.nn.Module):
@@ -142,7 +136,6 @@ class TritonRotaryPositionalEmbeddings(torch.nn.Module):
             or (self.training and self._cos_cached.is_inference())
         ):
             self._seq_len_cached = seq_len
-            # We want fp32 here, not self.inv_freq.dtype, since the model could be loaded in bf16
             # And the output of arange can be quite large, so bf16 would lose a lot of precision.
             # However, for compatibility reason, we add an option to use the dtype of self.inv_freq.
             if self.pos_idx_in_fp32:
@@ -150,7 +143,6 @@ class TritonRotaryPositionalEmbeddings(torch.nn.Module):
                 # We want fp32 here as well since inv_freq will be multiplied with t, and the output
                 # will be large. Having it in bf16 will lose a lot of precision and cause the
                 # cos & sin output to change significantly.
-                # We want to recompute self.inv_freq if it was not loaded in fp32
                 if self.inv_freq.dtype != torch.float32:
                     inv_freq = self._compute_inv_freq(device=device)
                 else:
@@ -166,6 +158,7 @@ class TritonRotaryPositionalEmbeddings(torch.nn.Module):
 
     def forward(self, x: torch.Tensor, packed_meta_data: PackedMetaData) -> torch.Tensor:
         self._update_cos_sin_cache(packed_meta_data.max_seq_len, device=x.device, dtype=x.dtype)
+
         x = apply_rotary_emb(
             x,
             self._cos_cached,
@@ -176,30 +169,6 @@ class TritonRotaryPositionalEmbeddings(torch.nn.Module):
             max_seqlen=packed_meta_data.max_seq_len,
         )
         return x
-
-
-if apply_rotary_emb is not None:
-    RotaryPositionalEmbeddings = TritonRotaryPositionalEmbeddings
-else:
-    RotaryPositionalEmbeddings = EagerRotaryPositionalEmbeddings
-
-
-def main(args=None):
-    batch_size = 2
-    seq_len = 128
-    num_attention_heads = 12
-    head_dim = 64
-    hidden_states = torch.rand(batch_size, seq_len, num_attention_heads, head_dim, device="cuda", dtype=torch.float16)
-    legacy_rope = EagerRotaryPositionalEmbeddings(head_dim, 512, dtype=hidden_states.dtype).to("cuda")
-    rope = RotaryPositionalEmbeddings(head_dim).to("cuda")
-
-    legacy_rope_hidden_states = legacy_rope(hidden_states.transpose(1, 2)).transpose(1, 2)
-    cu_seq_lens = torch.arange(0, (batch_size + 1) * seq_len, step=seq_len, device="cuda", dtype=torch.int32)
-    rope_hidden_states = rope(
-        hidden_states.view(-1, num_attention_heads, head_dim).clone(), cu_seq_lens, seq_len
-    ).view_as(legacy_rope_hidden_states)
-
-    assert torch.allclose(legacy_rope_hidden_states, rope_hidden_states, atol=1e-6)
 
 
 if __name__ == "__main__":

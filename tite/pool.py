@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from typing import Tuple, overload
+from typing import Literal, Tuple, overload
 
 import torch
 import triton
@@ -263,39 +263,36 @@ def apply_backward_pooling(
 class ApplyPooling_(torch.autograd.Function):
     @staticmethod
     def forward(
-        ctx, x: torch.Tensor, packed_meta_data: PackedMetaData, kernel_size: int, stride: int
-    ) -> Tuple[torch.Tensor, PackedMetaData]:
-        y_seq_lens = compute_output_shape(packed_meta_data.seq_lens, kernel_size, stride)
-        y_max_seq_len = compute_output_shape(packed_meta_data.max_seq_len, kernel_size, stride)
-        y_cu_seq_lens = torch.zeros(y_seq_lens.shape[0] + 1, dtype=packed_meta_data.cu_seq_lens.dtype, device=x.device)
-        y_cu_seq_lens[1:] = torch.cumsum(y_seq_lens, dim=0, dtype=packed_meta_data.cu_seq_lens.dtype)
-        idcs = packed_meta_data.idcs
-        if idcs is not None:
-            raise NotImplementedError("pooling is not yet supported with eager or sdpa attention")
-        y_packed_meta_data = PackedMetaData(y_seq_lens, y_cu_seq_lens, y_max_seq_len, idcs)
+        ctx,
+        x: torch.Tensor,
+        x_packed_meta_data: PackedMetaData,
+        y_packed_meta_data: PackedMetaData,
+        kernel_size: int,
+        stride: int,
+    ) -> torch.Tensor:
 
         dim = x.shape[-1]
-        y = torch.zeros(y_cu_seq_lens[-1], dim, device=x.device, dtype=x.dtype)
+        y = torch.zeros(y_packed_meta_data.cu_seq_lens[-1], dim, device=x.device, dtype=x.dtype)
         norm = torch.zeros_like(y)
 
         apply_forward_pooling(
             x=x,
             y=y,
             norm=norm,
-            x_cu_seq_lens=packed_meta_data.cu_seq_lens,
-            y_cu_seq_lens=y_cu_seq_lens,
-            y_max_seq_len=y_max_seq_len,
+            x_cu_seq_lens=x_packed_meta_data.cu_seq_lens,
+            y_cu_seq_lens=y_packed_meta_data.cu_seq_lens,
+            y_max_seq_len=y_packed_meta_data.max_seq_len,
             kernel_size=kernel_size,
             stride=stride,
         )
-        ctx.save_for_backward(x, packed_meta_data.cu_seq_lens, y_packed_meta_data.cu_seq_lens, norm)
+        ctx.save_for_backward(x, x_packed_meta_data.cu_seq_lens, y_packed_meta_data.cu_seq_lens, norm)
         ctx.kernel_size = kernel_size
         ctx.stride = stride
-        ctx.x_max_seq_len = packed_meta_data.max_seq_len
-        return y, y_packed_meta_data
+        ctx.x_max_seq_len = x_packed_meta_data.max_seq_len
+        return y
 
     @staticmethod
-    def backward(ctx, grad_y, grad_meta_data):
+    def backward(ctx, grad_y):
         x, x_cu_seq_lens, y_cu_seq_lens, norm = ctx.saved_tensors
         x_max_seq_len = ctx.x_max_seq_len
         kernel_size = ctx.kernel_size
@@ -311,19 +308,79 @@ class ApplyPooling_(torch.autograd.Function):
             kernel_size=kernel_size,
             stride=stride,
         )
-        return grad_x, None, None, None
+        return grad_x, None, None, None, None
 
 
 class PackedAvgPool1d(torch.nn.Module):
 
-    def __init__(self, kernel_size: int, stride: int):
+    def __init__(self, kernel_size: int, stride: int, implementation: Literal["eager", "triton"] = "triton"):
         super().__init__()
         if stride > kernel_size:
             raise ValueError("Stride must be less than or equal to kernel size")
         self.kernel_size = kernel_size
         self.stride = stride
+        self.implementation = implementation
+
+    def eager_forward(
+        self, packed_x: torch.Tensor, packed_meta_data: PackedMetaData
+    ) -> Tuple[torch.Tensor, Tuple[torch.Tensor, ...]]:
+        x = torch.zeros(
+            len(packed_meta_data.seq_lens),
+            packed_meta_data.max_seq_len,
+            packed_x.shape[-1],
+            device=packed_x.device,
+            dtype=packed_x.dtype,
+        )
+        mask = torch.zeros(
+            len(packed_meta_data.seq_lens), packed_meta_data.max_seq_len, device=packed_x.device, dtype=torch.bool
+        )
+        x[packed_meta_data.idcs] = packed_x
+        mask[packed_meta_data.idcs] = True
+
+        x = x.masked_fill(~mask[..., None].expand_as(x), 0)
+        batch_size, _, dim = x.shape
+
+        seq_lens = mask.sum(-1)
+        if self.kernel_size > x.shape[-2]:
+            padding = self.kernel_size - x.shape[-2]
+        else:
+            padding = (self.kernel_size - seq_lens - self.stride) % self.stride
+
+        output_seq_lens = compute_output_shape(seq_lens, self.kernel_size, self.stride)
+
+        pad_seq_lens = seq_lens + padding
+        pad_x = torch.zeros(batch_size, int(pad_seq_lens.max().item()), dim, device=x.device, dtype=x.dtype)
+        pad_mask = torch.zeros(batch_size, int(pad_seq_lens.max().item()), device=mask.device, dtype=mask.dtype)
+        pad_x[:, : x.shape[-2]] = x
+        pad_mask[:, : x.shape[-2]] = mask
+
+        x_blocks = pad_x.unfold(-2, self.kernel_size, self.stride)
+        mask_blocks = pad_mask.unfold(-1, self.kernel_size, self.stride).unsqueeze(-2)
+        norm = mask_blocks.sum(-1).clamp_min(1)
+        y = x_blocks.sum(-1) / norm
+        y_mask = torch.arange(y.shape[1], device=y.device)[None].expand(y.shape[0], -1) < output_seq_lens[:, None]
+        y_packed = y[y_mask]
+        idcs = y_mask.nonzero(as_tuple=True)
+        return y_packed, idcs
 
     def forward(self, x: torch.Tensor, packed_meta_data: PackedMetaData) -> Tuple[torch.Tensor, PackedMetaData]:
         if packed_meta_data.max_seq_len == 1 or (self.kernel_size == 1 and self.stride == 1):
             return x, packed_meta_data
-        return ApplyPooling_.apply(x, packed_meta_data, self.kernel_size, self.stride)
+
+        y_seq_lens = compute_output_shape(packed_meta_data.seq_lens, self.kernel_size, self.stride)
+        y_max_seq_len = compute_output_shape(packed_meta_data.max_seq_len, self.kernel_size, self.stride)
+        y_cu_seq_lens = torch.zeros(y_seq_lens.shape[0] + 1, dtype=packed_meta_data.cu_seq_lens.dtype, device=x.device)
+        y_cu_seq_lens[1:] = torch.cumsum(y_seq_lens, dim=0, dtype=packed_meta_data.cu_seq_lens.dtype)
+
+        if self.implementation == "triton":
+            if packed_meta_data.idcs is not None:
+                raise ValueError(
+                    "Eager and sdpa attention implementation are not supported with Triton pooling implementation. "
+                    "Please use the eager pooling implementation."
+                )
+            y_packed_meta_data = PackedMetaData(y_seq_lens, y_cu_seq_lens, y_max_seq_len, None)
+            y = ApplyPooling_.apply(x, packed_meta_data, y_packed_meta_data, self.kernel_size, self.stride)
+        elif self.implementation == "eager":
+            y, idcs = self.eager_forward(x, packed_meta_data)
+            y_packed_meta_data = PackedMetaData(y_seq_lens, y_cu_seq_lens, y_max_seq_len, idcs)
+        return y, y_packed_meta_data

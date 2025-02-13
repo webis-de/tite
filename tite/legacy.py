@@ -8,7 +8,88 @@ from transformers import PretrainedConfig, PreTrainedModel
 from transformers.activations import ACT2FN
 from transformers.modeling_outputs import ModelOutput
 
-from .rope import RotaryPositionalEmbeddings
+
+class RotaryPositionalEmbeddings(torch.nn.Module):
+    """
+    This class implements Rotary Positional Embeddings (RoPE)
+    proposed in https://arxiv.org/abs/2104.09864.
+
+    Reference implementation (used for correctness verfication)
+    can be found here:
+    https://github.com/meta-llama/llama/blob/main/llama/model.py#L80
+
+    In this implementation we cache the embeddings for each position upto
+    ``max_seq_len`` by computing this during init.
+
+    Args:
+        dim (int): Embedding dimension. This is usually set to the dim of each
+            head in the attention module computed as ````embed_dim`` // ``num_heads````
+        max_seq_len (int): Maximum expected sequence length for the
+            model, if exceeded the cached freqs will be recomputed
+        base (int): The base for the geometric progression used to compute
+            the rotation angles
+    """
+
+    def __init__(
+        self,
+        dim: int,
+        max_seq_len: int = 4096,
+        base: int = 10_000,
+        dtype: torch.dtype | None = None,
+    ) -> None:
+        super().__init__()
+        self.dim = dim
+        self.base = base
+        self.max_seq_len = max_seq_len
+        self._rope_init(dtype)
+
+    # We need to explicitly define reset_parameters for FSDP initialization, see
+    # https://github.com/pytorch/pytorch/blob/797d4fbdf423dd9320ebe383fb57ffb1135c4a99/torch/distributed/fsdp/_init_utils.py#L885
+    def reset_parameters(self):
+        self._rope_init()
+
+    def _rope_init(self, dtype: torch.dtype | None = None) -> None:
+        theta = 1.0 / (self.base ** (torch.arange(0, self.dim, 2)[: (self.dim // 2)].float() / self.dim))
+        self.register_buffer("theta", theta, persistent=False)
+        self.build_rope_cache(self.max_seq_len, dtype)
+
+    def build_rope_cache(self, max_seq_len: int = 4096, dtype: torch.dtype | None = None) -> None:
+        # Create position indexes `[0, 1, ..., max_seq_len - 1]`
+        seq_idx = torch.arange(max_seq_len, dtype=self.theta.dtype, device=self.theta.device)
+
+        # Outer product of theta and position index; output tensor has
+        # a shape of [max_seq_len, dim // 2]
+        idx_theta = torch.einsum("i, j -> ij", seq_idx, self.theta).float()
+
+        # cache includes both the cos and sin components and so the output shape is
+        # [max_seq_len, dim // 2, 2]
+        cache = torch.stack([torch.cos(idx_theta), torch.sin(idx_theta)], dim=-1).to(dtype)
+        self.register_buffer("cache", cache, persistent=False)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # input tensor has shape [b, n_h, s, h_d]
+        seq_len = x.shape[2]
+
+        # extract the values based on whether input_pos is set or not
+        rope_cache = self.cache[:seq_len]
+
+        # reshape input; the last dimension is used for computing the output.
+        # Cast to float to match the reference implementation
+        xshaped = x.view(*x.shape[:-1], self.dim // 2, 2)
+
+        # reshape the cache for broadcasting
+        rope_cache = rope_cache.view(seq_len, self.dim // 2, 2)
+
+        x_out = torch.stack(
+            [
+                xshaped[..., 0] * rope_cache[..., 0] - xshaped[..., 1] * rope_cache[..., 1],
+                xshaped[..., 1] * rope_cache[..., 0] + xshaped[..., 0] * rope_cache[..., 1],
+            ],
+            -1,
+        )
+
+        x_out = x_out.flatten(3)
+        return x_out
 
 
 def ceil_div(a: int, b: int) -> int:
@@ -239,6 +320,7 @@ class MaskedAvgPool1d(torch.nn.Module):
         return y, y_mask
 
     def unfold_forward(self, x: torch.Tensor, mask: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+        # NOTE this implementation only works for kernel size == strides, other configurations are broken!
         if x.shape[-2] == 1:
             return x, mask
         padding = (x.shape[-2] - self.kernel_sizes) % self.strides

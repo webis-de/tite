@@ -15,7 +15,7 @@ from transformers.activations import ACT2FN
 from transformers.modeling_outputs import ModelOutput
 
 from .pool import PackedAvgPool1d, PackedMetaData, compute_output_shape
-from .rope import RotaryPositionalEmbeddings
+from .rope import EagerRotaryPositionalEmbeddings, TritonRotaryPositionalEmbeddings
 
 
 class RMSNorm(torch.nn.Module):
@@ -29,6 +29,7 @@ class RMSNorm(torch.nn.Module):
     def _norm(self, x):
         return x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + self.eps)
 
+    @torch.compile(dynamic=True)
     def forward(self, x):
         output = self._norm(x.float()).type_as(x)
         return output * self.weight
@@ -94,8 +95,12 @@ class TiteConfig(PretrainedConfig):
         norm_location: Literal["pre", "post"] = "pre",
         norm_type: Literal["rms", "layer"] = "rms",
         attn_implementation: Literal["flash_attention_2", "sdpa", "eager"] = "flash_attention_2",
+        pooling_implementation: Literal["eager", "triton"] = "triton",
+        rope_implementation: Literal["eager", "triton"] = "triton",
         **kwargs,
     ):
+        if attn_implementation is None:
+            attn_implementation = "flash_attention_2"
         super().__init__(pad_token_id=pad_token_id, attn_implementation=attn_implementation, **kwargs)
         self.vocab_size = vocab_size
         self.num_hidden_layers = num_hidden_layers
@@ -115,6 +120,8 @@ class TiteConfig(PretrainedConfig):
         self.rotary_interleaved = rotary_interleaved
         self.norm_location = norm_location
         self.norm_type = norm_type
+        self.pooling_implementation = pooling_implementation
+        self.rope_implementation = rope_implementation
 
         iterator = zip(
             [
@@ -352,12 +359,17 @@ class TiteAttention(torch.nn.Module):
         stride = config.strides[layer_idx]
         self.pooling = None
         if kernel_size is not None and stride is not None:
-            self.pooling = PackedAvgPool1d(kernel_size, stride)
+            self.pooling = PackedAvgPool1d(kernel_size, stride, config.pooling_implementation)
 
         if config.positional_embedding_type == "rotary":
-            self.rope = RotaryPositionalEmbeddings(
-                self.attention_head_size, config.max_position_embeddings, config.rotary_interleaved
-            )
+            if config.rope_implementation == "eager":
+                self.rope = EagerRotaryPositionalEmbeddings(
+                    self.attention_head_size, config.max_position_embeddings, config.rotary_interleaved
+                )
+            elif config.rope_implementation == "triton":
+                self.rope = TritonRotaryPositionalEmbeddings(
+                    self.attention_head_size, config.max_position_embeddings, config.rotary_interleaved
+                )
             self.alibi = None
         elif config.positional_embedding_type == "alibi":
             self.rope = None
@@ -430,7 +442,7 @@ class TiteAttention(torch.nn.Module):
             pad_query, pad_key, pad_value, attn_mask=mask[:, None]
         )
         attn_output = attn_output.transpose(1, 2)
-        attn_output = self._repad(attn_output, packed_meta_data)
+        attn_output = self._repad(attn_output, query_packed_meta_data)
         return attn_output, None
 
     def eager_forward(
