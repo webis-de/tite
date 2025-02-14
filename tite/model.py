@@ -29,7 +29,6 @@ class RMSNorm(torch.nn.Module):
     def _norm(self, x):
         return x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + self.eps)
 
-    @torch.compile(dynamic=True)
     def forward(self, x):
         output = self._norm(x.float()).type_as(x)
         return output * self.weight
@@ -97,6 +96,7 @@ class TiteConfig(PretrainedConfig):
         attn_implementation: Literal["flash_attention_2", "sdpa", "eager"] = "flash_attention_2",
         pooling_implementation: Literal["eager", "triton"] = "triton",
         rope_implementation: Literal["eager", "triton"] = "triton",
+        compile: bool = True,
         **kwargs,
     ):
         if attn_implementation is None:
@@ -122,6 +122,7 @@ class TiteConfig(PretrainedConfig):
         self.norm_type = norm_type
         self.pooling_implementation = pooling_implementation
         self.rope_implementation = rope_implementation
+        self.compile = compile
 
         iterator = zip(
             [
@@ -168,6 +169,7 @@ class TiteModel(PreTrainedModel):
         super().__init__(config)
 
         self.embeddings = TiteEmbeddings(config)
+        self.embeddings.compile(disable=not config.compile)
         self.encoder = TiteEncoder(config)
 
         self.post_init()
@@ -300,7 +302,6 @@ class TiteEmbeddings(torch.nn.Module):
             raise ValueError(f"Unknown norm type: {config.norm_type}")
         self.dropout = torch.nn.Dropout(config.dropout_prob)
 
-    @torch.compile(dynamic=True)
     def forward(self, input_ids: torch.Tensor, position_idcs: torch.Tensor) -> torch.Tensor:
         embeddings = self.word_embeddings(input_ids)
         if self.position_embeddings is not None:
@@ -345,6 +346,8 @@ class TiteAttention(torch.nn.Module):
                 self.norm = RMSNorm(from_hidden_size, eps=config.layer_norm_eps)
             else:
                 raise ValueError(f"Unknown norm type: {config.norm_type}")
+        self.norm.compile(disable=not config.compile, dynamic=True)
+
         num_attention_heads = config.num_attention_heads[layer_idx]
         self.num_attention_heads = num_attention_heads
         self.attention_head_size = int(to_hidden_size / num_attention_heads)
@@ -553,7 +556,6 @@ class TiteMLP(torch.nn.Module):
         self.out_dense = torch.nn.Linear(intermediate_size, hidden_size)
         self.dropout = torch.nn.Dropout(config.dropout_prob)
 
-    @torch.compile(dynamic=True)
     def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
         input_hidden_states = hidden_states
         if self.config.norm_location == "pre":
@@ -576,7 +578,6 @@ class TiteUpscale(torch.nn.Module):
         self.upscale_layer = torch.nn.Linear(old_hidden_size, hidden_size)
         self.dropout = torch.nn.Dropout(config.dropout_prob)
 
-    @torch.compile(dynamic=True)
     def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
         hidden_states = self.upscale_layer(hidden_states)
         hidden_states = self.dropout(hidden_states)
@@ -590,6 +591,7 @@ class TiteLayer(torch.nn.Module):
         self.seq_len_dim = 1
         self.attention = TiteAttention(config, layer_idx)
         self.mlp = TiteMLP(config, layer_idx)
+        self.mlp.compile(disable=not config.compile, dynamic=True)
 
         hidden_size = config.hidden_sizes[layer_idx]
         old_hidden_size = config.hidden_sizes[max(0, layer_idx - 1)]
@@ -597,6 +599,7 @@ class TiteLayer(torch.nn.Module):
             self.upscale_layer = TiteUpscale(config, layer_idx)
         else:
             self.upscale_layer = torch.nn.Identity()
+        self.upscale_layer.compile(disable=not config.compile, dynamic=True)
 
     def forward(
         self, hidden_states: torch.Tensor, packed_meta_data: PackedMetaData, output_attention: bool = False
