@@ -135,6 +135,7 @@ def test_same_as_bert(attn_implementation: str):
                 norm_location="post",
                 norm_type="layer",
                 attn_implementation=attn_implementation,
+                compile=False,
             )
         )
         .eval()

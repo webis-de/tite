@@ -169,7 +169,8 @@ class TiteModel(PreTrainedModel):
         super().__init__(config)
 
         self.embeddings = TiteEmbeddings(config)
-        self.embeddings.compile(disable=not config.compile)
+        if config.compile:
+            self.embeddings.compile(dynamic=True)
         self.encoder = TiteEncoder(config)
 
         self.post_init()
@@ -346,7 +347,8 @@ class TiteAttention(torch.nn.Module):
                 self.norm = RMSNorm(from_hidden_size, eps=config.layer_norm_eps)
             else:
                 raise ValueError(f"Unknown norm type: {config.norm_type}")
-        self.norm.compile(disable=not config.compile, dynamic=True)
+        if config.compile:
+            self.norm.compile(dynamic=True)
 
         num_attention_heads = config.num_attention_heads[layer_idx]
         self.num_attention_heads = num_attention_heads
@@ -591,7 +593,8 @@ class TiteLayer(torch.nn.Module):
         self.seq_len_dim = 1
         self.attention = TiteAttention(config, layer_idx)
         self.mlp = TiteMLP(config, layer_idx)
-        self.mlp.compile(disable=not config.compile, dynamic=True)
+        if config.compile:
+            self.mlp.compile(dynamic=True)
 
         hidden_size = config.hidden_sizes[layer_idx]
         old_hidden_size = config.hidden_sizes[max(0, layer_idx - 1)]
@@ -599,7 +602,8 @@ class TiteLayer(torch.nn.Module):
             self.upscale_layer = TiteUpscale(config, layer_idx)
         else:
             self.upscale_layer = torch.nn.Identity()
-        self.upscale_layer.compile(disable=not config.compile, dynamic=True)
+        if config.compile:
+            self.upscale_layer.compile(dynamic=True)
 
     def forward(
         self, hidden_states: torch.Tensor, packed_meta_data: PackedMetaData, output_attention: bool = False
