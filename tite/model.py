@@ -336,13 +336,15 @@ class TiteAttention(torch.nn.Module):
             from_hidden_size = config.hidden_sizes[max(0, layer_idx - 1)]
         self.hidden_size_diff = to_hidden_size - from_hidden_size
 
-        if config.norm_location == "pre":
-            if layer_idx == 0:
-                self.norm = torch.nn.Identity()
-            else:
-                self.norm = torch.nn.LayerNorm(from_hidden_size, eps=config.layer_norm_eps)
+        if config.norm_location == "pre" and layer_idx == 0:
+            self.norm = torch.nn.Identity()
         else:
-            self.norm = torch.nn.LayerNorm(to_hidden_size, eps=config.layer_norm_eps)
+            if config.norm_type == "layer":
+                self.norm = torch.nn.LayerNorm(from_hidden_size, eps=config.layer_norm_eps)
+            elif config.norm_type == "rms":
+                self.norm = RMSNorm(from_hidden_size, eps=config.layer_norm_eps)
+            else:
+                raise ValueError(f"Unknown norm type: {config.norm_type}")
         num_attention_heads = config.num_attention_heads[layer_idx]
         self.num_attention_heads = num_attention_heads
         self.attention_head_size = int(to_hidden_size / num_attention_heads)
