@@ -167,6 +167,7 @@ class TiteModel(PreTrainedModel):
 
     def __init__(self, config: TiteConfig):
         super().__init__(config)
+        self.config: TiteConfig
 
         self.embeddings = TiteEmbeddings(config)
         if config.compile:
@@ -226,7 +227,12 @@ class TiteModel(PreTrainedModel):
             seq_lens,
             cu_seq_lens,
             max_seq_len,
-            idcs if self.config._attn_implementation != "flash_attention_2" else None,
+            (
+                idcs
+                if self.config._attn_implementation != "flash_attention_2"
+                or self.config.pooling_implementation == "eager"
+                else None
+            ),
         )
         hidden_states, all_hidden_states, all_attentions = self.encoder(
             hidden_states, packed_meta_data, output_hidden_states, output_attentions
@@ -321,6 +327,11 @@ class TiteAttention(torch.nn.Module):
         "eager": "eager_forward",
     }
 
+    ROPE_CLASSES = {
+        "eager": EagerRotaryPositionalEmbeddings,
+        "triton": TritonRotaryPositionalEmbeddings,
+    }
+
     def __init__(self, config: TiteConfig, layer_idx: int):
         super().__init__()
         if config.hidden_sizes[layer_idx] % config.num_attention_heads[layer_idx] != 0:
@@ -373,14 +384,9 @@ class TiteAttention(torch.nn.Module):
             self.pooling = PackedAvgPool1d(kernel_size, stride, config.pooling_implementation)
 
         if config.positional_embedding_type == "rotary":
-            if config.rope_implementation == "eager":
-                self.rope = EagerRotaryPositionalEmbeddings(
-                    self.attention_head_size, config.max_position_embeddings, config.rotary_interleaved
-                )
-            elif config.rope_implementation == "triton":
-                self.rope = TritonRotaryPositionalEmbeddings(
-                    self.attention_head_size, config.max_position_embeddings, config.rotary_interleaved
-                )
+            self.rope = self.ROPE_CLASSES[config.rope_implementation](
+                self.attention_head_size, config.max_position_embeddings, config.rotary_interleaved
+            )
             self.alibi = None
         elif config.positional_embedding_type == "alibi":
             self.rope = None
@@ -407,6 +413,10 @@ class TiteAttention(torch.nn.Module):
         packed_meta_data: PackedMetaData,
         output_attention: bool = False,
     ) -> Tuple[torch.Tensor, None]:
+        if flash_attn_varlen_func is None:
+            raise ValueError(
+                "Flash Attention 2 is not installed. Please install or use a different attention implementation"
+            )
         attn_output = flash_attn_varlen_func(
             query,
             key,
