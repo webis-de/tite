@@ -471,7 +471,7 @@ class TiteAttention(torch.nn.Module):
         attn_probs = torch.nn.functional.softmax(attn_values, dim=-1)
         attn_output = attn_probs @ pad_value
         attn_output = attn_output.transpose(1, 2)
-        attn_output = self._repad(attn_output, packed_meta_data)
+        attn_output = self._repad(attn_output, query_packed_meta_data)
         if output_attention:
             return attn_output, attn_probs
         return attn_output, None
