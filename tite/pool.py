@@ -357,7 +357,7 @@ class PackedAvgPool1d(torch.nn.Module):
         x_blocks = pad_x.unfold(-2, self.kernel_size, self.stride)
         mask_blocks = pad_mask.unfold(-1, self.kernel_size, self.stride).unsqueeze(-2)
         norm = mask_blocks.sum(-1).clamp_min(1)
-        y = x_blocks.sum(-1) / norm
+        y = (x_blocks.sum(-1) / norm).to(packed_x)
         y_mask = torch.arange(y.shape[1], device=y.device)[None].expand(y.shape[0], -1) < output_seq_lens[:, None]
         y_packed = y[y_mask]
         idcs = y_mask.nonzero(as_tuple=True)

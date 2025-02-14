@@ -191,8 +191,8 @@ class MAEEnhancedDecoder(PreTrainedModel):
         intermediate_size: int,
         mask_id: int,
         mask_prob: float,
-        norm_location: Literal["pre", "post"] = "pre",
-        norm_type: Literal["rms", "layer"] = "rms",
+        norm_location: Literal["pre", "post"] = "post",
+        norm_type: Literal["rms", "layer"] = "layer",
         query_strategy: Literal["embx", "mask"] = "embx",
         subvectors: bool = False,
     ):
