@@ -48,6 +48,7 @@ class EagerRotaryPositionalEmbeddings(nn.Module):
         dtype: Optional[torch.dtype] = None,
     ) -> None:
         super().__init__()
+        assert dim % 2 == 0, "dim must be divisible by 2"
         self.dim = dim
         self.base = base
         self.max_seq_len = max_seq_len
