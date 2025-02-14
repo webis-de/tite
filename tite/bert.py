@@ -25,9 +25,11 @@ class BertConfig(TiteConfig):
         hidden_act: str = "gelu_pytorch_tanh",
         positional_embedding_type: Literal["absolute", "rotary", "alibi"] = "rotary",
         rotary_interleaved: bool = False,
-        pre_norm: bool = True,
+        norm_location: Literal["pre", "post"] = "pre",
         norm_type: Literal["rms", "layer"] = "rms",
         pooling: Literal["mean", "first"] | None = None,
+        attn_implementation: Literal["flash_attention_2", "sdpa", "eager"] = "flash_attention_2",
+        rope_implementation: Literal["eager", "triton"] = "triton",
         **kwargs
     ):
         super().__init__(
@@ -46,8 +48,10 @@ class BertConfig(TiteConfig):
             hidden_act=hidden_act,
             positional_embedding_type=positional_embedding_type,
             rotary_interleaved=rotary_interleaved,
-            pre_norm=pre_norm,
+            norm_location=norm_location,
             norm_type=norm_type,
+            attn_implementation=attn_implementation,
+            rope_implementation=rope_implementation,
             **kwargs
         )
         self.pooling = pooling
