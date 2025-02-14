@@ -145,14 +145,14 @@ class MAEAttention(torch.nn.Module):
         attention_mask: torch.Tensor,
         embx: torch.Tensor,
     ) -> torch.Tensor:
-        if self.config.pre_norm:
+        if self.config.norm_location == "pre":
             query_hidden_states = self.norm(query_hidden_states)
             key_value_hidden_states = self.norm(key_value_hidden_states)
         hidden_states = self.self(query_hidden_states, key_value_hidden_states, attention_mask, embx)
         hidden_states = self.dense(hidden_states)
         hidden_states = self.dropout(hidden_states)
         hidden_states = hidden_states + query_hidden_states
-        if not self.config.pre_norm:
+        if self.config.norm_location == "post":
             hidden_states = self.norm(hidden_states)
         return hidden_states
 
@@ -191,6 +191,8 @@ class MAEEnhancedDecoder(PreTrainedModel):
         intermediate_size: int,
         mask_id: int,
         mask_prob: float,
+        norm_location: Literal["pre", "post"] = "pre",
+        norm_type: Literal["rms", "layer"] = "rms",
         query_strategy: Literal["embx", "mask"] = "embx",
         subvectors: bool = False,
     ):
@@ -201,6 +203,8 @@ class MAEEnhancedDecoder(PreTrainedModel):
             intermediate_size=intermediate_size,
             positional_embedding_type="absolute",
             attn_implementation="sdpa",
+            norm_location=norm_location,
+            norm_type=norm_type,
         )
         super().__init__(config)
         self.mask_id = mask_id
@@ -211,7 +215,7 @@ class MAEEnhancedDecoder(PreTrainedModel):
         self.attention = MAEAttention(config, 0, mask_prob)
         self.mlp = TiteMLP(config, 0)
 
-        if config.pre_norm:
+        if config.norm_location == "pre":
             if config.norm_type == "layer":
                 self.norm = torch.nn.LayerNorm(hidden_size, eps=config.layer_norm_eps)
             elif config.norm_type == "rms":
