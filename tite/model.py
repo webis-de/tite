@@ -342,9 +342,13 @@ class TiteAttention(torch.nn.Module):
             self.norm = torch.nn.Identity()
         else:
             if config.norm_type == "layer":
-                self.norm = torch.nn.LayerNorm(from_hidden_size, eps=config.layer_norm_eps)
+                self.norm = torch.nn.LayerNorm(
+                    from_hidden_size if config.norm_location == "pre" else to_hidden_size, eps=config.layer_norm_eps
+                )
             elif config.norm_type == "rms":
-                self.norm = RMSNorm(from_hidden_size, eps=config.layer_norm_eps)
+                self.norm = RMSNorm(
+                    from_hidden_size if config.norm_location == "pre" else to_hidden_size, eps=config.layer_norm_eps
+                )
             else:
                 raise ValueError(f"Unknown norm type: {config.norm_type}")
         if config.compile:
