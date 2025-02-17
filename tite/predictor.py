@@ -18,7 +18,7 @@ class MLMDecoder(Module):
         vocab_size: int,
         hidden_size: int,
         hidden_act: str = "gelu_pytorch_tanh",
-        norm_type: Literal["layer", "rms"] = "rms",
+        norm_type: Literal["layer", "rms"] = "layer",
     ) -> None:
         super().__init__()
         self.dense = torch.nn.Linear(hidden_size, hidden_size)
@@ -56,16 +56,12 @@ class HFMLMDecoder(MLMDecoder):
         self.load_state_dict(state_dict)
 
 
-class MAESelfAttention(torch.nn.Module):
-
+class MAEAttention(torch.nn.Module):
     def __init__(self, config: TiteConfig, layer_idx: int, mask_prob: float = 0.0):
         super().__init__()
-
-        if config.hidden_sizes[layer_idx] % config.num_attention_heads[layer_idx] != 0:
-            raise ValueError(
-                f"The hidden size ({config.hidden_sizes}) is not a multiple of the "
-                f"number of attention heads ({config.num_attention_heads})"
-            )
+        if config.positional_embedding_type != "absolute":
+            raise ValueError(f"Unsupported positional embedding type: {config.positional_embedding_type}")
+        self.config = config
 
         hidden_size = config.hidden_sizes[layer_idx]
         num_attention_heads = config.num_attention_heads[layer_idx]
@@ -79,8 +75,20 @@ class MAESelfAttention(torch.nn.Module):
         self.dropout_prob = config.dropout_prob
         self.mask_prob = mask_prob
 
-        if config.positional_embedding_type != "absolute":
-            raise ValueError(f"Unsupported positional embedding type: {config.positional_embedding_type}")
+        self.dense = torch.nn.Linear(hidden_size, hidden_size)
+        if config.norm_type == "layer":
+            self.norm = torch.nn.LayerNorm(hidden_size, eps=config.layer_norm_eps)
+        elif config.norm_type == "rms":
+            self.norm = RMSNorm(hidden_size, eps=config.layer_norm_eps)
+        else:
+            raise ValueError(f"Unknown norm type: {config.norm_type}")
+        self.dropout = torch.nn.Dropout(config.dropout_prob)
+
+        if config.hidden_sizes[layer_idx] % config.num_attention_heads[layer_idx] != 0:
+            raise ValueError(
+                f"The hidden size ({config.hidden_sizes}) is not a multiple of the "
+                f"number of attention heads ({config.num_attention_heads})"
+            )
 
     def forward(
         self,
@@ -89,6 +97,10 @@ class MAESelfAttention(torch.nn.Module):
         attention_mask: torch.Tensor,
         embx: torch.Tensor,
     ) -> torch.Tensor:
+        if self.config.norm_location == "pre":
+            query_hidden_states = self.norm(query_hidden_states)
+            key_value_hidden_states = self.norm(key_value_hidden_states)
+
         batch_size, seq_len = attention_mask.shape
 
         expanded_key_value_hidden_states = torch.cat([embx, key_value_hidden_states], dim=1)
@@ -109,46 +121,18 @@ class MAESelfAttention(torch.nn.Module):
         enhanced_decoding_mask = attention_mask[:, None].logical_and(decoding_mask).logical_and(diag_mask)
         enhanced_decoding_mask = torch.nn.functional.pad(enhanced_decoding_mask, (embx.shape[1], 0, 0, 0), value=True)
 
-        attn_output = torch.nn.functional.scaled_dot_product_attention(
+        hidden_states = torch.nn.functional.scaled_dot_product_attention(
             query, key, value, enhanced_decoding_mask[:, None]
         )
-        attn_output = rearrange(
-            attn_output,
+        hidden_states = rearrange(
+            hidden_states,
             "b h s d -> b s (h d)",
             b=batch_size,
             h=self.num_attention_heads,
             s=seq_len,
             d=self.attention_head_size,
         )
-        return attn_output
 
-
-class MAEAttention(torch.nn.Module):
-    def __init__(self, config: TiteConfig, layer_idx: int, mask_prob: float = 0.0):
-        super().__init__()
-        self.config = config
-        self.self = MAESelfAttention(config, layer_idx, mask_prob)
-        hidden_size = config.hidden_sizes[layer_idx]
-        self.dense = torch.nn.Linear(hidden_size, hidden_size)
-        if config.norm_type == "layer":
-            self.norm = torch.nn.LayerNorm(hidden_size, eps=config.layer_norm_eps)
-        elif config.norm_type == "rms":
-            self.norm = RMSNorm(hidden_size, eps=config.layer_norm_eps)
-        else:
-            raise ValueError(f"Unknown norm type: {config.norm_type}")
-        self.dropout = torch.nn.Dropout(config.dropout_prob)
-
-    def forward(
-        self,
-        query_hidden_states: torch.Tensor,
-        key_value_hidden_states: torch.Tensor,
-        attention_mask: torch.Tensor,
-        embx: torch.Tensor,
-    ) -> torch.Tensor:
-        if self.config.norm_location == "pre":
-            query_hidden_states = self.norm(query_hidden_states)
-            key_value_hidden_states = self.norm(key_value_hidden_states)
-        hidden_states = self.self(query_hidden_states, key_value_hidden_states, attention_mask, embx)
         hidden_states = self.dense(hidden_states)
         hidden_states = self.dropout(hidden_states)
         hidden_states = hidden_states + query_hidden_states
