@@ -44,6 +44,7 @@ class EagerRotaryPositionalEmbeddings(nn.Module):
         self,
         dim: int,
         max_seq_len: int = 4096,
+        interleaved: bool = True,
         base: int = 10_000,
         dtype: Optional[torch.dtype] = None,
     ) -> None:
@@ -52,6 +53,8 @@ class EagerRotaryPositionalEmbeddings(nn.Module):
         self.dim = dim
         self.base = base
         self.max_seq_len = max_seq_len
+        if not interleaved:
+            raise NotImplementedError("Non-interleaved RoPE is not supported yet.")
         self._rope_init(dtype)
 
     # We need to explicitly define reset_parameters for FSDP initialization, see

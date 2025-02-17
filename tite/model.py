@@ -385,7 +385,7 @@ class TiteAttention(torch.nn.Module):
 
         if config.positional_embedding_type == "rotary":
             self.rope = self.ROPE_CLASSES[config.rope_implementation](
-                self.attention_head_size, config.max_position_embeddings, config.rotary_interleaved
+                self.attention_head_size, config.max_position_embeddings, interleaved=config.rotary_interleaved
             )
             self.alibi = None
         elif config.positional_embedding_type == "alibi":
