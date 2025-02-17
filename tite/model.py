@@ -510,28 +510,28 @@ class TiteAttention(torch.nn.Module):
 
         value = self.value(hidden_states)
         if packed_meta_data.max_seq_len == 1:
-            return value, None, packed_meta_data
+            hidden_states, attn_probs = value, None
+        else:
+            query = self.query(hidden_states)
+            key = self.key(hidden_states)
 
-        query = self.query(hidden_states)
-        key = self.key(hidden_states)
+            query_packed_meta_data = packed_meta_data
+            if self.pooling is not None and self.config.pooling_location == "attention":
+                query, query_packed_meta_data = self.pooling(query, packed_meta_data)
 
-        query_packed_meta_data = packed_meta_data
-        if self.pooling is not None and self.config.pooling_location == "attention":
-            query, query_packed_meta_data = self.pooling(query, packed_meta_data)
+            query = rearrange(query, "t (h d) -> t h d", h=self.num_attention_heads, d=self.attention_head_size)
+            key = rearrange(key, "t (h d) -> t h d", h=self.num_attention_heads, d=self.attention_head_size)
+            value = rearrange(value, "t (h d) -> t h d", h=self.num_attention_heads, d=self.attention_head_size)
 
-        query = rearrange(query, "t (h d) -> t h d", h=self.num_attention_heads, d=self.attention_head_size)
-        key = rearrange(key, "t (h d) -> t h d", h=self.num_attention_heads, d=self.attention_head_size)
-        value = rearrange(value, "t (h d) -> t h d", h=self.num_attention_heads, d=self.attention_head_size)
+            if self.rope is not None:
+                query = self.rope(query, query_packed_meta_data)
+                key = self.rope(key, packed_meta_data)
 
-        if self.rope is not None:
-            query = self.rope(query, query_packed_meta_data)
-            key = self.rope(key, packed_meta_data)
+            hidden_states, attn_probs = self.attention_function(
+                query, key, value, query_packed_meta_data, packed_meta_data, output_attention
+            )
 
-        hidden_states, attn_probs = self.attention_function(
-            query, key, value, query_packed_meta_data, packed_meta_data, output_attention
-        )
-
-        hidden_states = rearrange(hidden_states, "t h d -> t (h d)")
+            hidden_states = rearrange(hidden_states, "t h d -> t (h d)")
 
         hidden_states = self.dense(hidden_states)
         hidden_states = self.dropout(hidden_states)
