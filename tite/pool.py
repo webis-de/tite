@@ -321,9 +321,7 @@ class PackedAvgPool1d(torch.nn.Module):
         self.stride = stride
         self.implementation = implementation
 
-    def eager_forward(
-        self, packed_x: torch.Tensor, packed_meta_data: PackedMetaData
-    ) -> Tuple[torch.Tensor, Tuple[torch.Tensor, ...]]:
+    def eager_forward(self, packed_x: torch.Tensor, packed_meta_data: PackedMetaData) -> torch.Tensor:
         x = torch.zeros(
             len(packed_meta_data.seq_lens),
             packed_meta_data.max_seq_len,
@@ -360,8 +358,7 @@ class PackedAvgPool1d(torch.nn.Module):
         y = (x_blocks.sum(-1) / norm).to(packed_x)
         y_mask = torch.arange(y.shape[1], device=y.device)[None].expand(y.shape[0], -1) < output_seq_lens[:, None]
         y_packed = y[y_mask]
-        idcs = y_mask.nonzero(as_tuple=True)
-        return y_packed, idcs
+        return y_packed
 
     def forward(self, x: torch.Tensor, packed_meta_data: PackedMetaData) -> Tuple[torch.Tensor, PackedMetaData]:
         if packed_meta_data.max_seq_len == 1 or (self.kernel_size == 1 and self.stride == 1):
@@ -371,16 +368,18 @@ class PackedAvgPool1d(torch.nn.Module):
         y_max_seq_len = compute_output_shape(packed_meta_data.max_seq_len, self.kernel_size, self.stride)
         y_cu_seq_lens = torch.zeros(y_seq_lens.shape[0] + 1, dtype=packed_meta_data.cu_seq_lens.dtype, device=x.device)
         y_cu_seq_lens[1:] = torch.cumsum(y_seq_lens, dim=0, dtype=packed_meta_data.cu_seq_lens.dtype)
+        idcs = packed_meta_data.idcs
+        if idcs is not None:
+            batch_idcs = torch.arange(len(y_seq_lens), device=x.device).repeat_interleave(y_seq_lens)
+            position_idcs = torch.ones(y_cu_seq_lens[-1], device=x.device, dtype=torch.int32)
+            position_idcs[y_cu_seq_lens[1:-1]] = -y_seq_lens[:-1] + 1
+            position_idcs = position_idcs.cumsum(0) - 1
+            idcs = (batch_idcs, position_idcs)
 
         if self.implementation == "triton":
-            if packed_meta_data.idcs is not None:
-                raise ValueError(
-                    "Eager and sdpa attention implementation are not supported with Triton pooling implementation. "
-                    "Please use the eager pooling implementation."
-                )
-            y_packed_meta_data = PackedMetaData(y_seq_lens, y_cu_seq_lens, y_max_seq_len, None)
+            y_packed_meta_data = PackedMetaData(y_seq_lens, y_cu_seq_lens, y_max_seq_len, idcs)
             y = ApplyPooling_.apply(x, packed_meta_data, y_packed_meta_data, self.kernel_size, self.stride)
         elif self.implementation == "eager":
-            y, idcs = self.eager_forward(x, packed_meta_data)
+            y = self.eager_forward(x, packed_meta_data)
             y_packed_meta_data = PackedMetaData(y_seq_lens, y_cu_seq_lens, y_max_seq_len, idcs)
         return y, y_packed_meta_data

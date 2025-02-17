@@ -78,11 +78,8 @@ class EagerRotaryPositionalEmbeddings(nn.Module):
         self.register_buffer("cache", cache, persistent=False)
 
     def forward(self, x: Tensor, packed_meta_data: PackedMetaData) -> Tensor:
-        t_seq_len = x.shape[0]
-        position_idcs = torch.ones(t_seq_len, device=x.device, dtype=torch.int32)
-        position_idcs[packed_meta_data.cu_seq_lens[1:-1]] = -packed_meta_data.seq_lens[:-1] + 1
-        position_idcs = position_idcs.cumsum(0) - 1
-        rope_cache = self.cache[position_idcs].view(t_seq_len, 1, self.dim // 2, 2)
+        assert packed_meta_data.idcs is not None
+        rope_cache = self.cache[packed_meta_data.idcs[1]].view(x.shape[0], 1, self.dim // 2, 2)
 
         xshaped = x.view(*x.shape[:-1], self.dim // 2, 2)
 

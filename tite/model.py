@@ -228,10 +228,10 @@ class TiteModel(PreTrainedModel):
             cu_seq_lens,
             max_seq_len,
             (
-                idcs
-                if self.config._attn_implementation != "flash_attention_2"
-                or self.config.pooling_implementation == "eager"
-                else None
+                None
+                if self.config._attn_implementation == "flash_attention_2"
+                and self.config.pooling_implementation == "triton"
+                else idcs
             ),
         )
         hidden_states, all_hidden_states, all_attentions = self.encoder(
