@@ -64,9 +64,9 @@ def forward_pooling_kernel(
     kernel_size: tl.constexpr,
     stride: tl.constexpr,
 ):
-    pid_seq = tl.program_id(axis=0)
-    pid_batch = tl.program_id(axis=1)
-    pid_dim = tl.program_id(axis=2)
+    pid_dim = tl.program_id(axis=0)
+    pid_seq = tl.program_id(axis=1)
+    pid_batch = tl.program_id(axis=2)
 
     X_start_idx = tl.load(X_CU_SEQ_LENS + pid_batch)
     Y_start_idx = tl.load(Y_CU_SEQ_LENS + pid_batch)
@@ -113,9 +113,9 @@ def apply_forward_pooling(
     batch = x_cu_seq_lens.shape[0] - 1
     dim = x.shape[-1]
 
-    BLOCK_S = 8 if dim <= 128 else 4
-    BLOCK_D = 32 if dim <= 32 else (64 if dim <= 64 else (128 if dim <= 128 else 256))
-    grid = lambda META: (triton.cdiv(y_max_seq_len, META["BLOCK_S"]), batch, triton.cdiv(dim, META["BLOCK_D"]))  # noqa
+    BLOCK_D = min(triton.next_power_of_2(dim), 1024)
+    BLOCK_S = min(triton.next_power_of_2(y_max_seq_len), 4)
+    grid = lambda META: (triton.cdiv(dim, META["BLOCK_D"]), triton.cdiv(y_max_seq_len, META["BLOCK_S"]), batch)  # noqa
 
     # Need this, otherwise Triton tries to launch from cuda:0 and we get
     # ValueError: Pointer argument (at 0) cannot be accessed from Triton (cpu tensor?)
@@ -173,9 +173,9 @@ def backward_pooling_kernel(
     # the backward kernel indexes the gradient tensor as a dilated tensor
     # see the following article for details
     # https://medium.com/@mayank.utexas/backpropagation-for-convolution-with-strides-8137e4fc2710
-    pid_seq = tl.program_id(axis=0)
-    pid_batch = tl.program_id(axis=1)
-    pid_dim = tl.program_id(axis=2)
+    pid_dim = tl.program_id(axis=0)
+    pid_seq = tl.program_id(axis=1)
+    pid_batch = tl.program_id(axis=2)
 
     X_start_idx = tl.load(X_CU_SEQ_LENS + pid_batch)
     Y_start_idx = tl.load(Y_CU_SEQ_LENS + pid_batch)
@@ -224,9 +224,9 @@ def apply_backward_pooling(
     batch = x_cu_seq_lens.shape[0] - 1
     dim = x.shape[-1]
 
-    BLOCK_S = 8 if dim <= 128 else 4
-    BLOCK_D = 32 if dim <= 32 else (64 if dim <= 64 else (128 if dim <= 128 else 256))
-    grid = lambda META: (triton.cdiv(y_max_seq_len, META["BLOCK_S"]), batch, triton.cdiv(dim, META["BLOCK_D"]))  # noqa
+    BLOCK_D = min(triton.next_power_of_2(dim), 1024)
+    BLOCK_S = min(triton.next_power_of_2(y_max_seq_len), 4)
+    grid = lambda META: (triton.cdiv(dim, META["BLOCK_D"]), triton.cdiv(y_max_seq_len, META["BLOCK_S"]), batch)  # noqa
 
     padding = kernel_size - 1
     dilation = stride - 1
