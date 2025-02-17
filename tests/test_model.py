@@ -52,12 +52,12 @@ def test_same_as_legacy():
         strides=(2,) * 6,
         max_position_embeddings=64,
         positional_embedding_type="rotary",
-        rope_implementation="triton",
+        rope_implementation="eager",
         rotary_interleaved=True,
         norm_location="post",
         norm_type="layer",
-        attn_implementation="flash_attention_2",
-        pooling_implementation="triton",
+        attn_implementation="sdpa",
+        pooling_implementation="eager",
     )
     model = TiteModel(config).to(device).eval()
     legacy_config = TiteLegacyConfig(

@@ -22,11 +22,11 @@ def config() -> TiteConfig:
     return TiteConfig(
         vocab_size=32,
         num_hidden_layers=2,
-        hidden_size=(4, 4),
+        hidden_sizes=(4, 4),
         num_attention_heads=(2, 2),
-        intermediate_size=(8, 8),
-        kernel_size=(None, None),
-        stride=(None, None),
+        intermediate_sizes=(8, 8),
+        kernel_sizes=(None, None),
+        strides=(None, None),
         max_position_embeddings=16,
     )
 
@@ -53,11 +53,11 @@ def config() -> TiteConfig:
             TiteConfig(
                 vocab_size=32,
                 num_hidden_layers=2,
-                hidden_size=(4, 4),
+                hidden_sizes=(4, 4),
                 num_attention_heads=(2, 2),
-                intermediate_size=(8, 8),
-                kernel_size=(8, 8),
-                stride=(2, 1),
+                intermediate_sizes=(8, 8),
+                kernel_sizes=(8, 8),
+                strides=(2, 1),
                 max_position_embeddings=16,
                 max_length=16,
             ),
@@ -185,7 +185,7 @@ def test_same_as_bert_loss():
     transformation = DeterministicMLMMaskTokens(
         len(tokenizer), tokenizer.mask_token_id, tokenizer.cls_token_id, tokenizer.sep_token_id, 0.3
     )
-    predictor = MLMDecoder(config.vocab_size, config.hidden_size[0], config.hidden_act)
+    predictor = MLMDecoder(config.vocab_size, config.hidden_sizes[0], config.hidden_act)
     state_dict = {}
     for key, value in orig_model.cls.state_dict().items():
         state_dict[key.replace("predictions.", "").replace("transform.", "")] = value
