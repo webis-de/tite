@@ -31,11 +31,9 @@ class MSMARCOModule(LightningModule):
         self.tokenizer = tokenizer
         self.validation_step_outputs = []
         self.ndcgs = []
-        self.projection = torch.nn.Linear(self.model.config.hidden_size, self.model.config.hidden_size)
 
     def forward(self, encoding) -> Tensor:
         emb = self.model(**encoding).last_hidden_state
-        emb = self.projection(emb)
         return emb
 
     def training_step(self, batch) -> Tensor:
