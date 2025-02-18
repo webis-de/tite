@@ -2,8 +2,24 @@ from dataclasses import dataclass
 from typing import Literal, Tuple, overload
 
 import torch
-import triton
-import triton.language as tl
+
+try:
+    import triton
+    import triton.language as tl
+
+    _has_triton = True
+except ImportError:
+    _has_triton = False
+
+    class triton:
+        def jit(*args, **kwargs):
+            def decorator(func):
+                return func
+
+            return decorator
+
+    class tl:
+        constexpr = None
 
 
 @overload
@@ -317,6 +333,8 @@ class PackedAvgPool1d(torch.nn.Module):
         super().__init__()
         if stride > kernel_size:
             raise ValueError("Stride must be less than or equal to kernel size")
+        if implementation == "triton" and tl is None:
+            raise ValueError("Triton is not installed. Please install it to use the 'triton' implementation.")
         self.kernel_size = kernel_size
         self.stride = stride
         self.implementation = implementation
