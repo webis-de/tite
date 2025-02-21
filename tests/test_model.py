@@ -19,6 +19,7 @@ def config() -> TiteConfig:
         kernel_sizes=(8, 8, None),
         strides=(2, 1, None),
         max_position_embeddings=16,
+        rotary_interleaved=True,
         positional_embedding_type="absolute",
         attn_implementation="eager",
         rope_implementation="eager",

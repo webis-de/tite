@@ -1,3 +1,4 @@
+import inspect
 from copy import deepcopy
 from pathlib import Path
 from typing import Any
@@ -5,141 +6,92 @@ from typing import Any
 import torch
 from lightning import LightningModule, Trainer
 from lightning.pytorch.utilities import grad_norm
-from torch import Tensor
-from torch.nn import Module
 from transformers import PreTrainedTokenizerBase
 
 from .datasets import GLUEDataModule, IRDatasetsDataModule
 from .glue_module import GlueModule
-from .jepa import JEPA, LossFn
-from .model import TiteConfig, TiteModel
+from .model import TiteModel
 from .msmarco_module import MSMARCOModule
-from .predictor import MAEDecoder, MAEEnhancedDecoder, MLMDecoder
 
 
-class _DetachFromGrad(Module):
-    def __init__(self, module: Module, *args, **kwargs) -> None:
-        super().__init__(*args, **kwargs)
-        self.module = module
-
-    def forward(self, *args, **kwargs) -> Tensor:
-        with torch.no_grad():
-            output = self.module(*args, **kwargs)
-        assert isinstance(output, Tensor)
-        return output.detach()  # Better safe than sorry
+def _parse_kwargs(kwargs: dict[str, Any], module: torch.nn.Module) -> dict[str, Any]:
+    valid_keys = inspect.signature(module.forward).parameters.keys()
+    return {k: v for k, v in kwargs.items() if k in valid_keys}
 
 
-class ComposedEmbedding(torch.nn.Embedding):
-    def __init__(
-        self,
-        num_embeddings: int,
-        small_embedding_dim: int,
-        large_embedding_dim: int,
-        padding_idx: int | None = None,
-        max_norm: float | None = None,
-        norm_type: float = 2,
-        scale_grad_by_freq: bool = False,
-        sparse: bool = False,
-        _weight: Tensor | None = None,
-        _freeze: bool = False,
-        device=None,
-        dtype=None,
-    ) -> None:
-        super().__init__(
-            num_embeddings,
-            large_embedding_dim,
-            padding_idx,
-            max_norm,
-            norm_type,
-            scale_grad_by_freq,
-            sparse,
-            _weight,
-            _freeze,
-            device,
-            dtype,
-        )
-        self.linear = None
-        if small_embedding_dim != large_embedding_dim:
-            self.linear = torch.nn.Linear(large_embedding_dim, small_embedding_dim, bias=False)
-
-    def forward(self, input: Tensor) -> Tensor:
-        embeddings = torch.nn.functional.embedding(
-            input, self.weight, self.padding_idx, self.max_norm, self.norm_type, self.scale_grad_by_freq, self.sparse
-        )
-        if self.linear is not None:
-            embeddings = self.linear(embeddings)
-        return embeddings
-
-
-def tie_weights(student_embedding: torch.nn.Embedding, teacher_weight: torch.nn.Parameter) -> torch.nn.Embedding:
-    if student_embedding.weight.data.shape == teacher_weight.data.shape:
-        student_embedding.weight.data = teacher_weight.data
-        return student_embedding
+def tie_weights(encoder_embedding: torch.nn.Embedding, decoder_weight: torch.nn.Parameter) -> torch.nn.Embedding:
+    if encoder_embedding.weight.data.shape == decoder_weight.data.shape:
+        encoder_embedding.weight.data = decoder_weight.data
+        return encoder_embedding
     composed_embedding = ComposedEmbedding(
-        student_embedding.num_embeddings,
-        student_embedding.embedding_dim,
-        teacher_weight.data.shape[1],
-        student_embedding.padding_idx,
-        _weight=teacher_weight.data,
-    ).to(student_embedding.weight.device)
-    composed_embedding.weight.data = teacher_weight.data
+        encoder_embedding.num_embeddings,
+        encoder_embedding.embedding_dim,
+        decoder_weight.data.shape[1],
+        encoder_embedding.padding_idx,
+        _weight=decoder_weight.data,
+    ).to(encoder_embedding.weight.device)
+    composed_embedding.weight.data = decoder_weight.data
     return composed_embedding
 
 
 class TiteModule(LightningModule):
     def __init__(
         self,
-        student: Module,
-        teachers: list[Module | None],
+        encoder: TiteModel,
         tokenizer: PreTrainedTokenizerBase,
-        predictors: list[Module],
-        losses: list[LossFn],
-        detach_teacher_from_grad: bool = False,
+        decoders: list[torch.nn.Module],
+        predictors: list[torch.nn.Module],
+        losses: list[torch.nn.Module],
         log_additional_metrics: bool = False,
         validate_on_glue: bool = False,
-        validate_on_msmarco: bool = False,
+        validate_on_trec_dl: bool = False,
         log_gradients: bool = False,
     ) -> None:
         super().__init__()
-        self.student = student
-        self.teachers = torch.nn.ModuleList([teacher if teacher is not None else student for teacher in teachers])
+        self.encoder = encoder
         self.tokenizer = tokenizer
-        self.log_additional_metrics = log_additional_metrics
-        self.validate_on_glue = validate_on_glue
-        self.validate_on_msmarco = validate_on_msmarco
-        self.log_gradients = log_gradients
-
+        self.decoders = torch.nn.ModuleList([decoder if decoder is not None else encoder for decoder in decoders])
         self.predictors = torch.nn.ModuleList(predictors)
         self.losses = torch.nn.ModuleList(losses)
-        if detach_teacher_from_grad:
-            self.teacher = _DetachFromGrad(self.teacher)
-        self.jepa = JEPA(self.student, self.teachers, self.predictors, self.losses)
+
+        self.log_additional_metrics = log_additional_metrics
+        self.validate_on_glue = validate_on_glue
+        self.validate_on_trec_dl = validate_on_trec_dl
+        self.log_gradients = log_gradients
 
         self.tokens_seen = 0.0
 
     def on_train_start(self) -> None:
         # tie weights
-        decoder = None
-        position_embeddings = None
+        # first unify the decoder weights and embeddings for the predictors
+        decoder: torch.nn.Linear | None = None
+        position_embeddings: torch.nn.Embedding | None = None
         for predictor in self.predictors:
-            if isinstance(predictor, (MLMDecoder, MAEDecoder, MAEEnhancedDecoder)):
-                if decoder is None:
-                    decoder = predictor.decoder
-                else:
-                    predictor.decoder = decoder
-                if getattr(predictor, "embeddings", None) is not None:
-                    predictor.embeddings.word_embeddings.weight.data = decoder.weight.data
-                    if predictor.embeddings.position_embeddings is not None:
-                        if position_embeddings is None:
-                            position_embeddings = predictor.embeddings.position_embeddings
-                        else:
-                            predictor.embeddings.position_embeddings = position_embeddings
+            if not hasattr(predictor, "decoder"):
+                continue
+            if decoder is None:
+                decoder = getattr(predictor, "decoder", None)
+            setattr(predictor, "decoder", decoder)
+            embeddings = getattr(predictor, "embeddings", None)
+            if embeddings is not None:
+                assert decoder is not None
+                embeddings.word_embeddings.weight.data = decoder.weight.data
+                if embeddings.position_embeddings is not None:
+                    if position_embeddings is None:
+                        position_embeddings = embeddings.position_embeddings
+                    else:
+                        embeddings.position_embeddings = position_embeddings
 
-        self.student.embeddings.word_embeddings = tie_weights(self.student.embeddings.word_embeddings, decoder.weight)
-        if position_embeddings is not None and self.student.embeddings.position_embeddings is not None:
-            self.student.embeddings.position_embeddings = tie_weights(
-                self.student.embeddings.position_embeddings, position_embeddings.weight
+        # then tie the unified decoder weights and embeddings to the encoder
+        assert decoder is not None
+        self.encoder.embeddings.word_embeddings = tie_weights(self.encoder.embeddings.word_embeddings, decoder.weight)
+        if position_embeddings is not None and self.encoder.embeddings.position_embeddings is not None:
+            self.encoder.embeddings.position_embeddings = tie_weights(
+                self.encoder.embeddings.position_embeddings, position_embeddings.weight
             )
+        self.assert_same_weights()
+
+    def assert_same_weights(self):
         assert all(decoder.weight.data_ptr() == predictor.decoder.weight.data_ptr() for predictor in self.predictors)
         assert all(
             getattr(predictor, "embeddings", None) is None
@@ -152,87 +104,102 @@ class TiteModule(LightningModule):
             or position_embeddings.weight.data_ptr() == predictor.embeddings.position_embeddings.weight.data_ptr()
             for predictor in self.predictors
         )
-        assert self.student.embeddings.word_embeddings.weight.data_ptr() == decoder.weight.data_ptr()
-        if self.student.embeddings.position_embeddings is not None and position_embeddings is not None:
+        assert self.encoder.embeddings.word_embeddings.weight.data_ptr() == decoder.weight.data_ptr()
+        if self.encoder.embeddings.position_embeddings is not None and position_embeddings is not None:
             assert (
-                self.student.embeddings.position_embeddings.weight.data_ptr() == position_embeddings.weight.data_ptr()
+                self.encoder.embeddings.position_embeddings.weight.data_ptr() == position_embeddings.weight.data_ptr()
             )
+
+    def _validate_on_glue(self):
+        add_special_tokens = self.trainer.datamodule.collator.add_special_tokens
+        enable_progress_bar = self.trainer.progress_bar_callback is not None
+        # for task in TASK_COLUMN_NAMES:
+        metrics = {}
+        for task in ["mrpc"]:
+            glue = GLUEDataModule(
+                task=task,
+                tokenizer=self.tokenizer,
+                batch_size=32,
+                add_special_tokens=add_special_tokens,
+                streaming=False,
+            )
+            copy_encoder = deepcopy(self.encoder).train()
+            if hasattr(copy_encoder.config, "pooling") and getattr(copy_encoder.config, "pooling") is None:
+                copy_encoder.config.pooling = "first"
+            glue_module = GlueModule(copy_encoder, self.tokenizer, glue.hparams.name)
+            trainer = Trainer(
+                logger=False,
+                precision=(self.trainer.precision if self.trainer is not None else "bf16-mixed"),
+                max_epochs=10,
+                enable_checkpointing=False,
+                num_sanity_val_steps=0,
+                enable_progress_bar=enable_progress_bar,
+                limit_train_batches=2 if self.trainer is not None and self.trainer.sanity_checking else None,
+                limit_val_batches=2 if self.trainer is not None and self.trainer.sanity_checking else None,
+            )
+            trainer.fit(glue_module, glue)
+            for name, value in trainer.logged_metrics.items():
+                if "step" in name:
+                    continue
+                metrics[f"{glue.hparams.name}/{name}"] = value
+        return metrics
+
+    def _validate_on_trec_dl(self):
+        add_special_tokens = self.trainer.datamodule.collator.add_special_tokens
+        enable_progress_bar = self.trainer.progress_bar_callback is not None
+        msmarco = IRDatasetsDataModule(
+            tokenizer=self.tokenizer,
+            add_special_tokens=add_special_tokens,
+            trainset=("msmarco-passage/train/triples-small", "triples"),
+            valset=("msmarco-passage/trec-dl-2019/judged", "scoreddocs"),
+            batch_size=32,
+            inference_batch_size=256,
+        )
+        copy_encoder = deepcopy(self.encoder).train()
+        if hasattr(copy_encoder.config, "pooling") and getattr(copy_encoder.config, "pooling") is None:
+            copy_encoder.config.pooling = "first"
+        msmarco_module = MSMARCOModule(copy_encoder, self.tokenizer)
+        max_steps = 5_000
+        trainer = Trainer(
+            logger=False,
+            precision=(self.trainer.precision if self.trainer is not None else "bf16-mixed"),
+            max_steps=max_steps,
+            max_epochs=1,
+            enable_checkpointing=False,
+            num_sanity_val_steps=0,
+            val_check_interval=2 if self.trainer is not None and self.trainer.sanity_checking else max_steps,
+            enable_progress_bar=enable_progress_bar,
+            limit_train_batches=2 if self.trainer is not None and self.trainer.sanity_checking else None,
+            limit_val_batches=2 if self.trainer is not None and self.trainer.sanity_checking else None,
+        )
+        trainer.fit(msmarco_module, msmarco)
+        metrics = {}
+        for name, value in trainer.logged_metrics.items():
+            if "step" in name:
+                continue
+            metrics[f"trec-dl-2019/{name}"] = value
+        return metrics
 
     def on_validation_start(self) -> None:
         if self.trainer is None:
             return
         if self.trainer.limit_val_batches == 0:
             return
-        add_special_tokens = self.trainer.datamodule.collator.add_special_tokens
-        enable_progress_bar = self.trainer.progress_bar_callback is not None
-        # Train on GLUE
         if self.validate_on_glue:
-            # for task in TASK_COLUMN_NAMES:
-            for task in ["mrpc"]:
-                glue = GLUEDataModule(
-                    task=task,
-                    tokenizer=self.tokenizer,
-                    batch_size=32,
-                    add_special_tokens=add_special_tokens,
-                    streaming=False,
-                )
-                copy_student = deepcopy(self.student).train()
-                if hasattr(copy_student.config, "pooling") and getattr(copy_student.config, "pooling") is None:
-                    copy_student.config.pooling = "first"
-                glue_module = GlueModule(copy_student, self.tokenizer, glue.hparams.name)
-                trainer = Trainer(
-                    logger=False,
-                    precision=(self.trainer.precision if self.trainer is not None else "bf16-mixed"),
-                    max_epochs=10,
-                    enable_checkpointing=False,
-                    num_sanity_val_steps=0,
-                    enable_progress_bar=enable_progress_bar,
-                    limit_train_batches=2 if self.trainer is not None and self.trainer.sanity_checking else None,
-                    limit_val_batches=2 if self.trainer is not None and self.trainer.sanity_checking else None,
-                )
-                trainer.fit(glue_module, glue)
-                metrics = trainer.logged_metrics
-                for name, value in metrics.items():
-                    if "step" in name:
-                        continue
-                    self.log(f"{glue.hparams.name}/{name}", value, on_step=False, on_epoch=True)
-        if self.validate_on_msmarco:
-            msmarco = IRDatasetsDataModule(
-                tokenizer=self.tokenizer,
-                add_special_tokens=add_special_tokens,
-                trainset=("msmarco-passage/train/triples-small", "triples"),
-                valset=("msmarco-passage/trec-dl-2019/judged", "scoreddocs"),
-                batch_size=128,
-                inference_batch_size=256,
-            )
-            copy_student = deepcopy(self.student).train()
-            if hasattr(copy_student.config, "pooling") and getattr(copy_student.config, "pooling") is None:
-                copy_student.config.pooling = "first"
-            msmarco_module = MSMARCOModule(copy_student, self.tokenizer)
-            max_steps = 5_000
-            trainer = Trainer(
-                logger=False,
-                precision=(self.trainer.precision if self.trainer is not None else "bf16-mixed"),
-                max_steps=max_steps,
-                max_epochs=1,
-                enable_checkpointing=False,
-                num_sanity_val_steps=0,
-                val_check_interval=2 if self.trainer is not None and self.trainer.sanity_checking else max_steps,
-                enable_progress_bar=enable_progress_bar,
-                limit_train_batches=2 if self.trainer is not None and self.trainer.sanity_checking else None,
-                limit_val_batches=2 if self.trainer is not None and self.trainer.sanity_checking else None,
-            )
-            trainer.fit(msmarco_module, msmarco)
-            metrics = trainer.logged_metrics
+            metrics = self._validate_on_glue()
             for name, value in metrics.items():
-                if "step" in name:
-                    continue
-                self.log(f"trec-dl-2019/{name}", value, on_step=False, on_epoch=True)
+                self.log(name, value, on_step=False, on_epoch=True)
+        if self.validate_on_trec_dl:
+            metrics = self._validate_on_trec_dl()
+            for name, value in metrics.items():
+                self.log(name, value, on_step=False, on_epoch=True)
 
     def on_before_optimizer_step(self, optimizer):
+        if not self.log_gradients:
+            return
         for name, module in (
-            [("student", self.student)]
-            + [(f"teacher_{idx}", teacher) for idx, teacher in enumerate(self.teachers)]
+            [("encoder", self.encoder)]
+            + [(f"decoder_{idx}", decoder) for idx, decoder in enumerate(self.decoders)]
             + [(f"predictor_{idx}", predictor) for idx, predictor in enumerate(self.predictors)]
         ):
             norms = grad_norm(module, norm_type=2)
@@ -248,16 +215,29 @@ class TiteModule(LightningModule):
         # using the GlueModule
         return
 
-    def training_step(self, batch: dict[str, torch.Tensor]) -> Tensor:
-        student_input = batch.pop("student_input")
-        teacher_input = batch.pop("teacher_input", None)
-        # JEPA will try to predict the original from the transformed input within the embedding space, i.e.,
-        #   Loss(pred(student(studentinput), aux), teacher(teacherinput))
-        losses, output = self.jepa(student_input, teacher_input, **batch)
+    def training_step(self, batch: dict[str, torch.Tensor]) -> torch.Tensor:
+        encoder_input = batch.pop("encoder_input")
+        decoder_input = batch.pop("decoder_input", None)
+
+        encoder_aux = {k[8:]: v for k, v in batch.items() if k.startswith("encoder_")}
+        decoder_aux = {k[8:]: v for k, v in batch.items() if k.startswith("decoder_")}
+        encoder_output = self.encoder(**encoder_input).last_hidden_state
+        losses = {}
+        for decoder, predictor, loss in zip(self.decoders, self.predictors, self.losses):
+            if decoder_input is None or isinstance(decoder, CopyEncoder):
+                decoder_output = encoder_output.detach()
+            else:
+                decoder_kwargs = _parse_kwargs({**encoder_aux, **decoder_aux}, decoder)
+                decoder_output = decoder(**target, **decoder_kwargs)
+                if isinstance(decoder_output, TiteModelOutput):
+                    decoder_output = decoder_output.last_hidden_state
+            predictor_kwargs = _parse_kwargs({**encoder_aux, **decoder_aux, **(target or {})}, predictor)
+            pred = predictor(encoder_output, **predictor_kwargs)
+            losses[loss.__class__.__name__] = loss(pred, emby)
         losses["total"] = sum(losses.values())
         num_tokens = max(
-            student_input["attention_mask"].sum().item(),
-            0 if teacher_input is None else teacher_input["attention_mask"].sum().item(),
+            encoder_input["attention_mask"].sum().item(),
+            0 if decoder_input is None else decoder_input["attention_mask"].sum().item(),
         )
         self.tokens_seen += num_tokens
         self.log("tokens_seen", self.tokens_seen, on_step=True, reduce_fx="max")  # We sum it up ourselves
@@ -266,7 +246,7 @@ class TiteModule(LightningModule):
         return losses["total"]
 
     def save_pretrained(self, save_path: str | Path) -> None:
-        self.student.save_pretrained(save_path)
+        self.encoder.save_pretrained(save_path)
         self.tokenizer.save_pretrained(save_path)
 
     def on_save_checkpoint(self, *args, **kwargs) -> None:

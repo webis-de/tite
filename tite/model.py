@@ -18,6 +18,48 @@ from .pool import PackedAvgPool1d, PackedMetaData, compute_output_shape
 from .rope import EagerRotaryPositionalEmbeddings, TritonRotaryPositionalEmbeddings
 
 
+class ComposedEmbedding(torch.nn.Embedding):
+    def __init__(
+        self,
+        num_embeddings: int,
+        small_embedding_dim: int,
+        large_embedding_dim: int,
+        padding_idx: int | None = None,
+        max_norm: float | None = None,
+        norm_type: float = 2,
+        scale_grad_by_freq: bool = False,
+        sparse: bool = False,
+        _weight: torch.Tensor | None = None,
+        _freeze: bool = False,
+        device=None,
+        dtype=None,
+    ) -> None:
+        super().__init__(
+            num_embeddings,
+            large_embedding_dim,
+            padding_idx,
+            max_norm,
+            norm_type,
+            scale_grad_by_freq,
+            sparse,
+            _weight,
+            _freeze,
+            device,
+            dtype,
+        )
+        self.linear = None
+        if small_embedding_dim != large_embedding_dim:
+            self.linear = torch.nn.Linear(large_embedding_dim, small_embedding_dim, bias=False)
+
+    def forward(self, input: torch.Tensor) -> torch.Tensor:
+        embeddings = torch.nn.functional.embedding(
+            input, self.weight, self.padding_idx, self.max_norm, self.norm_type, self.scale_grad_by_freq, self.sparse
+        )
+        if self.linear is not None:
+            embeddings = self.linear(embeddings)
+        return embeddings
+
+
 class RMSNorm(torch.nn.Module):
     """Llama2 RMSNorm implementation"""
 
