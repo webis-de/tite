@@ -50,7 +50,7 @@ class TiteModule(LightningModule):
         tokenizer: PreTrainedTokenizerBase,
         decoders: list[Decoder],
         teachers: list[Teacher],
-        losses: list[Loss],
+        loss_functions: list[Loss],
         log_additional_metrics: bool = False,
         validate_on_glue: bool = False,
         validate_on_trec_dl: bool = False,
@@ -61,7 +61,7 @@ class TiteModule(LightningModule):
         self.tokenizer = tokenizer
         self.decoders = torch.nn.ModuleList(decoders)
         self.teachers = teachers
-        self.losses = torch.nn.ModuleList(losses)
+        self.loss_functions = torch.nn.ModuleList(loss_functions)
 
         self.log_additional_metrics = log_additional_metrics
         self.validate_on_glue = validate_on_glue
@@ -229,7 +229,9 @@ class TiteModule(LightningModule):
 
         encoder_output = self.encoder(**encoder_encoding).last_hidden_state
         losses = {}
-        for decoder_input, decoder, teacher, loss in zip(decoder_inputs, self.decoders, self.teachers, self.losses):
+        for decoder_input, decoder, teacher, loss_function in zip(
+            decoder_inputs, self.decoders, self.teachers, self.loss_functions
+        ):
             decoder_encoding, decoder_auxiliary_data = decoder_input
             decoder_kwargs = _parse_kwargs(
                 {
@@ -245,7 +247,7 @@ class TiteModule(LightningModule):
                 {**encoder_auxiliary_data, **decoder_auxiliary_data, **decoder_encoding}, teacher
             )
             target = teacher(**teacher_kwargs)
-            losses[loss.__class__.__name__] = loss(decoder_output, target)
+            losses[loss_function.__class__.__name__] = loss_function(decoder_output, target)
         losses["total"] = sum(losses.values())
         num_tokens = encoder_encoding["attention_mask"].sum()
         self.tokens_seen += num_tokens.to(self.tokens_seen.device)
