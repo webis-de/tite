@@ -1,9 +1,9 @@
 from typing import Any, Literal
 
 from torch.utils.data import DataLoader, Dataset
-from transformers import PreTrainedTokenizerBase
+from transformers import BatchEncoding, PreTrainedTokenizerBase
 
-from ..transformations import CopyStudentTransformation, StringTransformation, TokenTransformation
+from ..transformation import StringTransformation, TokenTransformation
 from .basehfdatamodule import BaseHFDataModule, Collator
 
 
@@ -22,91 +22,70 @@ class TransformationCollator(Collator):
         self,
         tokenizer: PreTrainedTokenizerBase,
         text_keys: tuple[str, str | None],
-        add_special_tokens: bool = True,
+        encoder_string_transformations: list[StringTransformation] | None,
+        decoder_string_transformations: list[list[StringTransformation] | Literal["encoder"] | None],
+        encoder_token_transformations: list[TokenTransformation] | None,
+        decoder_token_transformations: list[list[TokenTransformation] | Literal["encoder"] | None],
         max_length: int | None = None,
-        student_string_transformations: list[StringTransformation] | None = None,
-        teacher_string_transformations: list[StringTransformation] | Literal["student", False] | None = None,
-        student_token_transformations: list[TokenTransformation] | None = None,
-        teacher_token_transformations: list[TokenTransformation] | Literal["student", False] | None = None,
     ) -> None:
         if text_keys[1] is not None:
             raise ValueError("Text pairs are not supported")
-        super().__init__(tokenizer, text_keys, max_length, add_special_tokens)
-        self.student_string_transformations = student_string_transformations or []
-        if teacher_string_transformations == "student":
-            self.teacher_string_transformations: list[StringTransformation] | None = self.student_string_transformations
-        elif teacher_string_transformations is False:
-            self.teacher_string_transformations = None
-        else:
-            self.teacher_string_transformations = teacher_string_transformations or []
-        self.student_token_transformations = student_token_transformations or []
-        if teacher_token_transformations == "student":
-            self.teacher_token_transformations: list[TokenTransformation] | None = self.student_token_transformations
-        elif teacher_token_transformations is False:
-            self.teacher_token_transformations = None
-        else:
-            self.teacher_token_transformations = teacher_token_transformations or []
+        super().__init__(tokenizer, text_keys, max_length)
+        self.encoder_string_transformations = encoder_string_transformations or []
+        self.decoder_string_transformations = [
+            self.encoder_string_transformations if string_transformations == "encoder" else string_transformations or []
+            for string_transformations in decoder_string_transformations
+        ]
+        self.encoder_token_transformations = encoder_token_transformations or []
+        self.decoder_token_transformations = [
+            self.encoder_token_transformations if token_transformations == "encoder" else token_transformations or []
+            for token_transformations in decoder_token_transformations
+        ]
+        if len(self.decoder_string_transformations) != len(self.decoder_token_transformations):
+            raise ValueError("Number of decoder string and token transformations must match")
 
-    def apply_string_transformations(self, agg: dict) -> tuple[dict, dict]:
-        transformed: dict[str, list] = {}
+    def apply_string_transformations(self, agg: dict) -> tuple[list[list[str]], list[dict]]:
+        all_transformed_texts: list[list[str]] = []
+        all_auxiliary_data: list[dict] = []
         text_key = self.text_keys[0]
-        aux: dict[str, Any] = {}
-        for name, transformations in (
-            ("student", self.student_string_transformations),
-            ("teacher", self.teacher_string_transformations),
-        ):
-            texts = agg[text_key]
-            if transformations is None:
-                continue
-            if transformations and isinstance(transformations[0], CopyStudentTransformation):
-                for key, item in list(transformed.items()):
-                    if key.startswith("student_"):
-                        transformed[key.replace("student_", "teacher_")] = item
-            else:
-                transformed_idcs_and_texts = [(idx, text) for idx, text in enumerate(texts)]
-                for transformation in transformations:
-                    transformed_idcs_and_texts, transform_aux = transformation(transformed_idcs_and_texts)
-                    aux = {**aux, **transform_aux}
-                batch_idcs, transformed_texts = zip(*transformed_idcs_and_texts)
-                transformed[f"{name}_{text_key}"] = list(transformed_texts)
-                aux[f"{name}_batch_idcs"] = batch_idcs
-        agg[text_key] = transformed[f"student_{text_key}"] + transformed.get(f"teacher_{text_key}", [])
-        return agg, aux
+        texts = agg[text_key]
+        for transformations in [self.encoder_string_transformations, *self.decoder_string_transformations]:
+            auxiliary_data = {}
+            transformed_idcs_and_texts = [(idx, text) for idx, text in enumerate(texts)]
+            for transformation in transformations:
+                transformed_idcs_and_texts, transform_auxiliary_data = transformation(transformed_idcs_and_texts)
+                auxiliary_data = {**auxiliary_data, **transform_auxiliary_data}
+            batch_idcs, transformed_texts = zip(*transformed_idcs_and_texts)
+            all_transformed_texts.append(list(transformed_texts))
+            auxiliary_data["batch_idcs"] = batch_idcs
+            all_auxiliary_data.append(auxiliary_data)
+        return all_transformed_texts, all_auxiliary_data
 
-    def apply_token_transformations(self, encoded: dict) -> tuple[dict, dict]:
-        aux: dict[str, Any] = {}
-        input_ids = encoded["input_ids"]
-        attention_mask = encoded["attention_mask"]
-        if self.teacher_string_transformations is None:
-            student_input = {"input_ids": input_ids, "attention_mask": attention_mask}
-            teacher_input = None
-        else:
-            student_input = {
-                "input_ids": input_ids[: len(input_ids) // 2],
-                "attention_mask": attention_mask[: len(input_ids) // 2],
-            }
-            teacher_input = {
-                "input_ids": input_ids[len(input_ids) // 2 :],
-                "attention_mask": attention_mask[len(input_ids) // 2 :],
-            }
-        for transformation in self.student_token_transformations:
-            student_input, transform_aux = transformation(**student_input)
-            transform_aux = {f"student_{k}": v for k, v in transform_aux.items()}
-            aux = {**aux, **transform_aux}
-        out = {"student_input": student_input}
-        if teacher_input is not None and self.teacher_token_transformations is not None:
-            for transformation in self.teacher_token_transformations:
-                teacher_input, transform_aux = transformation(**teacher_input)
-                transform_aux = {f"teacher_{k}": v for k, v in transform_aux.items()}
-                aux = {**aux, **transform_aux}
-            out["teacher_input"] = teacher_input
-        return out, aux
+    def apply_token_transformations(self, encodings: list[BatchEncoding]) -> tuple[list[BatchEncoding], list[dict]]:
+        all_transformed_encodings = []
+        all_auxiliary_data: list[dict] = []
+        all_transformations = [self.encoder_token_transformations] + self.decoder_token_transformations
+        assert len(encodings) == len(all_transformations)
+        for encoding, transformations in zip(encodings, all_transformations):
+            auxiliary_data = {}
+            transformed_encoding = encoding
+            for transformation in transformations:
+                transformed_encoding, transform_auxiliary_data = transformation(encoding)
+                auxiliary_data = {**auxiliary_data, **transform_auxiliary_data}
+            all_transformed_encodings.append(transformed_encoding)
+            all_auxiliary_data.append(auxiliary_data)
+        return all_transformed_encodings, all_auxiliary_data
 
-    def tokenize(self, agg: dict) -> dict:
-        agg, string_aux = self.apply_string_transformations(agg)
-        encoded = super().tokenize(agg)
-        encoded, token_aux = self.apply_token_transformations(encoded)
-        return {**encoded, **string_aux, **token_aux}
+    def tokenize(self, agg: dict) -> list[tuple[BatchEncoding, dict]]:
+        transformed_texts, string_auxiliary_data = self.apply_string_transformations(agg)
+        encodings = []
+        for texts in transformed_texts:
+            encodings.append(super().tokenize({self.text_keys[0]: texts}))
+        encodings, token_auxiliary_data = self.apply_token_transformations(encodings)
+        out = []
+        for encoding, string_data, token_data in zip(encodings, string_auxiliary_data, token_auxiliary_data):
+            out.append((encoding, {**string_data, **token_data}))
+        return out
 
 
 class FineWebDataModule(BaseHFDataModule):

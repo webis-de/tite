@@ -6,7 +6,7 @@ import pandas as pd
 from lightning import LightningDataModule
 from torch.utils.data import DataLoader, IterableDataset
 
-from ..tokenizer import TiteTokenizer
+from ..model.tokenizer import TiteTokenizer
 from .commons import seed_or_none
 
 SplitType = Literal["qrels", "triples", "scoreddocs"]

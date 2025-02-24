@@ -1,7 +1,7 @@
 import torch
 
-from tite.pool import PackedMetaData
-from tite.rope import EagerRotaryPositionalEmbeddings, TritonRotaryPositionalEmbeddings
+from tite.model.pool import PackedMetaData
+from tite.model.rope import EagerRotaryPositionalEmbeddings, TritonRotaryPositionalEmbeddings
 
 
 def test_rope():

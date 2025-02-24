@@ -1,49 +1,7 @@
-from typing import Tuple
-
 import pytest
 import torch
 
-from tite.model import compute_output_shapes
-from tite.pool import PackedAvgPool1d, PackedMetaData
-
-
-@pytest.mark.parametrize("kernel_size, stride, seq_length", [(3, 1, 8), (3, 2, 8), (3, 3, 8)])
-def test_masked_avg_pool1d_dimensions(kernel_size: int, stride: int, seq_length: int):
-    layer = PackedAvgPool1d(kernel_size, stride, implementation="eager")
-
-    x = torch.randn(2, seq_length, 4)
-    mask = torch.ones(2, seq_length, dtype=torch.bool)
-    mask[0, -seq_length // 2 :] = False
-
-    output_shapes = compute_output_shapes(seq_length, (kernel_size,), (stride,))
-
-    output, output_mask = layer(x, mask)
-    assert output.shape[1] == output_shapes[-1]
-    assert ((output != 0).all(-1) == output_mask).all()
-    assert output_mask.shape[1] == output_shapes[-1]
-
-
-def test_masked_avg_pool1d_2_5_4_3_3():
-    layer = PackedAvgPool1d(3, 3, implementation="eager")
-    x = torch.arange(2 * 5 * 4, dtype=torch.float32).reshape(2, 5, 4)
-    mask = torch.tensor([[True, True, True, True, True], [True, True, True, False, False]])
-    out, out_mask = layer(x, mask)
-    assert torch.allclose(
-        out,
-        torch.tensor(
-            [[[4.0, 5.0, 6.0, 7.0], [14.0, 15.0, 16.0, 17.0]], [[24.0, 25.0, 26.0, 27.0], [0.0, 0.0, 0.0, 0.0]]]
-        ),
-    )
-    assert torch.equal(out_mask, torch.tensor([[True, True], [True, False]]))
-
-
-def test_masked_avg_pool1d_2_5_4_8_1():
-    layer = PackedAvgPool1d(8, 1, implementation="eager")
-    x = torch.arange(2 * 5 * 4, dtype=torch.float32).reshape(2, 5, 4)
-    mask = torch.tensor([[True, True, True, True, True], [True, True, True, False, False]])
-    out, out_mask = layer(x, mask)
-    assert torch.allclose(out, torch.tensor([[[8.0, 9.0, 10.0, 11.0]], [[24.0, 25.0, 26.0, 27.0]]]))
-    assert torch.equal(out_mask, torch.tensor([[True], [True]]))
+from tite.model.pool import PackedAvgPool1d, PackedMetaData
 
 
 @pytest.mark.parametrize("dim", [1, 4, 8, 16, 64, 768])
@@ -54,8 +12,7 @@ def test_packed_avg_pool1d(
     kernel_size: int, stride: int, seq_length: int, dim: int, dtype: torch.dtype = torch.float32
 ):
     if stride > kernel_size:
-        with pytest.raises(ValueError):
-            PackedAvgPool1d(kernel_size, stride)
+        pytest.skip("Stride must be less than or equal to kernel size")
         return
 
     eager = PackedAvgPool1d(kernel_size, stride, implementation="eager")

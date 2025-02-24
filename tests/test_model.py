@@ -2,10 +2,10 @@ import pytest
 import torch
 from transformers import BertConfig, BertModel
 
-from tite.legacy import TiteConfig as TiteLegacyConfig
-from tite.legacy import TiteModel as TiteLegacyModel
-from tite.model import TiteConfig, TiteModel
-from tite.pool import compute_output_shape
+from tite.model.legacy import TiteConfig as TiteLegacyConfig
+from tite.model.legacy import TiteModel as TiteLegacyModel
+from tite.model.pool import compute_output_shape
+from tite.model.tite import TiteConfig, TiteModel
 
 
 @pytest.fixture

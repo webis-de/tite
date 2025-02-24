@@ -2,17 +2,15 @@ from typing import Literal
 
 import torch
 from einops import rearrange
-from torch import Tensor
-from torch.nn import Module
 from transformers import BertConfig as OriginalBertConfig
 from transformers import BertForMaskedLM, PreTrainedModel
-from transformers.activations import ACT2FN
 
-from .bert import BertConfig, BertModel
-from .model import RMSNorm, TiteConfig, TiteLayer, TiteMLP
+from ..model.bert import BertConfig, BertModel
+from ..model.tite import ACT2FN, RMSNorm, TiteConfig, TiteMLP
+from .decoder import Decoder
 
 
-class MLMDecoder(Module):
+class MLMDecoder(Decoder):
     def __init__(
         self,
         vocab_size: int,
@@ -36,11 +34,11 @@ class MLMDecoder(Module):
     def _tie_weights(self):
         self.decoder.bias = self.bias
 
-    def forward(self, hidden_states: torch.Tensor, *args, **kwargs) -> torch.Tensor:
-        hidden_states = self.dense(hidden_states)
-        hidden_states = self.transform_act_fn(hidden_states)
-        hidden_states = self.norm(hidden_states)
-        logits = self.decoder(hidden_states)
+    def forward(self, encoder_output: torch.Tensor, *args, **kwargs) -> torch.Tensor:
+        encoder_output = self.dense(encoder_output)
+        encoder_output = self.transform_act_fn(encoder_output)
+        encoder_output = self.norm(encoder_output)
+        logits = self.decoder(encoder_output)
         return logits
 
 
@@ -56,7 +54,7 @@ class HFMLMDecoder(MLMDecoder):
         self.load_state_dict(state_dict)
 
 
-class MAEAttention(torch.nn.Module):
+class MAEEnhancedAttention(torch.nn.Module):
     def __init__(self, config: TiteConfig, layer_idx: int, mask_prob: float = 0.0):
         super().__init__()
         if config.positional_embedding_type != "absolute":
@@ -95,7 +93,7 @@ class MAEAttention(torch.nn.Module):
         query_hidden_states: torch.Tensor,
         key_value_hidden_states: torch.Tensor,
         attention_mask: torch.Tensor,
-        embx: torch.Tensor,
+        encoder_output: torch.Tensor,
     ) -> torch.Tensor:
         if self.config.norm_location == "pre":
             query_hidden_states = self.norm(query_hidden_states)
@@ -103,7 +101,7 @@ class MAEAttention(torch.nn.Module):
 
         batch_size, seq_len = attention_mask.shape
 
-        expanded_key_value_hidden_states = torch.cat([embx, key_value_hidden_states], dim=1)
+        expanded_key_value_hidden_states = torch.cat([encoder_output, key_value_hidden_states], dim=1)
 
         kv = self.Wkv(expanded_key_value_hidden_states)
         kv = rearrange(kv, "b s (t h d) -> t b h s d", t=2, h=self.num_attention_heads, d=self.attention_head_size)
@@ -116,10 +114,12 @@ class MAEAttention(torch.nn.Module):
             h=self.num_attention_heads,
             d=self.attention_head_size,
         )
-        decoding_mask = torch.rand((batch_size, seq_len, seq_len), device=embx.device) >= self.mask_prob
-        diag_mask = ~torch.eye(seq_len, device=embx.device).bool()
+        decoding_mask = torch.rand((batch_size, seq_len, seq_len), device=encoder_output.device) >= self.mask_prob
+        diag_mask = ~torch.eye(seq_len, device=encoder_output.device).bool()
         enhanced_decoding_mask = attention_mask[:, None].logical_and(decoding_mask).logical_and(diag_mask)
-        enhanced_decoding_mask = torch.nn.functional.pad(enhanced_decoding_mask, (embx.shape[1], 0, 0, 0), value=True)
+        enhanced_decoding_mask = torch.nn.functional.pad(
+            enhanced_decoding_mask, (encoder_output.shape[1], 0, 0, 0), value=True
+        )
 
         hidden_states = torch.nn.functional.scaled_dot_product_attention(
             query, key, value, enhanced_decoding_mask[:, None]
@@ -164,7 +164,7 @@ class MAEEnhancedEmbeddings(torch.nn.Module):
         return embeddings
 
 
-class MAEEnhancedDecoder(PreTrainedModel):
+class MAEEnhancedDecoder(PreTrainedModel, Decoder):
 
     _supports_sdpa = True
 
@@ -173,11 +173,9 @@ class MAEEnhancedDecoder(PreTrainedModel):
         hidden_size: int,
         num_attention_heads: int,
         intermediate_size: int,
-        mask_id: int,
         mask_prob: float,
         norm_location: Literal["pre", "post"] = "post",
         norm_type: Literal["rms", "layer"] = "layer",
-        query_strategy: Literal["embx", "mask"] = "embx",
         subvectors: bool = False,
     ):
         config = BertConfig(
@@ -191,12 +189,10 @@ class MAEEnhancedDecoder(PreTrainedModel):
             norm_type=norm_type,
         )
         super().__init__(config)
-        self.mask_id = mask_id
-        self.query_strategy = query_strategy
         self.subvectors = subvectors
 
         self.embeddings = MAEEnhancedEmbeddings(config)
-        self.attention = MAEAttention(config, 0, mask_prob)
+        self.attention = MAEEnhancedAttention(config, 0, mask_prob)
         self.mlp = TiteMLP(config, 0)
 
         if config.norm_location == "pre":
@@ -243,13 +239,13 @@ class MAEEnhancedDecoder(PreTrainedModel):
 
     def forward(
         self,
-        embx: Tensor,
+        encoder_output: torch.Tensor,
         input_ids: torch.Tensor,
         attention_mask: torch.Tensor | None = None,
         special_tokens_mask: torch.Tensor | None = None,
     ) -> torch.Tensor:
-        if embx.shape[1] > 1:
-            embx = embx[:, [0]]
+        if encoder_output.shape[1] > 1:
+            encoder_output = encoder_output[:, [0]]
         if attention_mask is None:
             attention_mask = torch.ones_like(input_ids, dtype=torch.bool)
         if special_tokens_mask is None:
@@ -257,19 +253,14 @@ class MAEEnhancedDecoder(PreTrainedModel):
         attention_mask = attention_mask.bool() & ~special_tokens_mask.bool()
 
         key_value_hidden_states = self.embeddings(input_ids)
-        if self.query_strategy == "embx":
-            query_hidden_states = embx.expand_as(key_value_hidden_states)
-            if self.embeddings.position_embeddings is not None:
-                position_embeddings = self.embeddings.position_embeddings(
-                    torch.arange(input_ids.shape[1], device=embx.device)
-                )
-                query_hidden_states = query_hidden_states + position_embeddings
-        elif self.query_strategy == "mask":
-            query_hidden_states = self.embeddings(torch.full_like(input_ids, self.mask_id), attention_mask)
-        else:
-            raise ValueError(f"Unknown query strategy: {self.query_strategy}")
+        query_hidden_states = encoder_output.expand_as(key_value_hidden_states)
+        if self.embeddings.position_embeddings is not None:
+            position_embeddings = self.embeddings.position_embeddings(
+                torch.arange(input_ids.shape[1], device=encoder_output.device)
+            )
+            query_hidden_states = query_hidden_states + position_embeddings
 
-        hidden_states = self.attention(query_hidden_states, key_value_hidden_states, attention_mask, embx)
+        hidden_states = self.attention(query_hidden_states, key_value_hidden_states, attention_mask, encoder_output)
         hidden_states = self.mlp(hidden_states)
         hidden_states = self.norm(hidden_states)
         logits = self.mlm_decoder(hidden_states)
@@ -284,12 +275,14 @@ class MAEDecoder(BertModel):
 
         self.post_init()
 
-    def forward(self, embx: Tensor, input_ids: Tensor, attention_mask: Tensor, *args, **kwargs) -> Tensor:
+    def forward(
+        self, encoder_output: torch.Tensor, input_ids: torch.Tensor, attention_mask: torch.Tensor, *args, **kwargs
+    ) -> torch.Tensor:
         attention_mask = attention_mask.bool()
         hidden_states = self.embeddings(input_ids, attention_mask)
-        num_sub_vectors = embx.shape[-1] // hidden_states.shape[-1]
-        embx = embx.view(embx.shape[0], num_sub_vectors, hidden_states.shape[-1])
-        hidden_states = torch.cat([embx, hidden_states], dim=1)
+        num_sub_vectors = encoder_output.shape[-1] // hidden_states.shape[-1]
+        encoder_output = encoder_output.view(encoder_output.shape[0], num_sub_vectors, hidden_states.shape[-1])
+        hidden_states = torch.cat([encoder_output, hidden_states], dim=1)
         attention_mask = torch.nn.functional.pad(attention_mask, (num_sub_vectors, 0), value=True)
         hidden_states = self.encoder(hidden_states, attention_mask)
         hidden_states = hidden_states[:, num_sub_vectors:]
@@ -299,135 +292,6 @@ class MAEDecoder(BertModel):
 
 class BOWDecoder(MLMDecoder):
 
-    def forward(self, hidden_states: Tensor, *args, **kwargs) -> torch.Tensor:
-        hidden_states = hidden_states[:, [0]]
-        return super().forward(hidden_states, *args, **kwargs)
-
-
-class BlockPredictor(Module):
-
-    def __init__(
-        self,
-        num_hidden_layers: int = 2,
-        hidden_size: int = 768,
-        num_attention_heads: int = 12,
-        intermediate_size: int = 3072,
-        hidden_act: str = "gelu_pytorch_tanh",
-        position_embeddings: bool = False,
-    ) -> None:
-        super().__init__()
-        config = TiteConfig(
-            num_hidden_layers=num_hidden_layers,
-            hidden_size=(hidden_size,) * num_hidden_layers,
-            num_attention_heads=(num_attention_heads,) * num_hidden_layers,
-            intermediate_size=(intermediate_size,) * num_hidden_layers,
-            hidden_act=hidden_act,
-            kernel_size=(None,) * num_hidden_layers,
-            stride=(None,) * num_hidden_layers,
-        )
-        self.position_embeddings = None
-        if position_embeddings:
-            self.position_embeddings = torch.nn.Embedding(512, hidden_size)
-        self.layers = torch.nn.ModuleList()
-        for idx in range(num_hidden_layers):
-            self.layers.append(TiteLayer(config, idx))
-
-    def format_block_embeddings(self, hidden_states: Tensor, student_batch_idcs: tuple[int]) -> Tensor:
-        batch_idcs = torch.tensor(student_batch_idcs, device=hidden_states.device)
-        num_blocks = batch_idcs.bincount()
-        assert hidden_states.shape[1] == 1
-        pooled_hidden_states = hidden_states[:, 0]
-        split_hidden_states = pooled_hidden_states.split(num_blocks.tolist())
-        padded_hidden_states = torch.nn.utils.rnn.pad_sequence(split_hidden_states, batch_first=True)
-        if self.position_embeddings is not None:
-            padded_hidden_states = padded_hidden_states + self.position_embeddings(
-                torch.arange(padded_hidden_states.shape[1], device=hidden_states.device)
-            )
-        return padded_hidden_states
-
-
-class BlockEmbeddingPredictor(BlockPredictor):
-
-    def __init__(
-        self,
-        num_hidden_layers: int = 2,
-        hidden_size: int = 768,
-        num_attention_heads: int = 12,
-        intermediate_size: int = 3072,
-        hidden_act: str = "gelu_pytorch_tanh",
-    ) -> None:
-        super().__init__(
-            num_hidden_layers,
-            hidden_size,
-            num_attention_heads,
-            intermediate_size,
-            hidden_act,
-            position_embeddings=True,
-        )
-        self.cls_token = torch.nn.Parameter(torch.randn(hidden_size))
-
-    def forward(self, hidden_states: Tensor, student_batch_idcs: tuple[int], *args, **kwargs) -> Tensor:
-        batch_idcs = torch.tensor(student_batch_idcs, device=hidden_states.device)
-        num_blocks = batch_idcs.bincount()
-        hidden_states = self.format_block_embeddings(hidden_states, student_batch_idcs)
-        hidden_states = hidden_states.repeat_interleave(num_blocks, dim=0)
-        attention_mask = torch.cat(
-            [
-                torch.nn.functional.pad(
-                    ~torch.eye(num_b, device=hidden_states.device, dtype=bool),
-                    (0, num_blocks.max() - num_b),
-                    value=False,
-                )
-                for num_b in num_blocks
-            ],
-            dim=0,
-        )
-        hidden_states = torch.cat(
-            [self.cls_token[None, None, :].repeat(hidden_states.shape[0], 1, 1), hidden_states], dim=1
-        )
-        attention_mask = torch.nn.functional.pad(attention_mask, (1, 0), value=True)
-        for layer in self.layers:
-            hidden_states, attention_mask = layer(hidden_states, attention_mask)
-        pred_hidden_states = hidden_states[:, [0]]
-        return pred_hidden_states
-
-
-class BlockOrderPredictor(BlockPredictor):
-
-    def __init__(
-        self,
-        num_hidden_layers: int = 2,
-        hidden_size: int = 768,
-        num_attention_heads: int = 12,
-        intermediate_size: int = 3072,
-        hidden_act: str = "gelu_pytorch_tanh",
-    ) -> None:
-        super().__init__(
-            num_hidden_layers,
-            hidden_size,
-            num_attention_heads,
-            intermediate_size,
-            hidden_act,
-            position_embeddings=False,
-        )
-        self.linear = torch.nn.Linear(hidden_size, 1)
-
-    def forward(self, hidden_states: Tensor, student_batch_idcs: tuple[int], *args, **kwargs) -> Tensor:
-        hidden_states = self.format_block_embeddings(hidden_states, student_batch_idcs)
-        batch_idcs = torch.tensor(student_batch_idcs, device=hidden_states.device)
-        num_blocks = batch_idcs.bincount()
-        attention_mask = torch.nn.utils.rnn.pad_sequence(
-            [torch.ones(bs, device=hidden_states.device, dtype=bool) for bs in num_blocks], batch_first=True
-        )
-        for layer in self.layers:
-            hidden_states, attention_mask = layer(hidden_states, attention_mask)
-        pred = self.linear(hidden_states).squeeze(-1)
-        return pred
-
-
-class Identity(Module):
-    def __init__(self) -> None:
-        super().__init__()
-
-    def forward(self, input: Tensor, *args, **kwargs) -> Tensor:
-        return input
+    def forward(self, encoder_output: torch.Tensor, *args, **kwargs) -> torch.Tensor:
+        encoder_output = encoder_output[:, [0]]
+        return super().forward(encoder_output, *args, **kwargs)

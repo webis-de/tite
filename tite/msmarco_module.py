@@ -8,8 +8,8 @@ from lightning import LightningModule
 from torch import Tensor
 from transformers import PreTrainedTokenizerBase
 
-from .model import TiteModel
-from .tokenizer import TiteTokenizer
+from .model.tite import TiteModel
+from .model.tokenizer import TiteTokenizer
 
 
 class MSMARCOModule(LightningModule):

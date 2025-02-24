@@ -5,14 +5,14 @@ import torch
 from torch.nn import Module
 from transformers import AutoTokenizer, BertForMaskedLM
 
-from tite.bert import BertConfig, BertModel
-from tite.loss import BarlowTwins, MAECrossEntropy
-from tite.model import TiteConfig, TiteModel
+from tite.decoder.decoder import Identity, MLMDecoder
+from tite.loss.loss import BarlowTwins, MAECrossEntropy
+from tite.model.bert import BertConfig, BertModel
+from tite.model.tite import TiteConfig, TiteModel
+from tite.model.tokenizer import TiteTokenizer
 from tite.module import TiteModule
-from tite.predictor import Identity, MLMDecoder
-from tite.teacher import MLMTeacher
-from tite.tokenizer import TiteTokenizer
-from tite.transformations import MLMMaskTokens, Transformation
+from tite.teacher.teacher import MLMTeacher
+from tite.transformation.transformations import MLMMaskTokens, Transformation
 
 DATA_DIR = Path(__file__).parent / "data"
 

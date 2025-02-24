@@ -1,10 +1,10 @@
 from lightning import Callback
 from transformers import AutoConfig, AutoModel, AutoTokenizer
 
-from tite.legacy import TiteConfig as TiteLegacyConfig
-from tite.legacy import TiteModel as TiteLegacyModel
-from tite.model import TiteConfig, TiteModel
-from tite.tokenizer import TiteTokenizer
+from tite.model.legacy import TiteConfig as TiteLegacyConfig
+from tite.model.legacy import TiteModel as TiteLegacyModel
+from tite.model.tite import TiteConfig, TiteModel
+from tite.model.tokenizer import TiteTokenizer
 
 AutoConfig.register(TiteConfig.model_type, TiteConfig)
 AutoModel.register(TiteConfig, TiteModel)

@@ -389,7 +389,7 @@ class PackedAvgPool1d(torch.nn.Module):
         idcs = packed_meta_data.idcs
         if idcs is not None:
             batch_idcs = torch.arange(len(y_seq_lens), device=x.device).repeat_interleave(y_seq_lens)
-            position_idcs = torch.ones(y_cu_seq_lens[-1], device=x.device, dtype=torch.int32)
+            position_idcs = torch.ones(y_cu_seq_lens[-1], device=x.device, dtype=y_cu_seq_lens.dtype)
             position_idcs[y_cu_seq_lens[1:-1]] = -y_seq_lens[:-1] + 1
             position_idcs = position_idcs.cumsum(0) - 1
             idcs = (batch_idcs, position_idcs)

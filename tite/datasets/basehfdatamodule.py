@@ -1,12 +1,18 @@
+import os
 from typing import Any
 
 import torch
 from datasets import Dataset, DatasetDict, IterableDataset, IterableDatasetDict, load_dataset
 from lightning import LightningDataModule
 from torch.utils.data import DataLoader
-from transformers import PreTrainedTokenizerBase
+from transformers import BatchEncoding, PreTrainedTokenizerBase
 
-from .commons import seed_or_none
+
+def seed_or_none(seed: int | None = None) -> int | None:
+    if seed is not None:
+        return seed
+    seed = os.environ.get("PL_GLOBAL_SEED", default=None)
+    return int(seed) if seed is not None else None
 
 
 class Collator:
@@ -16,11 +22,9 @@ class Collator:
         tokenizer: PreTrainedTokenizerBase,
         text_keys: tuple[str, str | None],
         max_length: int | None = None,
-        add_special_tokens: bool = True,
     ) -> None:
         self.tokenizer = tokenizer
         self.max_length = max_length
-        self.add_special_tokens = add_special_tokens
         self.text_keys = text_keys
 
     def aggregate(self, batch: list[dict]) -> dict:
@@ -34,7 +38,7 @@ class Collator:
             del agg["label"]
         return agg
 
-    def tokenize(self, agg: dict) -> dict:
+    def tokenize(self, agg: dict) -> BatchEncoding:
         t1 = agg[self.text_keys[0]]
         t2 = None
         if self.text_keys[1] is not None:
@@ -45,13 +49,12 @@ class Collator:
             truncation=True,
             max_length=self.max_length,
             return_token_type_ids=False,
-            add_special_tokens=self.add_special_tokens,
             padding=True,
             return_tensors="pt",
         )
-        return dict(encoded)
+        return encoded
 
-    def __call__(self, batch: list[dict]) -> dict:
+    def __call__(self, batch: list[dict]) -> BatchEncoding:
         agg = self.aggregate(batch)
         out = self.tokenize(agg)
         if (x := agg.get("label", None)) is not None:

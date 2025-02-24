@@ -7,7 +7,7 @@ from lightning import LightningModule
 from torch import Tensor
 from transformers import PreTrainedTokenizerBase
 
-from .model import TiteModel
+from .model.tite import TiteModel
 
 NUM_CLASSES_MAP = {
     "cola": 2,

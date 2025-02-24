@@ -34,6 +34,7 @@ class ComposedEmbedding(torch.nn.Embedding):
         device=None,
         dtype=None,
     ) -> None:
+        # TODO when in eval mode, compute smaller embedding from entire matrix and store it
         super().__init__(
             num_embeddings,
             large_embedding_dim,
@@ -48,7 +49,9 @@ class ComposedEmbedding(torch.nn.Embedding):
             dtype,
         )
         self.linear = None
-        if small_embedding_dim != large_embedding_dim:
+        if small_embedding_dim == large_embedding_dim:
+            self.linear = torch.nn.Identity()
+        else:
             self.linear = torch.nn.Linear(large_embedding_dim, small_embedding_dim, bias=False)
 
     def forward(self, input: torch.Tensor) -> torch.Tensor:
@@ -339,10 +342,14 @@ class TiteEmbeddings(torch.nn.Module):
         super().__init__()
         hidden_size = config.hidden_sizes[0]
         self.num_attention_heads = config.num_attention_heads
-        self.word_embeddings = torch.nn.Embedding(config.vocab_size, hidden_size, padding_idx=config.pad_token_id)
+        self.word_embeddings = ComposedEmbedding(
+            config.vocab_size, hidden_size, config.hidden_size, padding_idx=config.pad_token_id
+        )
         self.position_embeddings = None
         if config.positional_embedding_type == "absolute":
-            self.position_embeddings = torch.nn.Embedding(config.max_position_embeddings, hidden_size)
+            self.position_embeddings = ComposedEmbedding(
+                config.max_position_embeddings, hidden_size, config.hidden_size
+            )
         if config.norm_type == "layer":
             self.norm = torch.nn.LayerNorm(hidden_size, eps=config.layer_norm_eps)
         elif config.norm_type == "rms":
@@ -688,6 +695,8 @@ class TiteEncoder(torch.nn.Module):
                 raise ValueError(f"Unknown norm type: {config.norm_type}")
         else:
             self.norm = torch.nn.Identity()
+        if config.compile:
+            self.norm.compile(dynamic=True)
 
     def forward(
         self,

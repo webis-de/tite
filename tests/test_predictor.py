@@ -1,8 +1,8 @@
 import torch
 
-from tite.legacy import MAEEnhancedDecoder as LegacyMAEEnhancedDecoder
-from tite.model import TiteModel
-from tite.predictor import MAEEnhancedDecoder
+from tite.decoder.decoder import MAEEnhancedDecoder
+from tite.model.legacy import MAEEnhancedDecoder as LegacyMAEEnhancedDecoder
+from tite.model.tite import TiteModel
 
 
 def test_mae_same_as_legacy():
