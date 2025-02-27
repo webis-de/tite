@@ -3,10 +3,10 @@ from typing import Callable
 
 import torch
 
-from .loss import Loss
+from .loss import LossFunction
 
 
-class LanguageModelingLoss(Loss, ABC):
+class LanguageModelingLoss(LossFunction, ABC):
 
     @abstractmethod
     def forward(self, logits: torch.Tensor, labels: torch.Tensor) -> torch.Tensor: ...

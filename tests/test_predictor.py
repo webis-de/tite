@@ -1,6 +1,6 @@
 import torch
 
-from tite.decoder.decoder import MAEEnhancedDecoder
+from tite.decoder import MAEEnhancedDecoder
 from tite.model.legacy import MAEEnhancedDecoder as LegacyMAEEnhancedDecoder
 from tite.model.tite import TiteModel
 

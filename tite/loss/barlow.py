@@ -1,6 +1,6 @@
 import torch
 
-from .loss import Loss
+from .loss import LossFunction
 
 
 def off_diagonal(x):
@@ -10,7 +10,7 @@ def off_diagonal(x):
     return x.flatten()[:-1].view(n - 1, n + 1)[:, 1:].flatten()
 
 
-class BarlowTwinsLoss(Loss):
+class BarlowTwinsLoss(LossFunction):
     """Computes the "Barlow Twins" objective as proposed in "Barlow Twins: Self-Supervised Learning via Redundancy
     Reduction".
     """

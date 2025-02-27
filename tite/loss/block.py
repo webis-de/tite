@@ -1,9 +1,9 @@
 import torch
 
-from .loss import Loss
+from .loss import LossFunction
 
 
-class ApproxBlockOrderMSELoss(Loss):
+class ApproxBlockOrderMSELoss(LossFunction):
     def __init__(self, temperature: float = 1):
         super().__init__()
         self.temperature = temperature

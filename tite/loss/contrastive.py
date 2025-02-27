@@ -1,9 +1,9 @@
 import torch
 
-from .loss import Loss
+from .loss import LossFunction
 
 
-class ContrastiveInBatchSimilarityLoss(Loss):
+class ContrastiveInBatchSimilarityLoss(LossFunction):
     def __init__(self) -> None:
         super().__init__()
 

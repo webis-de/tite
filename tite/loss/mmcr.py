@@ -1,9 +1,9 @@
 import torch
 
-from .loss import Loss
+from .loss import LossFunction
 
 
-class MMCRLoss(Loss):
+class MMCRLoss(LossFunction):
     """Implements the "Maximum Manifold Capacity Representation" loss.
 
     Let :math:`X\in\mathbb{R}^{K\times P\times D}` denote the normalized embeddings obtained from embedding :math:`K`

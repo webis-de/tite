@@ -20,24 +20,20 @@ class TokenMLMMask(TokenTransformation):
         self,
         vocab_size: int,
         mask_id: int,
-        cls_id: int,
-        sep_id: int,
         mask_prob: float = 0.3,
         transformation_prob: float = 1.0,
     ) -> None:
         super().__init__(transformation_prob)
         self.vocab_size = vocab_size
         self.mask_id = mask_id
-        self.cls_id = cls_id
-        self.sep_id = sep_id
         self.mask_prob = mask_prob
 
     def transform(self, encoding: BatchEncoding) -> tuple[BatchEncoding, dict]:
         input_ids = encoding.input_ids.clone()
         attention_mask = encoding.attention_mask
+        special_tokens_mask = encoding["special_tokens_mask"].bool()
         transformation_mask = self.transformation_mask(input_ids.shape[0])
         mlm_mask = torch.rand(attention_mask.shape, device=input_ids.device) < self.mask_prob
-        special_tokens_mask = input_ids.eq(self.cls_id).logical_or(input_ids.eq(self.sep_id))
         mlm_mask = mlm_mask.logical_and(~special_tokens_mask)
         mlm_mask = mlm_mask.logical_and(transformation_mask[:, None])
         probability_matrix = torch.rand(attention_mask.shape, device=input_ids.device)
@@ -47,35 +43,33 @@ class TokenMLMMask(TokenTransformation):
         input_ids = torch.where(
             mask_random, torch.randint(self.vocab_size, input_ids.shape, device=input_ids.device), input_ids
         )
-        return BatchEncoding({"input_ids": input_ids, "attention_mask": attention_mask}), {
+        return BatchEncoding(
+            {"input_ids": input_ids, "attention_mask": attention_mask, "special_tokens_mask": special_tokens_mask}
+        ), {
             "mlm_mask": mlm_mask,
-            "special_tokens_mask": special_tokens_mask,
             "original_input_ids": encoding.input_ids,
         }
 
 
 class TokenMask(TokenTransformation):
-    def __init__(
-        self, mask_id: int, cls_id: int, sep_id: int, mask_prob: float = 0.3, transformation_prob: float = 1.0
-    ) -> None:
+    def __init__(self, mask_id: int, mask_prob: float = 0.3, transformation_prob: float = 1.0) -> None:
         super().__init__(transformation_prob)
         self.mask_id = mask_id
-        self.cls_id = cls_id
-        self.sep_id = sep_id
         self.mask_prob = mask_prob
 
     def transform(self, encoding: BatchEncoding) -> tuple[BatchEncoding, dict]:
         input_ids = encoding.input_ids.clone()
         attention_mask = encoding.attention_mask
+        special_tokens_mask = encoding["special_tokens_mask"].bool()
         transformation_mask = self.transformation_mask(input_ids.shape[0])
         mlm_mask = torch.rand(attention_mask.shape, device=input_ids.device) < self.mask_prob
-        special_tokens_mask = input_ids.eq(self.cls_id).logical_or(input_ids.eq(self.sep_id))
         mlm_mask = mlm_mask.logical_and(~special_tokens_mask)
         mlm_mask = mlm_mask.logical_and(transformation_mask[:, None])
         input_ids = torch.where(mlm_mask, self.mask_id, input_ids)
-        return BatchEncoding({"input_ids": input_ids, "attention_mask": attention_mask}), {
+        return BatchEncoding(
+            {"input_ids": input_ids, "attention_mask": attention_mask, "special_tokens_mask": special_tokens_mask}
+        ), {
             "mlm_mask": mlm_mask,
-            "special_tokens_mask": special_tokens_mask,
             "original_input_ids": encoding.input_ids,
         }
 

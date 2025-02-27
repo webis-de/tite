@@ -4,9 +4,9 @@ from .teacher import Teacher
 
 
 class MLMTeacher(Teacher):
-    def __init__(self, padid: int) -> None:
+    def __init__(self, pad_id: int) -> None:
         super().__init__()
-        self.pad_id = padid
+        self.pad_id = pad_id
 
     def map_targets(self, original_input_ids: torch.Tensor, mlm_mask: torch.Tensor, **kwargs) -> torch.Tensor:
         # Everything that is masked out (mlm_mask == True) should be predicted... except for padding tokens.
@@ -17,31 +17,28 @@ class MLMTeacher(Teacher):
 
 
 class MAETeacher(MLMTeacher):
+    pass
 
-    def __init__(self, padid: int, enhanced: bool) -> None:
-        super().__init__(padid)
-        self.enhanced = enhanced
 
-    def map_targets(
-        self, original_input_ids: torch.Tensor, mlm_mask: torch.Tensor, special_tokens_mask: torch.Tensor, **kwargs
-    ) -> torch.Tensor:
-        if self.enhanced:
-            # enhanced decoding, predict every token
-            return torch.where(original_input_ids.eq(self.pad_id) | special_tokens_mask, -100, original_input_ids)
-        return super().map_targets(original_input_ids, mlm_mask, **kwargs)
+class MAEEnhancedTeacher(Teacher):
+
+    def __init__(self, pad_id: int) -> None:
+        super().__init__()
+        self.pad_id = pad_id
+
+    def map_targets(self, input_ids: torch.Tensor, special_tokens_mask: torch.Tensor, **kwargs) -> torch.Tensor:
+        return torch.where(input_ids.eq(self.pad_id) | special_tokens_mask.bool(), -100, input_ids)
 
 
 class BOWTeacher(Teacher):
-    def __init__(self, vocab_size: int, padid: int) -> None:
+    def __init__(self, vocab_size: int, pad_id: int) -> None:
         super().__init__()
         self.vocab_size = vocab_size
-        self.pad_id = padid
+        self.pad_id = pad_id
 
-    def map_targets(
-        self, original_input_ids: torch.Tensor, special_tokens_mask: torch.Tensor, **kwargs
-    ) -> torch.Tensor:
-        targets = torch.zeros(original_input_ids.shape[0], self.vocab_size, device=original_input_ids.device)
-        input_ids = original_input_ids.clone()
+    def map_targets(self, input_ids: torch.Tensor, special_tokens_mask: torch.Tensor, **kwargs) -> torch.Tensor:
+        targets = torch.zeros(input_ids.shape[0], self.vocab_size, device=input_ids.device)
+        input_ids = input_ids.clone()
         input_ids[special_tokens_mask] = self.pad_id
         targets = targets.scatter(1, input_ids, 1)
         targets[:, self.pad_id] = -100

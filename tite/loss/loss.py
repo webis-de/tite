@@ -4,7 +4,7 @@ from typing import Callable
 import torch
 
 
-class Loss(torch.nn.Module, ABC):
+class LossFunction(torch.nn.Module, ABC):
 
     @abstractmethod
     def forward(self, *args, **kwargs): ...

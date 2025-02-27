@@ -170,6 +170,7 @@ class MAEEnhancedDecoder(PreTrainedModel, Decoder):
 
     def __init__(
         self,
+        vocab_size: int,
         hidden_size: int,
         num_attention_heads: int,
         intermediate_size: int,
@@ -179,6 +180,7 @@ class MAEEnhancedDecoder(PreTrainedModel, Decoder):
         subvectors: bool = False,
     ):
         config = BertConfig(
+            vocab_size=vocab_size,
             num_hidden_layers=1,
             hidden_size=hidden_size,
             num_attention_heads=num_attention_heads,

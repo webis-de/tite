@@ -1,11 +1,11 @@
 import os
 from typing import Any
 
-import torch
 from datasets import Dataset, DatasetDict, IterableDataset, IterableDatasetDict, load_dataset
 from lightning import LightningDataModule
 from torch.utils.data import DataLoader
-from transformers import BatchEncoding, PreTrainedTokenizerBase
+
+from .collator import Collator
 
 
 def seed_or_none(seed: int | None = None) -> int | None:
@@ -13,53 +13,6 @@ def seed_or_none(seed: int | None = None) -> int | None:
         return seed
     seed = os.environ.get("PL_GLOBAL_SEED", default=None)
     return int(seed) if seed is not None else None
-
-
-class Collator:
-
-    def __init__(
-        self,
-        tokenizer: PreTrainedTokenizerBase,
-        text_keys: tuple[str, str | None],
-        max_length: int | None = None,
-    ) -> None:
-        self.tokenizer = tokenizer
-        self.max_length = max_length
-        self.text_keys = text_keys
-
-    def aggregate(self, batch: list[dict]) -> dict:
-        agg: dict[str, list] = {key: [] for key in self.text_keys if key is not None}
-        agg["label"] = []
-        for x in batch:
-            for key, value in x.items():
-                if key in agg:
-                    agg[key].append(value)
-        if len(agg["label"]) == 0:
-            del agg["label"]
-        return agg
-
-    def tokenize(self, agg: dict) -> BatchEncoding:
-        t1 = agg[self.text_keys[0]]
-        t2 = None
-        if self.text_keys[1] is not None:
-            t2 = agg[self.text_keys[1]]
-        encoded = self.tokenizer(
-            t1,
-            t2,
-            truncation=True,
-            max_length=self.max_length,
-            return_token_type_ids=False,
-            padding=True,
-            return_tensors="pt",
-        )
-        return encoded
-
-    def __call__(self, batch: list[dict]) -> BatchEncoding:
-        agg = self.aggregate(batch)
-        out = self.tokenize(agg)
-        if (x := agg.get("label", None)) is not None:
-            out["label"] = torch.tensor(x)
-        return out
 
 
 class BaseHFDataModule(LightningDataModule):

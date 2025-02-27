@@ -11,16 +11,16 @@ from transformers import BatchEncoding, PreTrainedTokenizerBase
 from .datasets import GLUEDataModule, IRDatasetsDataModule
 from .decoder import Decoder
 from .glue_module import GlueModule
-from .loss import Loss
+from .loss import LossFunction
 from .model.tite import ComposedEmbedding, TiteModel
 from .msmarco_module import MSMARCOModule
 from .teacher import Teacher
 
 
-def _parse_kwargs(kwargs: dict[str, Any], module: Teacher | Decoder) -> dict[str, Any]:
+def _parse_kwargs(kwargs: dict[str, Any], module: Teacher | Decoder | TiteModel) -> dict[str, Any]:
     if isinstance(module, Teacher):
         valid_keys = inspect.signature(module.map_targets).parameters.keys()
-    elif isinstance(module, Decoder):
+    elif isinstance(module, Decoder | TiteModel):
         valid_keys = inspect.signature(module.forward).parameters.keys()
     else:
         raise ValueError(f"Unsupported module type {type(module)}")
@@ -50,7 +50,7 @@ class TiteModule(LightningModule):
         tokenizer: PreTrainedTokenizerBase,
         decoders: list[Decoder],
         teachers: list[Teacher],
-        loss_functions: list[Loss],
+        loss_functions: list[LossFunction],
         log_additional_metrics: bool = False,
         validate_on_glue: bool = False,
         validate_on_trec_dl: bool = False,
@@ -227,7 +227,8 @@ class TiteModule(LightningModule):
         encoder_encoding, encoder_auxiliary_data = batch[0]
         decoder_inputs = batch[1:]
 
-        encoder_output = self.encoder(**encoder_encoding).last_hidden_state
+        encoder_kwargs = _parse_kwargs({**encoder_encoding, **encoder_auxiliary_data}, self.encoder)
+        encoder_output = self.encoder(**encoder_kwargs).last_hidden_state
         losses = {}
         for decoder_input, decoder, teacher, loss_function in zip(
             decoder_inputs, self.decoders, self.teachers, self.loss_functions
