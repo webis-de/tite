@@ -5,7 +5,7 @@ from transformers import BertConfig, BertModel
 from tite.model.legacy import TiteConfig as TiteLegacyConfig
 from tite.model.legacy import TiteModel as TiteLegacyModel
 from tite.model.pool import compute_output_shape
-from tite.model.tite import TiteConfig, TiteModel
+from tite.model.tite import TiteConfig, TiteForPreTraining, TiteModel
 
 
 @pytest.fixture
@@ -20,7 +20,7 @@ def config() -> TiteConfig:
         strides=(2, 1, None),
         max_position_embeddings=16,
         rotary_interleaved=True,
-        positional_embedding_type="absolute",
+        positional_embedding_type="rotary",
         attn_implementation="eager",
         rope_implementation="eager",
         pooling_implementation="eager",
@@ -169,3 +169,19 @@ def test_same_as_bert(attn_implementation: str):
     assert torch.allclose(
         tite_output.last_hidden_state[attention_mask], bert_output.last_hidden_state[attention_mask], atol=1e-4
     )
+
+
+def test_pretrain(config: TiteConfig):
+    model = TiteForPreTraining(config)
+
+    input_ids = torch.randint(0, config.vocab_size, (2, config.max_position_embeddings))
+    attention_mask = torch.ones_like(input_ids, dtype=torch.bool)
+    attention_mask[1, -config.max_position_embeddings // 2 :] = False
+    special_tokens_mask = torch.zeros_like(input_ids, dtype=torch.bool)
+    special_tokens_mask[1, -config.max_position_embeddings // 2 :] = True
+
+    labels = {}
+    for task, head in model.heads.items():
+        labels[task] = head.get_labels(input_ids, attention_mask, special_tokens_mask)
+
+    output = model(input_ids, attention_mask, labels=labels)
