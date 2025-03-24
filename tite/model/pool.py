@@ -378,6 +378,7 @@ class PackedAvgPool1d(torch.nn.Module):
         y_packed = y[y_mask]
         return y_packed
 
+    @torch.compiler.disable
     def forward(self, x: torch.Tensor, packed_meta_data: PackedMetaData) -> Tuple[torch.Tensor, PackedMetaData]:
         if packed_meta_data.max_seq_len == 1 or (self.kernel_size == 1 and self.stride == 1):
             return x, packed_meta_data

@@ -19,5 +19,5 @@ class GLUEDataModule(BaseHFDataModule):
         self, task: str, tokenizer: PreTrainedTokenizerBase, add_special_tokens: bool = True, **kwargs
     ) -> None:
         text_keys = TASK_COLUMN_NAMES[task]
-        collator = Collator(tokenizer, text_keys, max_length=256, add_special_tokens=add_special_tokens)
+        collator = Collator(tokenizer, text_keys, max_length=256)
         super().__init__(path="glue", name=task, collator=collator, **kwargs)

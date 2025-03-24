@@ -10,8 +10,8 @@ from lightning.pytorch.loggers import WandbLogger
 from typing_extensions import override
 
 from tite.datasets import FineWebDataModule  # noqa
-from tite.lr_schedulers import LR_SCHEDULERS, WarmupLRScheduler
-from tite.model import PreTrainedModel, TiteConfig
+from tite.model.tite import PreTrainedModel, TiteConfig
+from tite.utils.lr_schedulers import LR_SCHEDULERS, WarmupLRScheduler
 
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 torch.set_float32_matmul_precision("medium")

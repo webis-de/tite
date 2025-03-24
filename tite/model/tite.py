@@ -1,5 +1,6 @@
+from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import List, Literal, Tuple
+from typing import Dict, List, Literal, Tuple
 
 import torch
 from einops import rearrange
@@ -95,6 +96,7 @@ class SwiGLU(torch.nn.Module):
 
 
 ACT2FN["swiglu"] = SwiGLU
+NORM_MAP = {"rms": RMSNorm, "layer": torch.nn.LayerNorm}
 
 
 def compute_output_shapes(
@@ -121,11 +123,11 @@ class TiteConfig(PretrainedConfig):
         self,
         vocab_size: int = 30522,
         num_hidden_layers: int = 12,
-        hidden_sizes: Tuple[int, ...] = (768,) * 12,
-        num_attention_heads: Tuple[int, ...] = (12,) * 12,
-        intermediate_sizes: Tuple[int, ...] = (3072,) * 12,
-        kernel_sizes: Tuple[int | None, ...] = (None,) * 12,
-        strides: Tuple[int | None, ...] = (None,) * 12,
+        hidden_sizes: Tuple[int, ...] | int = (768,) * 12,
+        num_attention_heads: Tuple[int, ...] | int = (12,) * 12,
+        intermediate_sizes: Tuple[int, ...] | int = (3072,) * 12,
+        kernel_sizes: Tuple[int | None, ...] | int | None = (None,) * 12,
+        strides: Tuple[int | None, ...] | int | None = (None,) * 12,
         dropout_prob: float = 0.1,
         max_position_embeddings: int = 512,
         initializer_range: float = 0.02,
@@ -133,20 +135,25 @@ class TiteConfig(PretrainedConfig):
         pad_token_id: int = 0,
         hidden_act: str = "gelu_pytorch_tanh",
         positional_embedding_type: Literal["absolute", "rotary", "alibi"] = "rotary",
-        upscale_hidden_sizes: bool = False,
         pooling_location: Literal["pre", "attention", "post"] = "attention",
         rotary_interleaved: bool = False,
         norm_location: Literal["pre", "post"] = "pre",
         norm_type: Literal["rms", "layer"] = "rms",
-        attn_implementation: Literal["flash_attention_2", "sdpa", "eager"] = "flash_attention_2",
         pooling_implementation: Literal["eager", "triton"] = "triton",
         rope_implementation: Literal["eager", "triton"] = "triton",
-        compile: bool = True,
         **kwargs,
     ):
-        if attn_implementation is None:
-            attn_implementation = "flash_attention_2"
-        super().__init__(pad_token_id=pad_token_id, attn_implementation=attn_implementation, **kwargs)
+        super().__init__(pad_token_id=pad_token_id, **kwargs)
+        if isinstance(hidden_sizes, int):
+            hidden_sizes = (hidden_sizes,) * num_hidden_layers
+        if isinstance(num_attention_heads, int):
+            num_attention_heads = (num_attention_heads,) * num_hidden_layers
+        if isinstance(intermediate_sizes, int):
+            intermediate_sizes = (intermediate_sizes,) * num_hidden_layers
+        if isinstance(kernel_sizes, int) or kernel_sizes is None:
+            kernel_sizes = (kernel_sizes,) * num_hidden_layers
+        if isinstance(strides, int) or strides is None:
+            strides = (strides,) * num_hidden_layers
         self.vocab_size = vocab_size
         self.num_hidden_layers = num_hidden_layers
         self.hidden_sizes = hidden_sizes
@@ -160,14 +167,12 @@ class TiteConfig(PretrainedConfig):
         self.layer_norm_eps = layer_norm_eps
         self.hidden_act = hidden_act
         self.positional_embedding_type = positional_embedding_type
-        self.upscale_hidden_sizes = upscale_hidden_sizes
         self.pooling_location = pooling_location
         self.rotary_interleaved = rotary_interleaved
         self.norm_location = norm_location
         self.norm_type = norm_type
         self.pooling_implementation = pooling_implementation
         self.rope_implementation = rope_implementation
-        self.compile = compile
 
         iterator = zip(
             [
@@ -193,148 +198,28 @@ class TiteConfig(PretrainedConfig):
             )
 
     @property
+    def _attn_implementation(self):
+        # This property is made private for now (as it cannot be changed and a PreTrainedModel.use_attn_implementation method needs to be implemented.)
+        if hasattr(self, "_attn_implementation_internal"):
+            if self._attn_implementation_internal is None:
+                # `config.attn_implementation` should never be None, for backward compatibility.
+                return "flash_attention_2"
+            else:
+                return self._attn_implementation_internal
+        else:
+            return "flash_attention_2"
+
+    @_attn_implementation.setter
+    def _attn_implementation(self, value):
+        self._attn_implementation_internal = value
+
+    @property
     def output_shapes(self) -> List[int]:
         return compute_output_shapes(self.max_position_embeddings, self.kernel_sizes, self.strides)
 
     @property
     def hidden_size(self) -> int:
         return self.hidden_sizes[-1]
-
-
-class TiteModel(PreTrainedModel):
-    config_class = TiteConfig
-
-    # Flash Attention 2 support
-    _supports_flash_attn_2 = True
-
-    # SDPA support
-    _supports_sdpa = True
-
-    def __init__(self, config: TiteConfig):
-        super().__init__(config)
-        self.config: TiteConfig
-
-        self.embeddings = TiteEmbeddings(config)
-        if config.compile:
-            self.embeddings.compile(dynamic=True)
-        self.encoder = TiteEncoder(config)
-
-        self.post_init()
-
-    def get_input_embeddings(self):
-        return self.embeddings.word_embeddings
-
-    def set_input_embeddings(self, value):
-        self.embeddings.word_embeddings = value
-
-    def tie_decoder_weights(self, output_embeddings: torch.nn.Module):
-        self._tie_or_clone_weights(output_embeddings, self.get_input_embeddings())
-
-    def _init_weights(self, module):
-        """Initialize the weights"""
-        # https://github.com/huggingface/transformers/blob/3d7c2f9dea45338b7ebcd459b452e2fad7abfa1f/src/transformers/models/bert/modeling_bert.py#L835
-        if isinstance(module, torch.nn.Linear):
-            # Slightly different from the TF version which uses truncated_normal for initialization
-            # cf https://github.com/pytorch/pytorch/pull/5617
-            module.weight.data.normal_(mean=0.0, std=self.config.initializer_range)
-            if module.bias is not None:
-                module.bias.data.zero_()
-        elif isinstance(module, torch.nn.Embedding):
-            module.weight.data.normal_(mean=0.0, std=self.config.initializer_range)
-            if module.padding_idx is not None:
-                module.weight.data[module.padding_idx].zero_()
-        elif isinstance(module, (torch.nn.LayerNorm, RMSNorm)):
-            if isinstance(module, torch.nn.LayerNorm):
-                module.bias.data.zero_()
-            module.weight.data.fill_(1.0)
-
-    def forward(
-        self,
-        input_ids: torch.Tensor,
-        attention_mask: torch.Tensor | None = None,
-        output_hidden_states: bool = False,
-        output_attentions: bool = False,
-        **kwargs,
-    ) -> TiteModelOutput:
-        if attention_mask is None:
-            attention_mask = torch.ones(1, input_ids.shape[1], device=input_ids.device, dtype=torch.bool)
-        batch_size, seq_len = input_ids.shape
-        with torch.no_grad():
-            idcs = attention_mask.nonzero(as_tuple=True)
-            input_ids = input_ids[idcs]
-            attention_mask = attention_mask.bool()
-            seq_lens = attention_mask.sum(-1).int()
-            max_seq_len = int(seq_lens.max().item())
-            cu_seq_lens = torch.zeros(seq_lens.shape[0] + 1, dtype=seq_lens.dtype, device=seq_lens.device)
-            cu_seq_lens[1:] = torch.cumsum(seq_lens, dim=0, dtype=seq_lens.dtype)
-        hidden_states = self.embeddings(input_ids, idcs[1])
-        packed_meta_data = PackedMetaData(
-            seq_lens,
-            cu_seq_lens,
-            max_seq_len,
-            (
-                None
-                if self.config._attn_implementation == "flash_attention_2"
-                and self.config.pooling_implementation == "triton"
-                else idcs
-            ),
-        )
-        hidden_states, all_hidden_states, all_attentions = self.encoder(
-            hidden_states, packed_meta_data, output_hidden_states, output_attentions
-        )
-        if hidden_states.shape[0] == seq_lens.shape[0]:
-            hidden_states = hidden_states.unsqueeze(1)
-        else:
-            repad_hidden_states = torch.zeros(
-                batch_size, seq_len, hidden_states.shape[-1], device=hidden_states.device, dtype=hidden_states.dtype
-            )
-            repad_hidden_states[idcs] = hidden_states
-            hidden_states = repad_hidden_states.view(batch_size, seq_len, -1)
-        return TiteModelOutput(
-            last_hidden_state=hidden_states, hidden_states=all_hidden_states, attentions=all_attentions
-        )
-
-    @staticmethod
-    def _update_state_dict(state_dict):
-        new_state_dict = {}
-        for key, value in state_dict.items():
-            if key in ("pooler.dense.weight", "pooler.dense.bias", "embeddings.token_type_embeddings.weight"):
-                continue
-            new_key = key
-            new_key = new_key.replace("LayerNorm", "norm")
-            new_key = new_key.replace("attention.self", "attention")
-            new_key = new_key.replace("attention.output", "attention")
-            new_key = new_key.replace("intermediate.dense", "mlp.intermediate_dense")
-            new_key = new_key.replace("output.dense", "mlp.out_dense")
-            new_key = new_key.replace("output", "mlp")
-            if "Wqkv" in key:
-                q, k, v = value.chunk(3, dim=0)
-                new_state_dict[new_key.replace("Wqkv", "query")] = q
-                new_state_dict[new_key.replace("Wqkv", "key")] = k
-                new_state_dict[new_key.replace("Wqkv", "value")] = v
-            else:
-                new_state_dict[new_key] = value
-        return new_state_dict
-
-    @classmethod
-    def _load_pretrained_model(
-        cls, model, state_dict, loaded_keys, resolved_archive_file, pretrained_model_name_or_path, *args, **kwargs
-    ):
-        new_state_dict = cls._update_state_dict(state_dict)
-        missing_keys = set(model.state_dict().keys()) - set(new_state_dict.keys())
-        unexpected_keys = set(new_state_dict.keys()) - set(model.state_dict().keys())
-        missing_keys = missing_keys - {"encoder.norm.weight", "encoder.norm.bias"}
-        unexpected_keys = unexpected_keys - {
-            "encoder.layer.0.attention.norm.weight",
-            "encoder.layer.0.attention.norm.bias",
-        }
-        assert not missing_keys, f"Missing keys: {missing_keys}"
-        assert not unexpected_keys, f"Unexpected keys: {unexpected_keys}"
-        loaded_keys = list(new_state_dict.keys())
-        model, *out = super()._load_pretrained_model(
-            model, new_state_dict, loaded_keys, resolved_archive_file, pretrained_model_name_or_path, *args, **kwargs
-        )
-        return (model, *out)
 
 
 class TiteEmbeddings(torch.nn.Module):
@@ -350,12 +235,7 @@ class TiteEmbeddings(torch.nn.Module):
             self.position_embeddings = ComposedEmbedding(
                 config.max_position_embeddings, hidden_size, config.hidden_size
             )
-        if config.norm_type == "layer":
-            self.norm = torch.nn.LayerNorm(hidden_size, eps=config.layer_norm_eps)
-        elif config.norm_type == "rms":
-            self.norm = RMSNorm(hidden_size, eps=config.layer_norm_eps)
-        else:
-            raise ValueError(f"Unknown norm type: {config.norm_type}")
+        self.norm = NORM_MAP[config.norm_type](hidden_size, eps=config.layer_norm_eps)
         self.dropout = torch.nn.Dropout(config.dropout_prob)
 
     def forward(self, input_ids: torch.Tensor, position_idcs: torch.Tensor) -> torch.Tensor:
@@ -392,27 +272,15 @@ class TiteAttention(torch.nn.Module):
         self.config = config
 
         to_hidden_size = config.hidden_sizes[layer_idx]
-        if config.upscale_hidden_sizes:
-            from_hidden_size = to_hidden_size
-        else:
-            from_hidden_size = config.hidden_sizes[max(0, layer_idx - 1)]
+        from_hidden_size = config.hidden_sizes[max(0, layer_idx - 1)]
         self.hidden_size_diff = to_hidden_size - from_hidden_size
 
         if config.norm_location == "pre" and layer_idx == 0:
             self.norm = torch.nn.Identity()
         else:
-            if config.norm_type == "layer":
-                self.norm = torch.nn.LayerNorm(
-                    from_hidden_size if config.norm_location == "pre" else to_hidden_size, eps=config.layer_norm_eps
-                )
-            elif config.norm_type == "rms":
-                self.norm = RMSNorm(
-                    from_hidden_size if config.norm_location == "pre" else to_hidden_size, eps=config.layer_norm_eps
-                )
-            else:
-                raise ValueError(f"Unknown norm type: {config.norm_type}")
-        if config.compile:
-            self.norm.compile(dynamic=True)
+            self.norm = NORM_MAP[config.norm_type](
+                from_hidden_size if config.norm_location == "pre" else to_hidden_size, eps=config.layer_norm_eps
+            )
 
         num_attention_heads = config.num_attention_heads[layer_idx]
         self.num_attention_heads = num_attention_heads
@@ -453,6 +321,7 @@ class TiteAttention(torch.nn.Module):
             )
         self.attention_function = getattr(self, self.ATTENTION_FUNCTIONS[config._attn_implementation])
 
+    @torch.compiler.disable
     def flash_attn_forward(
         self,
         query: torch.Tensor,
@@ -524,6 +393,8 @@ class TiteAttention(torch.nn.Module):
         packed_meta_data: PackedMetaData,
         output_attention: bool = False,
     ) -> Tuple[torch.Tensor, torch.Tensor | None]:
+        if self.alibi is not None:
+            raise ValueError("ALiBi is not supported with eager attention")
         pad_query = self._unpad(query, query_packed_meta_data).transpose(1, 2)
         pad_key = self._unpad(key, packed_meta_data).transpose(1, 2)
         pad_value = self._unpad(value, packed_meta_data).transpose(1, 2)
@@ -608,12 +479,7 @@ class TiteMLP(torch.nn.Module):
         hidden_size = config.hidden_sizes[layer_idx]
         intermediate_size = config.intermediate_sizes[layer_idx]
         self.config = config
-        if config.norm_type == "layer":
-            self.norm = torch.nn.LayerNorm(hidden_size, eps=config.layer_norm_eps)
-        elif config.norm_type == "rms":
-            self.norm = RMSNorm(hidden_size, eps=config.layer_norm_eps)
-        else:
-            raise ValueError(f"Unknown norm type: {config.norm_type}")
+        self.norm = NORM_MAP[config.norm_type](hidden_size, eps=config.layer_norm_eps)
         self.intermediate_dense = torch.nn.Linear(
             hidden_size, intermediate_size * 2 if config.hidden_act == "swiglu" else intermediate_size
         )
@@ -635,20 +501,6 @@ class TiteMLP(torch.nn.Module):
         return hidden_states
 
 
-class TiteUpscale(torch.nn.Module):
-    def __init__(self, config: TiteConfig, layer_idx: int):
-        super().__init__()
-        hidden_size = config.hidden_sizes[layer_idx]
-        old_hidden_size = config.hidden_sizes[max(0, layer_idx - 1)]
-        self.upscale_layer = torch.nn.Linear(old_hidden_size, hidden_size)
-        self.dropout = torch.nn.Dropout(config.dropout_prob)
-
-    def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
-        hidden_states = self.upscale_layer(hidden_states)
-        hidden_states = self.dropout(hidden_states)
-        return hidden_states
-
-
 class TiteLayer(torch.nn.Module):
     def __init__(self, config: TiteConfig, layer_idx: int):
         super().__init__()
@@ -656,23 +508,10 @@ class TiteLayer(torch.nn.Module):
         self.seq_len_dim = 1
         self.attention = TiteAttention(config, layer_idx)
         self.mlp = TiteMLP(config, layer_idx)
-        if config.compile:
-            self.mlp.compile(dynamic=True)
-
-        hidden_size = config.hidden_sizes[layer_idx]
-        old_hidden_size = config.hidden_sizes[max(0, layer_idx - 1)]
-        if config.upscale_hidden_sizes and old_hidden_size != hidden_size:
-            self.upscale_layer = TiteUpscale(config, layer_idx)
-        else:
-            self.upscale_layer = torch.nn.Identity()
-        if config.compile:
-            self.upscale_layer.compile(dynamic=True)
 
     def forward(
         self, hidden_states: torch.Tensor, packed_meta_data: PackedMetaData, output_attention: bool = False
     ) -> Tuple[torch.Tensor, torch.Tensor | None, PackedMetaData]:
-        if self.upscale_layer is not None:
-            hidden_states = self.upscale_layer(hidden_states)
         hidden_states, attention, packed_meta_data = self.attention(hidden_states, packed_meta_data, output_attention)
         layer_output = self.mlp(hidden_states)
         return layer_output, attention, packed_meta_data
@@ -682,21 +521,13 @@ class TiteEncoder(torch.nn.Module):
     def __init__(self, config: TiteConfig):
         super().__init__()
         self.config = config
-        self.layer = torch.nn.ModuleList(
+        self.layers = torch.nn.ModuleList(
             [TiteLayer(config, layer_idx) for layer_idx in range(config.num_hidden_layers)]
         )
-        self.norm: torch.nn.Module
         if config.norm_location == "pre":
-            if config.norm_type == "layer":
-                self.norm = torch.nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps)
-            elif config.norm_type == "rms":
-                self.norm = RMSNorm(config.hidden_size, eps=config.layer_norm_eps)
-            else:
-                raise ValueError(f"Unknown norm type: {config.norm_type}")
+            self.norm = NORM_MAP[config.norm_type](config.hidden_size, eps=config.layer_norm_eps)
         else:
             self.norm = torch.nn.Identity()
-        if config.compile:
-            self.norm.compile(dynamic=True)
 
     def forward(
         self,
@@ -707,7 +538,7 @@ class TiteEncoder(torch.nn.Module):
     ) -> Tuple[torch.Tensor, List[torch.Tensor] | None, List[torch.Tensor] | None]:
         all_hidden_states = [hidden_states] if output_hidden_states else None
         all_attentions: List[torch.Tensor] | None = [] if output_attentions else None
-        for layer_idx, layer_module in enumerate(self.layer):
+        for layer_idx, layer_module in enumerate(self.layers):
             hidden_states, attention, packed_meta_data = layer_module(
                 hidden_states, packed_meta_data, output_attentions
             )
@@ -717,3 +548,409 @@ class TiteEncoder(torch.nn.Module):
                 all_attentions.append(attention)
         hidden_states = self.norm(hidden_states)
         return hidden_states, all_hidden_states, all_attentions
+
+
+class PreTrainingHead(torch.nn.Module, ABC):
+
+    @abstractmethod
+    def get_labels(self, *args, **kwargs) -> torch.Tensor: ...
+
+    @abstractmethod
+    def forward(self, output: TiteModelOutput, attention_mask: torch.Tensor) -> torch.Tensor: ...
+
+    @abstractmethod
+    def compute_loss(self, logits: torch.Tensor, labels: torch.Tensor) -> torch.Tensor: ...
+
+
+class LMPredictionHead(torch.nn.Module):
+    def __init__(self, config: TiteConfig, decoder: torch.nn.Linear | None = None):
+        super().__init__()
+        self.dense = torch.nn.Linear(config.hidden_size, config.hidden_size)
+        self.activation = ACT2FN[config.hidden_act]
+        self.norm = NORM_MAP[config.norm_type](config.hidden_size, eps=config.layer_norm_eps)
+        if decoder is None:
+            self.decoder = torch.nn.Linear(config.hidden_size, config.vocab_size, bias=False)
+        else:
+            self.decoder = decoder
+        self.bias = torch.nn.Parameter(torch.zeros(config.vocab_size))
+        self.decoder.bias = self.bias
+
+    def _tie_weights(self):
+        self.decoder.bias = self.bias
+
+    def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
+        hidden_states = self.dense(hidden_states)
+        hidden_states = self.activation(hidden_states)
+        hidden_states = self.norm(hidden_states)
+        logits = self.decoder(hidden_states)
+        return logits
+
+
+class BOWLMHead(PreTrainingHead):
+
+    def __init__(self, config: TiteConfig, lm_decoder: torch.nn.Linear | None = None):
+        super().__init__()
+        self.pad_token_id = config.pad_token_id
+        self.vocab_size = config.vocab_size
+        self.lm_head = LMPredictionHead(config, lm_decoder)
+
+    def forward(self, hidden_states: torch.Tensor, *args, **kwargs) -> torch.Tensor:
+        return self.lm_head(hidden_states)
+
+    def get_labels(
+        self, input_ids: torch.Tensor, attention_mask: torch.Tensor, special_tokens_mask: torch.Tensor, *args, **kwargs
+    ) -> torch.Tensor:
+        targets = torch.zeros(input_ids.shape[0], self.vocab_size, device=input_ids.device)
+        input_ids = input_ids.clone()
+        input_ids[special_tokens_mask.bool()] = self.pad_token_id
+        targets = targets.scatter(1, input_ids, 1)
+        targets[:, self.pad_token_id] = -100
+        return targets
+
+    def compute_loss(self, logits: torch.Tensor, labels: torch.Tensor) -> torch.Tensor:
+        logits = logits.view(-1)
+        labels = labels.view(-1)
+        mask = labels == -100
+        logits = logits[~mask]
+        labels = labels[~mask]
+        return torch.nn.functional.binary_cross_entropy_with_logits(logits, labels)
+
+
+class EnhancedMaskedAttention(TiteAttention):
+    def __init__(self, config: TiteConfig, mask_prob: float = 0.0):
+        config = TiteConfig(**{**config.to_dict(), "strides": None, "kernel_sizes": None})
+        super().__init__(config, layer_idx=-1)
+        self.mask_prob = mask_prob
+
+    def forward(
+        self, query_hidden_states: torch.Tensor, key_value_hidden_states: torch.Tensor, attention_mask: torch.Tensor
+    ) -> torch.Tensor:
+        batch_size, query_seq_len = query_hidden_states.shape[:2]
+        key_value_seq_len = key_value_hidden_states.shape[1]
+        if self.alibi is not None:
+            self.alibi = self.alibi.to(torch.float32)
+
+        input_hidden_states = query_hidden_states
+
+        if self.config.norm_location == "pre":
+            query_hidden_states = self.norm(query_hidden_states)
+            key_value_hidden_states = self.norm(key_value_hidden_states)
+
+        query = self.query(query_hidden_states)
+        key = self.key(key_value_hidden_states)
+        value = self.value(key_value_hidden_states)
+
+        query = rearrange(query, "b s (h d) -> b h s d", h=self.num_attention_heads, d=self.attention_head_size)
+        key = rearrange(key, "b s (h d) -> b h s d", h=self.num_attention_heads, d=self.attention_head_size)
+        value = rearrange(value, "b s (h d) -> b h s d", h=self.num_attention_heads, d=self.attention_head_size)
+
+        enhanced_decoding_mask = (
+            torch.rand((batch_size, query_seq_len, key_value_seq_len), device=input_hidden_states.device)
+            >= self.mask_prob
+        )
+        # set diagonal to False
+        enhanced_decoding_mask[:, range(query_seq_len), range(query_seq_len)] = False
+        enhanced_decoding_mask = enhanced_decoding_mask.logical_and(attention_mask[..., None])
+
+        if self.rope is not None:
+            query_seq_lens = torch.full((batch_size,), query_seq_len, device=query.device, dtype=torch.long)
+            key_value_seq_lens = torch.full((batch_size,), key_value_seq_len, device=query.device, dtype=torch.long)
+            query_cu_seq_lens = torch.zeros(batch_size + 1, device=query.device, dtype=torch.long)
+            query_cu_seq_lens[1:] = torch.cumsum(query_seq_lens, dim=0, dtype=query_seq_lens.dtype)
+            key_value_cu_seq_lens = torch.zeros(batch_size + 1, device=query.device, dtype=torch.long)
+            key_value_cu_seq_lens[1:] = torch.cumsum(key_value_seq_lens, dim=0, dtype=key_value_seq_lens.dtype)
+            query = self.rope(query, PackedMetaData(query_seq_lens, query_cu_seq_lens, query_seq_len, None))
+            key = self.rope(key, PackedMetaData(key_value_seq_lens, key_value_cu_seq_lens, key_value_seq_len, None))
+
+        hidden_states = torch.nn.functional.scaled_dot_product_attention(
+            query, key, value, attn_mask=enhanced_decoding_mask[:, None]
+        )
+
+        hidden_states = rearrange(
+            hidden_states,
+            "b h s d -> b s (h d)",
+            b=batch_size,
+            h=self.num_attention_heads,
+            s=query_seq_len,
+            d=self.attention_head_size,
+        )
+
+        hidden_states = self.dense(hidden_states)
+        hidden_states = self.dropout(hidden_states)
+        hidden_states = hidden_states + query_hidden_states
+        if self.config.norm_location == "post":
+            hidden_states = self.norm(hidden_states)
+        return hidden_states
+
+
+class EnhancedMaskedLMHead(PreTrainingHead):
+
+    def __init__(
+        self,
+        config: TiteConfig,
+        lm_decoder: torch.nn.Linear | None,
+        position_embeddings: torch.nn.Embedding | None = None,
+        cat_seq_emb: bool = True,
+        mask_prob: float = 0.5,
+        positional_embedding_type: Literal["absolute", "rotary", "alibi"] | None = None,
+    ):
+        super().__init__()
+        config = TiteConfig(**{**config.to_dict(), "positional_embedding_type": positional_embedding_type})
+        self.vocab_size = config.vocab_size
+        self.cat_seq_emb = cat_seq_emb
+        self.position_embeddings = position_embeddings
+        if positional_embedding_type == "absolute" and config.positional_embedding_type != "absolute":
+            self.position_embeddings = torch.nn.Embedding(config.max_position_embeddings, config.hidden_size)
+        self.lm_head = LMPredictionHead(config, lm_decoder)
+        self.enhanced_attention = EnhancedMaskedAttention(config, mask_prob)
+        if config.norm_location == "pre":
+            self.norm = NORM_MAP[config.norm_type](config.hidden_size, eps=config.layer_norm_eps)
+        else:
+            self.norm = torch.nn.Identity()
+        self.mlp = TiteMLP(config, -1)
+
+    def forward(
+        self, hidden_states: torch.Tensor, output: TiteModelOutput, attention_mask: torch.Tensor
+    ) -> torch.Tensor:
+        assert output.hidden_states is not None
+        packed_token_embeddings = output.hidden_states[0]
+        token_embeddings = torch.zeros(
+            *attention_mask.shape,
+            packed_token_embeddings.shape[-1],
+            device=packed_token_embeddings.device,
+            dtype=packed_token_embeddings.dtype,
+        )
+        token_embeddings[attention_mask.nonzero(as_tuple=True)] = packed_token_embeddings
+
+        query_hidden_states = hidden_states.expand_as(token_embeddings)
+        if self.position_embeddings is not None:
+            position_idcs = torch.arange(token_embeddings.shape[1], device=attention_mask.device)[None].expand_as(
+                attention_mask
+            )
+            query_hidden_states = query_hidden_states + self.position_embeddings(position_idcs)
+
+        key_value_hidden_states = token_embeddings
+        if self.cat_seq_emb:
+            key_value_hidden_states = torch.cat([key_value_hidden_states, hidden_states], dim=1)
+
+        hidden_states = self.enhanced_attention(query_hidden_states, key_value_hidden_states, attention_mask)
+        hidden_states = self.mlp(hidden_states)
+        hidden_states = self.norm(hidden_states)
+        logits = self.lm_head(hidden_states)
+        return logits
+
+    def get_labels(
+        self, input_ids: torch.Tensor, attention_mask: torch.Tensor, special_tokens_mask: torch.Tensor, *args, **kwargs
+    ) -> torch.Tensor:
+        return torch.where(special_tokens_mask.bool(), -100, input_ids)
+
+    def compute_loss(self, logits: torch.Tensor, labels: torch.Tensor) -> torch.Tensor:
+        logits = logits.view(-1, self.vocab_size)
+        labels = labels.view(-1)
+        return torch.nn.functional.cross_entropy(logits, labels)
+
+
+class TitePreTrainedModel(PreTrainedModel):
+    config_class = TiteConfig
+    base_model_prefix = "tite"
+
+    # Flash Attention 2 support
+    _supports_flash_attn_2 = True
+
+    # SDPA support
+    _supports_sdpa = True
+
+    def _init_weights(self, module):
+        """Initialize the weights"""
+        # https://github.com/huggingface/transformers/blob/3d7c2f9dea45338b7ebcd459b452e2fad7abfa1f/src/transformers/models/bert/modeling_bert.py#L835
+        if isinstance(module, torch.nn.Linear):
+            # Slightly different from the TF version which uses truncated_normal for initialization
+            # cf https://github.com/pytorch/pytorch/pull/5617
+            module.weight.data.normal_(mean=0.0, std=self.config.initializer_range)
+            if module.bias is not None:
+                module.bias.data.zero_()
+        elif isinstance(module, torch.nn.Embedding):
+            module.weight.data.normal_(mean=0.0, std=self.config.initializer_range)
+            if module.padding_idx is not None:
+                module.weight.data[module.padding_idx].zero_()
+        elif isinstance(module, (torch.nn.LayerNorm, RMSNorm)):
+            if isinstance(module, torch.nn.LayerNorm):
+                module.bias.data.zero_()
+            module.weight.data.fill_(1.0)
+
+
+class TiteModel(TitePreTrainedModel):
+
+    _no_split_modules = ["TiteEmbeddings", "TiteLayer"]
+
+    def __init__(self, config: TiteConfig):
+        super().__init__(config)
+        self.config: TiteConfig
+
+        self.embeddings = TiteEmbeddings(config)
+        self.encoder = TiteEncoder(config)
+
+        self.post_init()
+
+    def get_input_embeddings(self):
+        return self.embeddings.word_embeddings
+
+    def set_input_embeddings(self, value):
+        self.embeddings.word_embeddings = value
+
+    def forward(
+        self,
+        input_ids: torch.Tensor,
+        attention_mask: torch.Tensor | None = None,
+        output_hidden_states: bool = False,
+        output_attentions: bool = False,
+        **kwargs,
+    ) -> TiteModelOutput:
+        if attention_mask is None:
+            attention_mask = torch.ones(1, input_ids.shape[1], device=input_ids.device, dtype=torch.bool)
+        batch_size, seq_len = input_ids.shape
+        with torch.no_grad():
+            idcs = attention_mask.nonzero(as_tuple=True)
+            input_ids = input_ids[idcs]
+            attention_mask = attention_mask.bool()
+            seq_lens = attention_mask.sum(-1).int()
+            max_seq_len = int(seq_lens.max().item())
+            cu_seq_lens = torch.zeros(seq_lens.shape[0] + 1, dtype=seq_lens.dtype, device=seq_lens.device)
+            cu_seq_lens[1:] = torch.cumsum(seq_lens, dim=0, dtype=seq_lens.dtype)
+        hidden_states = self.embeddings(input_ids, idcs[1])
+        packed_meta_data = PackedMetaData(
+            seq_lens,
+            cu_seq_lens,
+            max_seq_len,
+            (
+                None
+                if self.config._attn_implementation == "flash_attention_2"
+                and self.config.pooling_implementation == "triton"
+                else idcs
+            ),
+        )
+        hidden_states, all_hidden_states, all_attentions = self.encoder(
+            hidden_states, packed_meta_data, output_hidden_states, output_attentions
+        )
+        if hidden_states.shape[0] == seq_lens.shape[0]:
+            hidden_states = hidden_states.unsqueeze(1)
+        else:
+            repad_hidden_states = torch.zeros(
+                batch_size, seq_len, hidden_states.shape[-1], device=hidden_states.device, dtype=hidden_states.dtype
+            )
+            repad_hidden_states[idcs] = hidden_states
+            hidden_states = repad_hidden_states.view(batch_size, seq_len, -1)
+        return TiteModelOutput(
+            last_hidden_state=hidden_states, hidden_states=all_hidden_states, attentions=all_attentions
+        )
+
+    @staticmethod
+    def _update_state_dict(state_dict):
+        new_state_dict = {}
+        for key, value in state_dict.items():
+            if key in ("pooler.dense.weight", "pooler.dense.bias", "embeddings.token_type_embeddings.weight"):
+                continue
+            new_key = key
+            new_key = new_key.replace("layer.", "layers.")
+            new_key = new_key.replace("LayerNorm", "norm")
+            new_key = new_key.replace("attention.self", "attention")
+            new_key = new_key.replace("attention.output", "attention")
+            new_key = new_key.replace("intermediate.dense", "mlp.intermediate_dense")
+            new_key = new_key.replace("output.dense", "mlp.out_dense")
+            new_key = new_key.replace("output", "mlp")
+            if "Wqkv" in key:
+                q, k, v = value.chunk(3, dim=0)
+                new_state_dict[new_key.replace("Wqkv", "query")] = q
+                new_state_dict[new_key.replace("Wqkv", "key")] = k
+                new_state_dict[new_key.replace("Wqkv", "value")] = v
+            else:
+                new_state_dict[new_key] = value
+        return new_state_dict
+
+    @classmethod
+    def _load_pretrained_model(
+        cls, model, state_dict, loaded_keys, resolved_archive_file, pretrained_model_name_or_path, *args, **kwargs
+    ):
+        new_state_dict = cls._update_state_dict(state_dict)
+        loaded_keys = list(new_state_dict.keys())
+        return super()._load_pretrained_model(
+            model, new_state_dict, loaded_keys, resolved_archive_file, pretrained_model_name_or_path, *args, **kwargs
+        )
+
+
+@dataclass
+class TitePreTrainingOutput(TiteModelOutput):
+    losses: Dict[str, torch.Tensor] | None = None
+
+
+class TiteForPreTraining(TitePreTrainedModel):
+
+    _tied_weights_keys = [
+        "tite.embeddings.word_embeddings.weight",
+        "tite.embeddings.word_embeddings.bias",
+        "lm_decoder.weight",
+        "lm_decoder.bias",
+        "heads.enhanced_masked_auto_encoding.lm_head.decoder.weight",
+        "heads.enhanced_masked_auto_encoding.lm_head.decoder.bias",
+        "heads.bow_auto_encoding.lm_head.decoder.weight",
+        "heads.bow_auto_encoding.lm_head.decoder.bias",
+    ]
+
+    def __init__(
+        self,
+        config: TiteConfig,
+        enhanced_masked_auto_encoding: bool = True,
+        bow_auto_encoding: bool = True,
+        mask_prob: float = 0.5,
+        cat_seq_emb: bool = True,
+        mae_positional_embedding_type: Literal["absolute", "rotary", "alibi"] | None = None,
+    ):
+        super().__init__(config)
+        self.config: TiteConfig
+
+        self.tite = TiteModel(config)
+        self.heads = torch.nn.ModuleDict()
+        self.lm_decoder = None
+
+        lm_decoder = torch.nn.Linear(config.hidden_size, config.vocab_size, bias=False)
+        if enhanced_masked_auto_encoding:
+            self.heads["enhanced_masked_auto_encoding"] = EnhancedMaskedLMHead(
+                config,
+                lm_decoder,
+                self.tite.embeddings.position_embeddings,
+                mask_prob=mask_prob,
+                cat_seq_emb=cat_seq_emb,
+                positional_embedding_type=mae_positional_embedding_type,
+            )
+            self.lm_decoder = lm_decoder
+        if bow_auto_encoding:
+            self.heads["bow_auto_encoding"] = BOWLMHead(config, lm_decoder)
+            self.lm_decoder = lm_decoder
+
+        self.post_init()
+
+    def get_output_embeddings(self):
+        return self.lm_decoder
+
+    def forward(
+        self,
+        input_ids: torch.Tensor,
+        attention_mask: torch.Tensor | None = None,
+        output_hidden_states: bool = False,
+        output_attentions: bool = False,
+        labels: Dict[str, torch.Tensor] | None = None,
+        **kwargs,
+    ) -> TitePreTrainingOutput:
+        output = self.tite(input_ids, attention_mask, output_hidden_states=True, output_attentions=output_attentions)
+        losses = None
+        if labels is not None:
+            losses = {}
+            for task, head in self.heads.items():
+                logits = head(output.last_hidden_state, output=output, attention_mask=attention_mask)
+                losses[task] = head.compute_loss(logits, labels[task])
+        return TitePreTrainingOutput(
+            last_hidden_state=output.last_hidden_state,
+            hidden_states=output.hidden_states if output_hidden_states else None,
+            attentions=output.attentions,
+            losses=losses,
+        )

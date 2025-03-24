@@ -115,7 +115,7 @@ class MAEEnhancedAttention(torch.nn.Module):
             d=self.attention_head_size,
         )
         decoding_mask = torch.rand((batch_size, seq_len, seq_len), device=encoder_output.device) >= self.mask_prob
-        diag_mask = ~torch.eye(seq_len, device=encoder_output.device).bool()
+        diag_mask = ~torch.eye(seq_len, device=encoder_output.device, dtype=torch.bool)
         enhanced_decoding_mask = attention_mask[:, None].logical_and(decoding_mask).logical_and(diag_mask)
         enhanced_decoding_mask = torch.nn.functional.pad(
             enhanced_decoding_mask, (encoder_output.shape[1], 0, 0, 0), value=True
