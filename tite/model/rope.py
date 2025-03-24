@@ -4,7 +4,6 @@
 # This source code is licensed under the BSD-style license found in the
 # LICENSE file in the root directory of this source tree.
 
-from typing import Optional
 
 import torch
 
@@ -40,36 +39,30 @@ class EagerRotaryPositionalEmbeddings(nn.Module):
             the rotation angles
     """
 
-    def __init__(
-        self,
-        dim: int,
-        max_seq_len: int = 4096,
-        interleaved: bool = True,
-        base: int = 10_000,
-        dtype: Optional[torch.dtype] = None,
-    ) -> None:
+    def __init__(self, dim: int, base: int = 10_000, interleaved: bool = True) -> None:
         super().__init__()
         assert dim % 2 == 0, "dim must be divisible by 2"
         self.dim = dim
         self.base = base
-        self.max_seq_len = max_seq_len
         if not interleaved:
             raise NotImplementedError("Non-interleaved RoPE is not supported yet.")
-        self._rope_init(dtype)
+        self._rope_init()
 
     # We need to explicitly define reset_parameters for FSDP initialization, see
     # https://github.com/pytorch/pytorch/blob/797d4fbdf423dd9320ebe383fb57ffb1135c4a99/torch/distributed/fsdp/_init_utils.py#L885
     def reset_parameters(self):
         self._rope_init()
 
-    def _rope_init(self, dtype: Optional[torch.dtype] = None) -> None:
+    def _rope_init(self) -> None:
         theta = 1.0 / (self.base ** (torch.arange(0, self.dim, 2)[: (self.dim // 2)].float() / self.dim))
         self.register_buffer("theta", theta, persistent=False)
-        self.build_rope_cache(self.max_seq_len, dtype)
 
-    def build_rope_cache(self, max_seq_len: int = 4096, dtype: Optional[torch.dtype] = None) -> None:
+    def _update_rope_cache(self, seq_len: int) -> None:
+        cache = getattr(self, "cache", None)
+        if cache is not None and cache.shape[0] >= seq_len:
+            return
         # Create position indexes `[0, 1, ..., max_seq_len - 1]`
-        seq_idx = torch.arange(max_seq_len, dtype=self.theta.dtype, device=self.theta.device)
+        seq_idx = torch.arange(seq_len, device=self.theta.device)
 
         # Outer product of theta and position index; output tensor has
         # a shape of [max_seq_len, dim // 2]
@@ -77,11 +70,11 @@ class EagerRotaryPositionalEmbeddings(nn.Module):
 
         # cache includes both the cos and sin components and so the output shape is
         # [max_seq_len, dim // 2, 2]
-        cache = torch.stack([torch.cos(idx_theta), torch.sin(idx_theta)], dim=-1).to(dtype)
+        cache = torch.stack([torch.cos(idx_theta), torch.sin(idx_theta)], dim=-1)
         self.register_buffer("cache", cache, persistent=False)
 
     def forward(self, x: Tensor, packed_meta_data: PackedMetaData) -> Tensor:
-        assert packed_meta_data.idcs is not None
+        self._update_rope_cache(packed_meta_data.max_seq_len)
         rope_cache = self.cache[packed_meta_data.idcs[1]].view(x.shape[0], 1, self.dim // 2, 2)
 
         xshaped = x.view(*x.shape[:-1], self.dim // 2, 2)
@@ -170,7 +163,3 @@ class TritonRotaryPositionalEmbeddings(torch.nn.Module):
             max_seqlen=packed_meta_data.max_seq_len,
         )
         return x
-
-
-if __name__ == "__main__":
-    main()

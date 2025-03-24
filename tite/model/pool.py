@@ -56,7 +56,16 @@ class PackedMetaData:
     seq_lens: torch.Tensor
     cu_seq_lens: torch.Tensor
     max_seq_len: int
-    idcs: Tuple[torch.Tensor, ...] | None
+    idcs: Tuple[torch.Tensor, ...]
+
+    @classmethod
+    def from_attention_mask(cls, attention_mask: torch.Tensor) -> "PackedMetaData":
+        idcs = attention_mask.nonzero(as_tuple=True)
+        seq_lens = attention_mask.sum(-1).int()
+        max_seq_len = int(seq_lens.max().item())
+        cu_seq_lens = torch.zeros(seq_lens.shape[0] + 1, dtype=seq_lens.dtype, device=seq_lens.device)
+        cu_seq_lens[1:] = torch.cumsum(seq_lens, dim=0, dtype=seq_lens.dtype)
+        return cls(seq_lens, cu_seq_lens, max_seq_len, idcs)
 
 
 @triton.jit
@@ -379,6 +388,10 @@ class PackedAvgPool1d(torch.nn.Module):
         return y_packed
 
     @torch.compiler.disable
+    def triton_forward(self, packed_x: torch.Tensor, packed_meta_data: PackedMetaData) -> torch.Tensor:
+        y = ApplyPooling_.apply(packed_x, packed_meta_data, packed_meta_data, self.kernel_size, self.stride)
+        return y
+
     def forward(self, x: torch.Tensor, packed_meta_data: PackedMetaData) -> Tuple[torch.Tensor, PackedMetaData]:
         if packed_meta_data.max_seq_len == 1 or (self.kernel_size == 1 and self.stride == 1):
             return x, packed_meta_data
@@ -388,17 +401,15 @@ class PackedAvgPool1d(torch.nn.Module):
         y_cu_seq_lens = torch.zeros(y_seq_lens.shape[0] + 1, dtype=packed_meta_data.cu_seq_lens.dtype, device=x.device)
         y_cu_seq_lens[1:] = torch.cumsum(y_seq_lens, dim=0, dtype=packed_meta_data.cu_seq_lens.dtype)
         idcs = packed_meta_data.idcs
-        if idcs is not None:
-            batch_idcs = torch.arange(len(y_seq_lens), device=x.device).repeat_interleave(y_seq_lens)
-            position_idcs = torch.ones(y_cu_seq_lens[-1], device=x.device, dtype=y_cu_seq_lens.dtype)
-            position_idcs[y_cu_seq_lens[1:-1]] = -y_seq_lens[:-1] + 1
-            position_idcs = position_idcs.cumsum(0) - 1
-            idcs = (batch_idcs, position_idcs)
+        batch_idcs = torch.arange(len(y_seq_lens), device=x.device).repeat_interleave(y_seq_lens)
+        position_idcs = torch.ones(y_cu_seq_lens[-1], device=x.device, dtype=y_cu_seq_lens.dtype)
+        position_idcs[y_cu_seq_lens[1:-1]] = -y_seq_lens[:-1] + 1
+        position_idcs = position_idcs.cumsum(0) - 1
+        idcs = (batch_idcs, position_idcs)
 
+        y_packed_meta_data = PackedMetaData(y_seq_lens, y_cu_seq_lens, y_max_seq_len, idcs)
         if self.implementation == "triton":
-            y_packed_meta_data = PackedMetaData(y_seq_lens, y_cu_seq_lens, y_max_seq_len, idcs)
             y = ApplyPooling_.apply(x, packed_meta_data, y_packed_meta_data, self.kernel_size, self.stride)
         elif self.implementation == "eager":
             y = self.eager_forward(x, packed_meta_data)
-            y_packed_meta_data = PackedMetaData(y_seq_lens, y_cu_seq_lens, y_max_seq_len, idcs)
         return y, y_packed_meta_data

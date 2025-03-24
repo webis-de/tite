@@ -1,4 +1,5 @@
 from abc import ABC, abstractmethod
+from copy import deepcopy
 from dataclasses import dataclass
 from typing import Dict, List, Literal, Tuple
 
@@ -17,51 +18,6 @@ from transformers.modeling_outputs import ModelOutput
 
 from .pool import PackedAvgPool1d, PackedMetaData, compute_output_shape
 from .rope import EagerRotaryPositionalEmbeddings, TritonRotaryPositionalEmbeddings
-
-
-class ComposedEmbedding(torch.nn.Embedding):
-    def __init__(
-        self,
-        num_embeddings: int,
-        small_embedding_dim: int,
-        large_embedding_dim: int,
-        padding_idx: int | None = None,
-        max_norm: float | None = None,
-        norm_type: float = 2,
-        scale_grad_by_freq: bool = False,
-        sparse: bool = False,
-        _weight: torch.Tensor | None = None,
-        _freeze: bool = False,
-        device=None,
-        dtype=None,
-    ) -> None:
-        # TODO when in eval mode, compute smaller embedding from entire matrix and store it
-        super().__init__(
-            num_embeddings,
-            large_embedding_dim,
-            padding_idx,
-            max_norm,
-            norm_type,
-            scale_grad_by_freq,
-            sparse,
-            _weight,
-            _freeze,
-            device,
-            dtype,
-        )
-        self.linear = None
-        if small_embedding_dim == large_embedding_dim:
-            self.linear = torch.nn.Identity()
-        else:
-            self.linear = torch.nn.Linear(large_embedding_dim, small_embedding_dim, bias=False)
-
-    def forward(self, input: torch.Tensor) -> torch.Tensor:
-        embeddings = torch.nn.functional.embedding(
-            input, self.weight, self.padding_idx, self.max_norm, self.norm_type, self.scale_grad_by_freq, self.sparse
-        )
-        if self.linear is not None:
-            embeddings = self.linear(embeddings)
-        return embeddings
 
 
 class RMSNorm(torch.nn.Module):
@@ -123,11 +79,11 @@ class TiteConfig(PretrainedConfig):
         self,
         vocab_size: int = 30522,
         num_hidden_layers: int = 12,
-        hidden_sizes: Tuple[int, ...] | int = (768,) * 12,
-        num_attention_heads: Tuple[int, ...] | int = (12,) * 12,
-        intermediate_sizes: Tuple[int, ...] | int = (3072,) * 12,
-        kernel_sizes: Tuple[int | None, ...] | int | None = (None,) * 12,
-        strides: Tuple[int | None, ...] | int | None = (None,) * 12,
+        hidden_sizes: Tuple[int, ...] | int = 768,
+        num_attention_heads: Tuple[int, ...] | int = 12,
+        intermediate_sizes: Tuple[int, ...] | int = 3072,
+        kernel_sizes: Tuple[int | None, ...] | int | None = None,
+        strides: Tuple[int | None, ...] | int | None = None,
         dropout_prob: float = 0.1,
         max_position_embeddings: int = 512,
         initializer_range: float = 0.02,
@@ -225,17 +181,14 @@ class TiteConfig(PretrainedConfig):
 class TiteEmbeddings(torch.nn.Module):
     def __init__(self, config: TiteConfig):
         super().__init__()
-        hidden_size = config.hidden_sizes[0]
         self.num_attention_heads = config.num_attention_heads
-        self.word_embeddings = ComposedEmbedding(
-            config.vocab_size, hidden_size, config.hidden_size, padding_idx=config.pad_token_id
+        self.word_embeddings = torch.nn.Embedding(
+            config.vocab_size, config.hidden_size, padding_idx=config.pad_token_id
         )
         self.position_embeddings = None
         if config.positional_embedding_type == "absolute":
-            self.position_embeddings = ComposedEmbedding(
-                config.max_position_embeddings, hidden_size, config.hidden_size
-            )
-        self.norm = NORM_MAP[config.norm_type](hidden_size, eps=config.layer_norm_eps)
+            self.position_embeddings = torch.nn.Embedding(config.max_position_embeddings, config.hidden_size)
+        self.norm = NORM_MAP[config.norm_type](config.hidden_size, eps=config.layer_norm_eps)
         self.dropout = torch.nn.Dropout(config.dropout_prob)
 
     def forward(self, input_ids: torch.Tensor, position_idcs: torch.Tensor) -> torch.Tensor:
@@ -302,7 +255,7 @@ class TiteAttention(torch.nn.Module):
 
         if config.positional_embedding_type == "rotary":
             self.rope = self.ROPE_CLASSES[config.rope_implementation](
-                self.attention_head_size, config.max_position_embeddings, interleaved=config.rotary_interleaved
+                self.attention_head_size, interleaved=config.rotary_interleaved
             )
             self.alibi = None
         elif config.positional_embedding_type == "alibi":
@@ -528,6 +481,13 @@ class TiteEncoder(torch.nn.Module):
             self.norm = NORM_MAP[config.norm_type](config.hidden_size, eps=config.layer_norm_eps)
         else:
             self.norm = torch.nn.Identity()
+        if config.hidden_sizes[0] != config.hidden_sizes[-1]:
+            self.downscale = torch.nn.Sequential(
+                torch.nn.Linear(config.hidden_sizes[-1], config.hidden_sizes[0]),
+                NORM_MAP[config.norm_type](config.hidden_sizes[0], eps=config.layer_norm_eps),
+            )
+        else:
+            self.downscale = torch.nn.Identity()
 
     def forward(
         self,
@@ -538,10 +498,11 @@ class TiteEncoder(torch.nn.Module):
     ) -> Tuple[torch.Tensor, List[torch.Tensor] | None, List[torch.Tensor] | None]:
         all_hidden_states = [hidden_states] if output_hidden_states else None
         all_attentions: List[torch.Tensor] | None = [] if output_attentions else None
-        for layer_idx, layer_module in enumerate(self.layers):
-            hidden_states, attention, packed_meta_data = layer_module(
-                hidden_states, packed_meta_data, output_attentions
-            )
+        hidden_states = self.downscale(hidden_states)
+        if all_hidden_states is not None:
+            all_hidden_states.append(hidden_states)
+        for layer_idx, layer in enumerate(self.layers):
+            hidden_states, attention, packed_meta_data = layer(hidden_states, packed_meta_data, output_attentions)
             if all_hidden_states is not None:
                 all_hidden_states.append(hidden_states)
             if all_attentions is not None:
@@ -556,7 +517,7 @@ class PreTrainingHead(torch.nn.Module, ABC):
     def get_labels(self, *args, **kwargs) -> torch.Tensor: ...
 
     @abstractmethod
-    def forward(self, output: TiteModelOutput, attention_mask: torch.Tensor) -> torch.Tensor: ...
+    def forward(self, hidden_states: torch.Tensor, *args, **kwargs) -> torch.Tensor: ...
 
     @abstractmethod
     def compute_loss(self, logits: torch.Tensor, labels: torch.Tensor) -> torch.Tensor: ...
@@ -618,11 +579,10 @@ class BOWLMHead(PreTrainingHead):
 
 class EnhancedMaskedAttention(TiteAttention):
     def __init__(self, config: TiteConfig, mask_prob: float = 0.0):
-        config = TiteConfig(**{**config.to_dict(), "strides": None, "kernel_sizes": None})
         super().__init__(config, layer_idx=-1)
         self.mask_prob = mask_prob
 
-    def forward(
+    def forward(  # type: ignore
         self, query_hidden_states: torch.Tensor, key_value_hidden_states: torch.Tensor, attention_mask: torch.Tensor
     ) -> torch.Tensor:
         batch_size, query_seq_len = query_hidden_states.shape[:2]
@@ -653,14 +613,23 @@ class EnhancedMaskedAttention(TiteAttention):
         enhanced_decoding_mask = enhanced_decoding_mask.logical_and(attention_mask[..., None])
 
         if self.rope is not None:
-            query_seq_lens = torch.full((batch_size,), query_seq_len, device=query.device, dtype=torch.long)
-            key_value_seq_lens = torch.full((batch_size,), key_value_seq_len, device=query.device, dtype=torch.long)
-            query_cu_seq_lens = torch.zeros(batch_size + 1, device=query.device, dtype=torch.long)
-            query_cu_seq_lens[1:] = torch.cumsum(query_seq_lens, dim=0, dtype=query_seq_lens.dtype)
-            key_value_cu_seq_lens = torch.zeros(batch_size + 1, device=query.device, dtype=torch.long)
-            key_value_cu_seq_lens[1:] = torch.cumsum(key_value_seq_lens, dim=0, dtype=key_value_seq_lens.dtype)
-            query = self.rope(query, PackedMetaData(query_seq_lens, query_cu_seq_lens, query_seq_len, None))
-            key = self.rope(key, PackedMetaData(key_value_seq_lens, key_value_cu_seq_lens, key_value_seq_len, None))
+            query_packed_meta_data = PackedMetaData.from_attention_mask(torch.ones_like(attention_mask))
+            if query_hidden_states.shape[1] == key_value_hidden_states.shape[1]:
+                key_packed_meta_data = query_packed_meta_data
+            else:
+                key_packed_meta_data = PackedMetaData.from_attention_mask(
+                    torch.ones(batch_size, key_value_seq_len, device=input_hidden_states.device, dtype=torch.bool)
+                )
+            query = rearrange(
+                self.rope(rearrange(query, ("b h s d -> (b s) h d")), query_packed_meta_data),
+                "(b s) h d -> b h s d",
+                b=batch_size,
+            )
+            key = rearrange(
+                self.rope(rearrange(key, ("b h s d -> (b s) h d")), key_packed_meta_data),
+                "(b s) h d -> b h s d",
+                b=batch_size,
+            )
 
         hidden_states = torch.nn.functional.scaled_dot_product_attention(
             query, key, value, attn_mask=enhanced_decoding_mask[:, None]
@@ -695,7 +664,17 @@ class EnhancedMaskedLMHead(PreTrainingHead):
         positional_embedding_type: Literal["absolute", "rotary", "alibi"] | None = None,
     ):
         super().__init__()
-        config = TiteConfig(**{**config.to_dict(), "positional_embedding_type": positional_embedding_type})
+        config = deepcopy(config)
+        config.num_hidden_layers = 1
+        config.hidden_sizes = config.hidden_sizes[-1:]
+        config.num_attention_heads = config.num_attention_heads[-1:]
+        config.intermediate_sizes = config.intermediate_sizes[-1:]
+        config.strides = (None,)
+        config.kernel_sizes = (None,)
+        if cat_seq_emb:
+            config.max_position_embeddings += 1
+        if positional_embedding_type is not None:
+            config.positional_embedding_type = positional_embedding_type
         self.vocab_size = config.vocab_size
         self.cat_seq_emb = cat_seq_emb
         self.position_embeddings = position_embeddings
@@ -808,31 +787,16 @@ class TiteModel(TitePreTrainedModel):
     ) -> TiteModelOutput:
         if attention_mask is None:
             attention_mask = torch.ones(1, input_ids.shape[1], device=input_ids.device, dtype=torch.bool)
+        attention_mask = attention_mask.bool()
         batch_size, seq_len = input_ids.shape
-        with torch.no_grad():
-            idcs = attention_mask.nonzero(as_tuple=True)
-            input_ids = input_ids[idcs]
-            attention_mask = attention_mask.bool()
-            seq_lens = attention_mask.sum(-1).int()
-            max_seq_len = int(seq_lens.max().item())
-            cu_seq_lens = torch.zeros(seq_lens.shape[0] + 1, dtype=seq_lens.dtype, device=seq_lens.device)
-            cu_seq_lens[1:] = torch.cumsum(seq_lens, dim=0, dtype=seq_lens.dtype)
+        packed_meta_data = PackedMetaData.from_attention_mask(attention_mask)
+        idcs = packed_meta_data.idcs
+        input_ids = input_ids[idcs]
         hidden_states = self.embeddings(input_ids, idcs[1])
-        packed_meta_data = PackedMetaData(
-            seq_lens,
-            cu_seq_lens,
-            max_seq_len,
-            (
-                None
-                if self.config._attn_implementation == "flash_attention_2"
-                and self.config.pooling_implementation == "triton"
-                else idcs
-            ),
-        )
         hidden_states, all_hidden_states, all_attentions = self.encoder(
             hidden_states, packed_meta_data, output_hidden_states, output_attentions
         )
-        if hidden_states.shape[0] == seq_lens.shape[0]:
+        if hidden_states.shape[0] == packed_meta_data.seq_lens.shape[0]:
             hidden_states = hidden_states.unsqueeze(1)
         else:
             repad_hidden_states = torch.zeros(
