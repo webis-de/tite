@@ -88,13 +88,29 @@
                 }
             },
             {
+                "SpecialToken": {
+                    "id": "[SEP]",
+                    "type_id": 0
+                }
+            },
+            {
                 "Sequence": {
                     "id": "B",
                     "type_id": 1
                 }
             }
         ],
-        "special_tokens": {}
+        "special_tokens": {
+            "[SEP]": {
+                "id": "[SEP]",
+                "ids": [
+                    102
+                ],
+                "tokens": [
+                    "[SEP]"
+                ]
+            }
+        }
     },
     "decoder": {
         "type": "WordPiece",
