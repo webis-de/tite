@@ -56,7 +56,7 @@ class PackedMetaData:
     seq_lens: torch.Tensor
     cu_seq_lens: torch.Tensor
     max_seq_len: int
-    idcs: Tuple[torch.Tensor, ...]
+    idcs: Tuple[torch.Tensor, ...] | None
 
     @classmethod
     def from_attention_mask(cls, attention_mask: torch.Tensor) -> "PackedMetaData":
@@ -401,11 +401,12 @@ class PackedAvgPool1d(torch.nn.Module):
         y_cu_seq_lens = torch.zeros(y_seq_lens.shape[0] + 1, dtype=packed_meta_data.cu_seq_lens.dtype, device=x.device)
         y_cu_seq_lens[1:] = torch.cumsum(y_seq_lens, dim=0, dtype=packed_meta_data.cu_seq_lens.dtype)
         idcs = packed_meta_data.idcs
-        batch_idcs = torch.arange(len(y_seq_lens), device=x.device).repeat_interleave(y_seq_lens)
-        position_idcs = torch.ones(y_cu_seq_lens[-1], device=x.device, dtype=y_cu_seq_lens.dtype)
-        position_idcs[y_cu_seq_lens[1:-1]] = -y_seq_lens[:-1] + 1
-        position_idcs = position_idcs.cumsum(0) - 1
-        idcs = (batch_idcs, position_idcs)
+        if idcs is not None:
+            batch_idcs = torch.arange(len(y_seq_lens), device=x.device).repeat_interleave(y_seq_lens)
+            position_idcs = torch.ones(y_cu_seq_lens[-1], device=x.device, dtype=y_cu_seq_lens.dtype)
+            position_idcs[y_cu_seq_lens[1:-1]] = -y_seq_lens[:-1] + 1
+            position_idcs = position_idcs.cumsum(0) - 1
+            idcs = (batch_idcs, position_idcs)
 
         y_packed_meta_data = PackedMetaData(y_seq_lens, y_cu_seq_lens, y_max_seq_len, idcs)
         if self.implementation == "triton":

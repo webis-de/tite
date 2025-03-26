@@ -791,6 +791,9 @@ class TiteModel(TitePreTrainedModel):
         batch_size, seq_len = input_ids.shape
         packed_meta_data = PackedMetaData.from_attention_mask(attention_mask)
         idcs = packed_meta_data.idcs
+        assert idcs is not None
+        if self.config._attn_implementation == "flash_attention_2" and self.config.pooling_implementation == "triton":
+            packed_meta_data.idcs = None
         input_ids = input_ids[idcs]
         hidden_states = self.embeddings(input_ids, idcs[1])
         hidden_states, all_hidden_states, all_attentions = self.encoder(
