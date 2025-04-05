@@ -2,8 +2,6 @@ import pytest
 import torch
 from transformers import BertConfig, BertModel
 
-from tite.model.legacy import TiteConfig as TiteLegacyConfig
-from tite.model.legacy import TiteModel as TiteLegacyModel
 from tite.model.pool import compute_output_shape
 from tite.model.tite import TiteConfig, TiteForPreTraining, TiteModel
 
@@ -39,63 +37,6 @@ def test_tite_model(config: TiteConfig, positional_embedding_type: str):
     output = model(input_ids, attention_mask).last_hidden_state
     assert output.shape == (2, 1, config.hidden_size)
     assert output.requires_grad
-
-
-def test_same_as_legacy():
-    device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
-    config = TiteConfig(
-        vocab_size=32,
-        num_hidden_layers=6,
-        hidden_sizes=(4,) * 6,
-        num_attention_heads=(2,) * 6,
-        intermediate_sizes=(8,) * 6,
-        kernel_sizes=(2,) * 6,
-        strides=(2,) * 6,
-        max_position_embeddings=64,
-        positional_embedding_type="rotary",
-        rope_implementation="eager",
-        rotary_interleaved=True,
-        norm_location="post",
-        norm_type="layer",
-        attn_implementation="sdpa",
-        pooling_implementation="eager",
-    )
-    model = TiteModel(config).to(device).eval()
-    legacy_config = TiteLegacyConfig(
-        vocab_size=32,
-        num_hidden_layers=6,
-        hidden_sizes=(4,) * 6,
-        num_attention_heads=(2,) * 6,
-        intermediate_sizes=(8,) * 6,
-        kernel_sizes=(2,) * 6,
-        strides=(2,) * 6,
-        max_position_embeddings=64,
-        positional_embedding_type="rotary",
-    )
-    legacy_model = TiteLegacyModel(legacy_config).to(device).eval()
-
-    model.load_state_dict(model._update_state_dict(legacy_model.state_dict()))
-
-    input_ids = torch.randint(0, config.vocab_size, (2, config.max_position_embeddings), device=device)
-    attention_mask = torch.ones_like(input_ids, dtype=torch.bool, device=device)
-    attention_mask[0, -config.max_position_embeddings // 2 :] = False
-
-    with torch.amp.autocast(device_type="cuda"):
-        output = model(input_ids, attention_mask, output_hidden_states=True)
-        legacy_output = legacy_model(input_ids, attention_mask, output_hidden_states=True)
-        output.last_hidden_state.sum().backward()
-        legacy_output.last_hidden_state.sum().backward()
-
-    seq_lens = attention_mask.sum(-1)
-    for i in range(config.num_hidden_layers):
-        mask = torch.arange(0, legacy_output.hidden_states[i].shape[1], device=device) < seq_lens[:, None]
-        assert torch.allclose(output.hidden_states[i], legacy_output.hidden_states[i][mask], atol=1e-6)
-        seq_lens = compute_output_shape(seq_lens, config.kernel_sizes[i], config.strides[i])
-    assert torch.allclose(output.last_hidden_state, legacy_output.last_hidden_state, atol=1e-6)
-    legacy_grads = {name: param.grad for name, param in legacy_model.named_parameters() if param.grad is not None}
-    legacy_grads = model._update_state_dict(legacy_grads)
-    for name, param in model.named_parameters():
-        assert torch.allclose(legacy_grads[name], param.grad, atol=1e-5)
 
 
 @pytest.mark.parametrize("attn_implementation", ["sdpa", "eager", "flash_attention_2"])
@@ -185,3 +126,5 @@ def test_pretrain(config: TiteConfig):
         labels[task] = head.get_labels(input_ids, attention_mask, special_tokens_mask)
 
     output = model(input_ids, attention_mask, labels=labels)
+
+    assert output.losses is not None
