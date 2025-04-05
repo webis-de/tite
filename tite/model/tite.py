@@ -91,7 +91,6 @@ class TiteConfig(PretrainedConfig):
         pad_token_id: int = 0,
         hidden_act: str = "gelu_pytorch_tanh",
         positional_embedding_type: Literal["absolute", "rotary", "alibi"] = "rotary",
-        pooling_location: Literal["pre", "attention", "post"] = "attention",
         rotary_interleaved: bool = False,
         norm_location: Literal["pre", "post"] = "pre",
         norm_type: Literal["rms", "layer"] = "rms",
@@ -227,6 +226,8 @@ class TiteAttention(torch.nn.Module):
         to_hidden_size = config.hidden_sizes[layer_idx]
         from_hidden_size = config.hidden_sizes[max(0, layer_idx - 1)]
         self.hidden_size_diff = to_hidden_size - from_hidden_size
+        if self.hidden_size_diff < 0:
+            raise ValueError("Only upscaling the hidden size is supported")
 
         if config.norm_location == "pre" and layer_idx == 0:
             self.norm = torch.nn.Identity()
@@ -374,34 +375,35 @@ class TiteAttention(torch.nn.Module):
         if self.alibi is not None:
             self.alibi = self.alibi.to(torch.float32)
 
-        if self.pooling is not None and self.config.pooling_location == "pre":
-            hidden_states, packed_meta_data = self.pooling(hidden_states, packed_meta_data)
-        input_hidden_states = hidden_states
-
-        if self.config.norm_location == "pre":
-            hidden_states = self.norm(hidden_states)
+        if self.pooling is None:
+            input_hidden_states = hidden_states
+            output_packed_meta_data = packed_meta_data
+            if self.config.norm_location == "pre":
+                hidden_states = self.norm(hidden_states)
+        else:
+            query_hidden_states, output_packed_meta_data = self.pooling(hidden_states, packed_meta_data)
+            input_hidden_states = query_hidden_states
+            if self.config.norm_location == "pre":
+                hidden_states = self.norm(hidden_states)
+                query_hidden_states = self.norm(query_hidden_states)
 
         value = self.value(hidden_states)
         if packed_meta_data.max_seq_len == 1:
             hidden_states, attn_probs = value, None
         else:
-            query = self.query(hidden_states)
+            query = self.query(query_hidden_states)
             key = self.key(hidden_states)
-
-            query_packed_meta_data = packed_meta_data
-            if self.pooling is not None and self.config.pooling_location == "attention":
-                query, query_packed_meta_data = self.pooling(query, packed_meta_data)
 
             query = rearrange(query, "t (h d) -> t h d", h=self.num_attention_heads, d=self.attention_head_size)
             key = rearrange(key, "t (h d) -> t h d", h=self.num_attention_heads, d=self.attention_head_size)
             value = rearrange(value, "t (h d) -> t h d", h=self.num_attention_heads, d=self.attention_head_size)
 
             if self.rope is not None:
-                query = self.rope(query, query_packed_meta_data)
+                query = self.rope(query, output_packed_meta_data)
                 key = self.rope(key, packed_meta_data)
 
             hidden_states, attn_probs = self.attention_function(
-                query, key, value, query_packed_meta_data, packed_meta_data, output_attention
+                query, key, value, output_packed_meta_data, packed_meta_data, output_attention
             )
 
             hidden_states = rearrange(hidden_states, "t h d -> t (h d)")
@@ -409,21 +411,14 @@ class TiteAttention(torch.nn.Module):
         hidden_states = self.dense(hidden_states)
         hidden_states = self.dropout(hidden_states)
 
-        if self.pooling is not None and self.config.pooling_location == "attention":
-            input_hidden_states, packed_meta_data = self.pooling(input_hidden_states, packed_meta_data)
-
-        if self.hidden_size_diff > 0:
+        if self.hidden_size_diff:
             input_hidden_states = torch.nn.functional.pad(input_hidden_states, (0, self.hidden_size_diff))
-        elif self.hidden_size_diff < 0:
-            hidden_states = torch.nn.functional.pad(hidden_states, (0, -self.hidden_size_diff))
         hidden_states = hidden_states + input_hidden_states
-
-        if self.pooling is not None and self.config.pooling_location == "post":
-            hidden_states, packed_meta_data = self.pooling(hidden_states, packed_meta_data)
 
         if self.config.norm_location == "post":
             hidden_states = self.norm(hidden_states)
-        return hidden_states, attn_probs, packed_meta_data
+
+        return hidden_states, attn_probs, output_packed_meta_data
 
 
 class TiteMLP(torch.nn.Module):
