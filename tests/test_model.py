@@ -125,6 +125,6 @@ def test_pretrain(config: TiteConfig):
     for task, head in model.heads.items():
         labels[task] = head.get_labels(input_ids, attention_mask, special_tokens_mask)
 
-    output = model(input_ids, attention_mask, labels=labels)
+    output = model(input_ids, attention_mask, original_input_ids=input_ids, labels=labels)
 
     assert output.losses is not None

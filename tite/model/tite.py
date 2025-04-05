@@ -122,7 +122,6 @@ class TiteConfig(PretrainedConfig):
         self.layer_norm_eps = layer_norm_eps
         self.hidden_act = hidden_act
         self.positional_embedding_type = positional_embedding_type
-        self.pooling_location = pooling_location
         self.rotary_interleaved = rotary_interleaved
         self.norm_location = norm_location
         self.norm_type = norm_type
@@ -512,7 +511,12 @@ class PreTrainingHead(torch.nn.Module, ABC):
     def get_labels(self, *args, **kwargs) -> torch.Tensor: ...
 
     @abstractmethod
-    def forward(self, hidden_states: torch.Tensor, *args, **kwargs) -> torch.Tensor: ...
+    def forward(
+        self,
+        output: TiteModelOutput,
+        original_input_ids: torch.Tensor,
+        attention_mask: torch.Tensor,
+    ) -> torch.Tensor: ...
 
     @abstractmethod
     def compute_loss(self, logits: torch.Tensor, labels: torch.Tensor) -> torch.Tensor: ...
@@ -550,8 +554,8 @@ class BOWLMHead(PreTrainingHead):
         self.vocab_size = config.vocab_size
         self.lm_head = LMPredictionHead(config, lm_decoder)
 
-    def forward(self, hidden_states: torch.Tensor, *args, **kwargs) -> torch.Tensor:
-        return self.lm_head(hidden_states)
+    def forward(self, output: TiteModelOutput, *args, **kwargs) -> torch.Tensor:
+        return self.lm_head(output.last_hidden_state)
 
     def get_labels(
         self, input_ids: torch.Tensor, attention_mask: torch.Tensor, special_tokens_mask: torch.Tensor, *args, **kwargs
@@ -573,9 +577,9 @@ class BOWLMHead(PreTrainingHead):
 
 
 class EnhancedMaskedAttention(TiteAttention):
-    def __init__(self, config: TiteConfig, mask_prob: float = 0.0):
+    def __init__(self, config: TiteConfig, mask_strategy: float | Literal["causal"] = 0.0):
         super().__init__(config, layer_idx=-1)
-        self.mask_prob = mask_prob
+        self.mask_strategy = mask_strategy
 
     def forward(  # type: ignore
         self, query_hidden_states: torch.Tensor, key_value_hidden_states: torch.Tensor, attention_mask: torch.Tensor
@@ -599,13 +603,20 @@ class EnhancedMaskedAttention(TiteAttention):
         key = rearrange(key, "b s (h d) -> b h s d", h=self.num_attention_heads, d=self.attention_head_size)
         value = rearrange(value, "b s (h d) -> b h s d", h=self.num_attention_heads, d=self.attention_head_size)
 
-        enhanced_decoding_mask = (
-            torch.rand((batch_size, query_seq_len, key_value_seq_len), device=input_hidden_states.device)
-            >= self.mask_prob
-        )
-        # set diagonal to False
-        enhanced_decoding_mask[:, range(query_seq_len), range(query_seq_len)] = False
-        enhanced_decoding_mask = enhanced_decoding_mask.logical_and(attention_mask[..., None])
+        if self.mask_strategy == "causal":
+            enhanced_decoding_mask = torch.tril(
+                torch.ones((query_seq_len, key_value_seq_len), device=input_hidden_states.device, dtype=torch.bool)
+            )[None].expand(input_hidden_states.shape[0], -1, -1)
+        elif isinstance(self.mask_strategy, float):
+            enhanced_decoding_mask = (
+                torch.rand((batch_size, query_seq_len, key_value_seq_len), device=input_hidden_states.device)
+                >= self.mask_strategy
+            )
+            # set diagonal to False
+            enhanced_decoding_mask[:, range(query_seq_len), range(query_seq_len)] = False
+            enhanced_decoding_mask = enhanced_decoding_mask.logical_and(attention_mask[..., None])
+        else:
+            raise ValueError("invalid mask strategy")
 
         if self.rope is not None:
             query_packed_meta_data = PackedMetaData.from_attention_mask(torch.ones_like(attention_mask))
@@ -647,16 +658,14 @@ class EnhancedMaskedAttention(TiteAttention):
         return hidden_states
 
 
-class EnhancedMaskedLMHead(PreTrainingHead):
+class EnhancedLMHead(PreTrainingHead):
 
     def __init__(
         self,
         config: TiteConfig,
+        embeddings: TiteEmbeddings,
         lm_decoder: torch.nn.Linear | None,
-        position_embeddings: torch.nn.Embedding | None = None,
-        cat_seq_emb: bool = True,
-        mask_prob: float = 0.5,
-        positional_embedding_type: Literal["absolute", "rotary", "alibi"] | None = None,
+        mask_strategy: float | Literal["causal"] = 0.5,
     ):
         super().__init__()
         config = deepcopy(config)
@@ -666,17 +675,13 @@ class EnhancedMaskedLMHead(PreTrainingHead):
         config.intermediate_sizes = config.intermediate_sizes[-1:]
         config.strides = (None,)
         config.kernel_sizes = (None,)
-        if cat_seq_emb:
-            config.max_position_embeddings += 1
-        if positional_embedding_type is not None:
-            config.positional_embedding_type = positional_embedding_type
+
         self.vocab_size = config.vocab_size
-        self.cat_seq_emb = cat_seq_emb
-        self.position_embeddings = position_embeddings
-        if positional_embedding_type == "absolute" and config.positional_embedding_type != "absolute":
-            self.position_embeddings = torch.nn.Embedding(config.max_position_embeddings, config.hidden_size)
+        self.embeddings = embeddings
         self.lm_head = LMPredictionHead(config, lm_decoder)
-        self.enhanced_attention = EnhancedMaskedAttention(config, mask_prob)
+        self.enhanced_attention = EnhancedMaskedAttention(config, mask_strategy)
+        self.mask_strategy = mask_strategy
+
         if config.norm_location == "pre":
             self.norm = NORM_MAP[config.norm_type](config.hidden_size, eps=config.layer_norm_eps)
         else:
@@ -684,30 +689,25 @@ class EnhancedMaskedLMHead(PreTrainingHead):
         self.mlp = TiteMLP(config, -1)
 
     def forward(
-        self, hidden_states: torch.Tensor, output: TiteModelOutput, attention_mask: torch.Tensor
+        self,
+        output: TiteModelOutput,
+        original_input_ids: torch.Tensor,
+        attention_mask: torch.Tensor,
     ) -> torch.Tensor:
-        assert output.hidden_states is not None
-        packed_token_embeddings = output.hidden_states[0]
-        token_embeddings = torch.zeros(
-            *attention_mask.shape,
-            packed_token_embeddings.shape[-1],
-            device=packed_token_embeddings.device,
-            dtype=packed_token_embeddings.dtype,
+        position_idcs = torch.arange(original_input_ids.shape[1], device=original_input_ids.device)[None].expand_as(
+            original_input_ids
         )
-        token_embeddings[attention_mask.nonzero(as_tuple=True)] = packed_token_embeddings
+        token_embeddings = self.embeddings(original_input_ids, position_idcs)
 
-        query_hidden_states = hidden_states.expand_as(token_embeddings)
-        if self.position_embeddings is not None:
-            position_idcs = torch.arange(token_embeddings.shape[1], device=attention_mask.device)[None].expand_as(
-                attention_mask
-            )
-            query_hidden_states = query_hidden_states + self.position_embeddings(position_idcs)
+        query_hidden_states = output.last_hidden_state.expand_as(token_embeddings)
 
         key_value_hidden_states = token_embeddings
-        if self.cat_seq_emb:
-            key_value_hidden_states = torch.cat([key_value_hidden_states, hidden_states], dim=1)
 
         hidden_states = self.enhanced_attention(query_hidden_states, key_value_hidden_states, attention_mask)
+
+        if self.mask_strategy == "causal":
+            hidden_states = hidden_states[:, :-1]
+
         hidden_states = self.mlp(hidden_states)
         hidden_states = self.norm(hidden_states)
         logits = self.lm_head(hidden_states)
@@ -716,11 +716,14 @@ class EnhancedMaskedLMHead(PreTrainingHead):
     def get_labels(
         self, input_ids: torch.Tensor, attention_mask: torch.Tensor, special_tokens_mask: torch.Tensor, *args, **kwargs
     ) -> torch.Tensor:
-        return torch.where(special_tokens_mask.bool(), -100, input_ids)
+        targets = torch.where(special_tokens_mask.bool(), -100, input_ids)
+        if self.mask_strategy == "causal":
+            targets = targets[:, 1:]
+        return targets
 
     def compute_loss(self, logits: torch.Tensor, labels: torch.Tensor) -> torch.Tensor:
         logits = logits.view(-1, self.vocab_size)
-        labels = labels.view(-1)
+        labels = labels.reshape(-1)
         return torch.nn.functional.cross_entropy(logits, labels)
 
 
@@ -862,10 +865,9 @@ class TiteForPreTraining(TitePreTrainedModel):
         self,
         config: TiteConfig,
         enhanced_masked_auto_encoding: bool = True,
+        enhanced_causal_auto_encoding: bool = True,
         bow_auto_encoding: bool = True,
         mask_prob: float = 0.5,
-        cat_seq_emb: bool = True,
-        mae_positional_embedding_type: Literal["absolute", "rotary", "alibi"] | None = None,
     ):
         super().__init__(config)
         self.config: TiteConfig
@@ -876,18 +878,17 @@ class TiteForPreTraining(TitePreTrainedModel):
 
         lm_decoder = torch.nn.Linear(config.hidden_size, config.vocab_size, bias=False)
         if enhanced_masked_auto_encoding:
-            self.heads["enhanced_masked_auto_encoding"] = EnhancedMaskedLMHead(
-                config,
-                lm_decoder,
-                self.tite.embeddings.position_embeddings,
-                mask_prob=mask_prob,
-                cat_seq_emb=cat_seq_emb,
-                positional_embedding_type=mae_positional_embedding_type,
+            self.heads["enhanced_masked_auto_encoding"] = EnhancedLMHead(
+                config, self.tite.embeddings, lm_decoder, mask_strategy=mask_prob
             )
             self.lm_decoder = lm_decoder
         if bow_auto_encoding:
             self.heads["bow_auto_encoding"] = BOWLMHead(config, lm_decoder)
             self.lm_decoder = lm_decoder
+        if enhanced_causal_auto_encoding:
+            self.heads["enhanced_causal_auto_encoding"] = EnhancedLMHead(
+                config, self.tite.embeddings, lm_decoder, mask_strategy="causal"
+            )
 
         self.post_init()
 
@@ -898,6 +899,7 @@ class TiteForPreTraining(TitePreTrainedModel):
         self,
         input_ids: torch.Tensor,
         attention_mask: torch.Tensor | None = None,
+        original_input_ids: torch.Tensor | None = None,
         output_hidden_states: bool = False,
         output_attentions: bool = False,
         labels: Dict[str, torch.Tensor] | None = None,
@@ -908,7 +910,11 @@ class TiteForPreTraining(TitePreTrainedModel):
         if labels is not None:
             losses = {}
             for task, head in self.heads.items():
-                logits = head(output.last_hidden_state, output=output, attention_mask=attention_mask)
+                logits = head(
+                    output=output,
+                    original_input_ids=original_input_ids,
+                    attention_mask=attention_mask,
+                )
                 losses[task] = head.compute_loss(logits, labels[task])
         return TitePreTrainingOutput(
             last_hidden_state=output.last_hidden_state,
