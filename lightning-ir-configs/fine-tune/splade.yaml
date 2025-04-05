@@ -1,0 +1,45 @@
+model:
+  class_path: tite.model.lightning_ir_modules.TiteBiEncoderModule
+  init_args:
+    config:
+      class_path: SpladeConfig
+      init_args:
+        similarity_function: dot
+        query_pooling_strategy: first
+        doc_pooling_strategy: first
+        projection: mlm
+        query_length: 32
+        doc_length: 256
+        sparsification: relu_log
+        embedding_dim: 30522
+        tie_projection: false
+    loss_functions:
+    - class_path: PearsonCorrelation
+    # - - class_path: SupervisedMarginMSE
+    #   - 0.05
+    # - class_path: KLDivergence
+    # - class_path: ScoreBasedInBatchCrossEntropy
+    #   init_args:
+    #     min_target_diff: 3
+    # - class_path: tite.model.lightning_ir_modules.FLOPSRegularization
+    #   init_args:
+    #     query_num_non_zero: 1000
+    #     doc_num_non_zero: 0
+    #     query_weight: 0.01
+    #     doc_weight: 0.01
+    - class_path: L1Regularization
+      init_args:
+        query_weight: 0.01
+        doc_weight: 0.01
+    evaluation_metrics:
+    - nDCG@10
+trainer:
+  callbacks+:
+  - class_path: GenericConstantSchedulerWithQuadraticWarmup
+    init_args:
+      keys:
+      - loss_functions.1.0.query_weight
+      - loss_functions.1.0.doc_weight
+      num_warmup_steps: 30_000
+      num_delay_steps: 0
+  

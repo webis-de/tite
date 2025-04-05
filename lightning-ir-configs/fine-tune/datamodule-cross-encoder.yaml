@@ -1,0 +1,48 @@
+data:
+  class_path: lightning_ir.data.datamodule.LightningIRDataModule
+  init_args:
+    num_workers: 4
+    train_batch_size: 32
+    train_dataset:
+      class_path: RunDataset
+      init_args:
+        run_path_or_id: /mnt/ceph/storage/data-tmp/current/fschlatt/set_encoder/data/baseline-runs/colbert/msmarco-passage-train-judged.parquet
+        targets: relevance
+        depth: 200
+        sample_size: 8
+        sampling_strategy: single_relevant
+        add_docs_not_in_ranking: true
+    inference_batch_size: 1
+    inference_datasets:
+      - class_path: RunDataset
+        init_args:
+          run_path_or_id: ./runs/bm25/msmarco-passage-trec-dl-2019-judged.run
+          depth: 100
+      - class_path: RunDataset
+        init_args:
+          run_path_or_id: ./runs/bm25/msmarco-passage-trec-dl-2020-judged.run
+          depth: 100
+      - class_path: RunDataset
+        init_args:
+          run_path_or_id: ./runs/bm25/beir-dbpedia-entity-dev.run
+          depth: 100
+      - class_path: RunDataset
+        init_args:
+          run_path_or_id: ./runs/bm25/beir-fever-dev.run
+          depth: 100
+      - class_path: RunDataset
+        init_args:
+          run_path_or_id: ./runs/bm25/beir-fiqa-dev.run
+          depth: 100
+      - class_path: RunDataset
+        init_args:
+          run_path_or_id: ./runs/bm25/beir-hotpotqa-dev.run
+          depth: 100
+      - class_path: RunDataset
+        init_args:
+          run_path_or_id: ./runs/bm25/beir-nfcorpus-dev.run
+          depth: 100
+      - class_path: RunDataset
+        init_args:
+          run_path_or_id: ./runs/bm25/beir-quora-dev.run
+          depth: 100

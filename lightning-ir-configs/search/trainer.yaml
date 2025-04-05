@@ -5,6 +5,6 @@ trainer:
   precision: bf16-mixed
   num_nodes: 1
   callbacks:
-  - class_path: tite.callbacks.DummyImportCallback
+  - class_path: tite.utils.callbacks.DummyImportCallback
   logger: false
   enable_checkpointing: false

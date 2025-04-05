@@ -1,0 +1,13 @@
+model:
+  class_path: CrossEncoderModule
+  init_args:
+    config:
+      class_path: CrossEncoderConfig
+      init_args:
+        query_length: 32
+        doc_length: 256
+        linear_bias: true
+    loss_functions:
+    - InfoNCE
+    evaluation_metrics:
+    - nDCG@10

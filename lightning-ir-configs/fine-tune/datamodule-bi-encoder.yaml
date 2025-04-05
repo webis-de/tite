@@ -1,8 +1,8 @@
 data:
-  class_path: LightningIRDataModule
+  class_path: lightning_ir.data.datamodule.LightningIRDataModule
   init_args:
     num_workers: 4
-    train_batch_size: 32
+    train_batch_size: 128
     train_dataset:
       class_path: RunDataset
       # init_args:
@@ -18,7 +18,7 @@ data:
       #   sampling_strategy: log_random
       #   targets: score
       init_args:
-        run_path_or_id: ./runs/__monoelectra-colbert__msmarco-passage-train-judged.run.gz
+        run_path_or_id: /mnt/ceph/storage/data-tmp/current/fschlatt/lightning-ir-experiments/runs-archive/__monoelectra-colbert__msmarco-passage-train-judged.run.gz
         depth: 100
         sample_size: 8
         sampling_strategy: log_random

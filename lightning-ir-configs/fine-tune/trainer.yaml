@@ -13,10 +13,10 @@ trainer:
       entity: tite
   callbacks:
   - class_path: ModelCheckpoint
-  - class_path: LearningRateMonitor
-    init_args:
-      logging_interval: step
-  - class_path: tite.callbacks.DummyImportCallback
+  # - class_path: LearningRateMonitor
+  #   init_args:
+  #     logging_interval: step
+  - class_path: tite.utils.callbacks.DummyImportCallback
   max_epochs: null
   max_steps: 50020
   val_check_interval: 80000
