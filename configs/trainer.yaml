@@ -16,4 +16,3 @@ trainer:
   max_steps: 200000
   enable_progress_bar: false
   gradient_clip_val: 1.0
-  num_sanity_val_steps: 0

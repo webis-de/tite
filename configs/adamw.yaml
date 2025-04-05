@@ -1,5 +1,5 @@
 optimizer:
-  class_path: tite.adamw.AdamWNoWeightDecayBiasNorm
+  class_path: tite.utils.adamw.AdamWNoWeightDecayBiasNorm
   # class_path: torch.optim.AdamW
   init_args:
     lr: 1e-4
