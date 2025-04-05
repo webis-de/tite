@@ -379,6 +379,7 @@ class TiteAttention(torch.nn.Module):
             output_packed_meta_data = packed_meta_data
             if self.config.norm_location == "pre":
                 hidden_states = self.norm(hidden_states)
+            query_hidden_states = hidden_states
         else:
             query_hidden_states, output_packed_meta_data = self.pooling(hidden_states, packed_meta_data)
             input_hidden_states = query_hidden_states
