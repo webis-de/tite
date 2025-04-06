@@ -67,6 +67,10 @@ class TiteModule(LightningModule):
                 metrics[f"{glue.hparams.name}/{name}"] = value
         return metrics
 
+    def on_train_start(self) -> None:
+        self.tokens_seen = self.tokens_seen.to(self.device)
+        return super().on_train_start()
+
     def _validate_on_trec_dl(self):
         enable_progress_bar = self.trainer.progress_bar_callback is not None
         msmarco = IRDatasetsDataModule(
@@ -146,7 +150,7 @@ class TiteModule(LightningModule):
         assert losses is not None
         losses["total"] = sum(losses.values())
         num_tokens = encoding["attention_mask"].sum()
-        self.tokens_seen += num_tokens.to(self.tokens_seen.device)
+        self.tokens_seen += num_tokens
         self.log("tokens_seen", self.tokens_seen, on_step=True, reduce_fx="max")  # We sum it up ourselves
         self.log("loss", losses["total"], prog_bar=True)
         self.log_dict(losses)
