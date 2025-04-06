@@ -1,11 +1,16 @@
-from typing import Literal
+from typing import Dict, Literal
 
-from torch import Tensor
-from torch.nn import Module
-from transformers import BertConfig as HFBertConfig
-from transformers import BertModel as HFBert
+import torch
 
-from .tite import TiteConfig, TiteModel, TiteModelOutput
+from .tite import (
+    LMPredictionHead,
+    PreTrainingHead,
+    TiteConfig,
+    TiteModel,
+    TiteModelOutput,
+    TitePreTrainedModel,
+    TitePreTrainingOutput,
+)
 
 
 class BertConfig(TiteConfig):
@@ -29,7 +34,7 @@ class BertConfig(TiteConfig):
         pooling: Literal["mean", "first"] | None = None,
         attn_implementation: Literal["flash_attention_2", "sdpa", "eager"] = "flash_attention_2",
         rope_implementation: Literal["eager", "triton"] = "triton",
-        **kwargs
+        **kwargs,
     ):
         super().__init__(
             vocab_size=vocab_size,
@@ -51,9 +56,14 @@ class BertConfig(TiteConfig):
             norm_type=norm_type,
             attn_implementation=attn_implementation,
             rope_implementation=rope_implementation,
-            **kwargs
+            **kwargs,
         )
         self.pooling = pooling
+
+
+class BertPreTrainedModel(TitePreTrainedModel):
+    config_class = BertConfig
+    base_model_prefix = "bert"
 
 
 class BertModel(TiteModel):
@@ -61,9 +71,20 @@ class BertModel(TiteModel):
         super().__init__(config)
 
     def forward(
-        self, input_ids: Tensor, attention_mask: Tensor | None = None, output_hidden_states: bool = False
+        self,
+        input_ids: torch.Tensor,
+        attention_mask: torch.Tensor | None = None,
+        output_hidden_states: bool = False,
+        output_attentions: bool = False,
+        **kwargs,
     ) -> TiteModelOutput:
-        output = super().forward(input_ids, attention_mask, output_hidden_states=output_hidden_states)
+        output = super().forward(
+            input_ids,
+            attention_mask,
+            output_hidden_states=output_hidden_states,
+            output_attentions=output_attentions,
+            **kwargs,
+        )
         hidden_states = output.last_hidden_state
         if self.config.pooling == "first":
             return TiteModelOutput(hidden_states[:, [0]])
@@ -72,45 +93,78 @@ class BertModel(TiteModel):
         return output
 
 
-class PreTrainedBertModel(BertModel):
-
-    def __init__(self, model_name_or_path: str, pooling: Literal["mean", "first"] | None = None):
-        config = HFBertConfig.from_pretrained(model_name_or_path)
-        bert_config = BertConfig(**config.to_dict(), pooling=pooling)
-        bert_config["positional_embeddings_type"] = config.position_embeddings_type
-        super().__init__(bert_config)
-
-
-class HFBertModel(Module):
-
-    def __init__(
-        self,
-        model_name_or_path: str | None = None,
-        config: HFBertConfig | None = None,
-        pooling: Literal["mean", "first"] | None = None,
-    ) -> None:
+class MaskLMHead(PreTrainingHead):
+    def __init__(self, config: BertConfig):
         super().__init__()
-        if model_name_or_path is None:
-            if config is None:
-                raise ValueError("Either model_name_or_path or config must be provided")
-            self.model = HFBert(config)
-        else:
-            self.model = HFBert.from_pretrained(model_name_or_path, config=config)
-        self.config = self.model.config
-        self.config.last_hidden_size = self.config.hidden_size
-        self.pooling = pooling
+        self.vocab_size = config.vocab_size
+        self.lm_head = LMPredictionHead(config)
+
+    def forward(self, output: TiteModelOutput, *args, **kwargs) -> torch.Tensor:
+        return self.lm_head(output.last_hidden_state)
+
+    def get_labels(
+        self,
+        input_ids: torch.Tensor,
+        attention_mask: torch.Tensor,
+        special_tokens_mask: torch.Tensor,
+        mlm_mask: torch.Tensor,
+        *args,
+        **kwargs,
+    ) -> torch.Tensor:
+        targets = torch.where(mlm_mask, input_ids, -100)
+        return targets
+
+    def compute_loss(self, logits: torch.Tensor, labels: torch.Tensor) -> torch.Tensor:
+        logits = logits.view(-1, self.vocab_size)
+        labels = labels.view(-1)
+        return torch.nn.functional.cross_entropy(logits, labels)
+
+
+class BertForPreTraining(BertPreTrainedModel):
+
+    _tied_weights_keys = [
+        "bert.embeddings.word_embeddings.weight",
+        "bert.embeddings.word_embeddings.bias",
+        "heads.mlm.lm_head.decoder.weight",
+        "heads.mlm.lm_head.decoder.bias",
+    ]
+
+    def __init__(self, config: BertConfig):
+        super().__init__(config)
+
+        self.bert = BertModel(config)
+        self.heads = torch.nn.ModuleDict()
+        self.heads["mlm"] = MaskLMHead(config)
+
+    def get_output_embeddings(self):
+        return self.lm_decoder
 
     def forward(
-        self, input_ids: Tensor, attention_mask: Tensor | None = None, token_type_ids: Tensor | None = None
-    ) -> Tensor:
-        hidden_states = self.model(
-            input_ids, attention_mask=attention_mask, token_type_ids=token_type_ids, output_hidden_states=True
-        ).last_hidden_state
-        if self.pooling == "first":
-            return hidden_states[:, [0]]
-        elif self.pooling == "mean":
-            return hidden_states.mean(dim=1, keepdim=True)
-        return hidden_states
+        self,
+        input_ids: torch.Tensor,
+        attention_mask: torch.Tensor | None = None,
+        original_input_ids: torch.Tensor | None = None,
+        output_hidden_states: bool = False,
+        output_attentions: bool = False,
+        labels: Dict[str, torch.Tensor] | None = None,
+        **kwargs,
+    ) -> TitePreTrainingOutput:
+        output = self.bert(input_ids, attention_mask, output_hidden_states=True, output_attentions=output_attentions)
 
-    def save_pretrained(self, *args, **kwargs):
-        self.model.save_pretrained(*args, **kwargs)
+        losses = None
+        if labels is not None:
+            losses = {}
+            for task, head in self.heads.items():
+                logits = head(
+                    output=output,
+                    original_input_ids=original_input_ids,
+                    attention_mask=attention_mask,
+                )
+                losses[task] = head.compute_loss(logits, labels[task])
+
+        return TitePreTrainingOutput(
+            last_hidden_state=output.last_hidden_state,
+            hidden_states=output.hidden_states if output_hidden_states else None,
+            attentions=output.attentions,
+            losses=losses,
+        )
