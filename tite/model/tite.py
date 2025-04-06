@@ -860,6 +860,8 @@ class TiteForPreTraining(TitePreTrainedModel):
         "heads.enhanced_masked_auto_encoding.lm_head.decoder.bias",
         "heads.bow_auto_encoding.lm_head.decoder.weight",
         "heads.bow_auto_encoding.lm_head.decoder.bias",
+        "heads.enhanced_causal_auto_encoding.lm_head.decoder.weight",
+        "heads.enhanced_causal_auto_encoding.lm_head.decoder.bias",
     ]
 
     def __init__(
