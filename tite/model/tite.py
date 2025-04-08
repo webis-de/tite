@@ -555,15 +555,17 @@ class BOWLMHead(PreTrainingHead):
         input_ids = input_ids.clone()
         input_ids[special_tokens_mask.bool()] = self.pad_token_id
         targets = targets.scatter(1, input_ids, 1)
-        targets[:, self.pad_token_id] = -100
         return targets
 
     def compute_loss(self, logits: torch.Tensor, labels: torch.Tensor) -> torch.Tensor:
-        logits = logits.view(-1)
-        labels = labels.view(-1)
-        mask = labels == -100
-        logits = logits[~mask]
-        labels = labels[~mask]
+        if self.pad_token_id > 0:
+            logits[..., self.pad_token_id] = logits[..., 0]
+            labels[..., self.pad_token_id] = labels[..., 0]
+
+        logits = logits[..., 1:]
+        labels = labels[..., 1:]
+
+        logits = logits.view_as(labels)
         return torch.nn.functional.binary_cross_entropy_with_logits(logits, labels)
 
 
