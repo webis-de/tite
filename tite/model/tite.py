@@ -555,15 +555,17 @@ class BOWLMHead(PreTrainingHead):
         input_ids = input_ids.clone()
         input_ids[special_tokens_mask.bool()] = self.pad_token_id
         targets = targets.scatter(1, input_ids, 1)
-        targets[:, self.pad_token_id] = -100
         return targets
 
     def compute_loss(self, logits: torch.Tensor, labels: torch.Tensor) -> torch.Tensor:
-        logits = logits.view(-1)
-        labels = labels.view(-1)
-        mask = labels == -100
-        logits = logits[~mask]
-        labels = labels[~mask]
+        if self.pad_token_id > 0:
+            logits[..., self.pad_token_id] = logits[..., 0]
+            labels[..., self.pad_token_id] = labels[..., 0]
+
+        logits = logits[..., 1:]
+        labels = labels[..., 1:]
+
+        logits = logits.view_as(labels)
         return torch.nn.functional.binary_cross_entropy_with_logits(logits, labels)
 
 
@@ -835,14 +837,19 @@ class TiteForPreTraining(TitePreTrainedModel):
     _tied_weights_keys = [
         "tite.embeddings.word_embeddings.weight",
         "tite.embeddings.word_embeddings.bias",
+        "tite.embeddings.norm.weight",
         "lm_decoder.weight",
         "lm_decoder.bias",
+        "heads.enhanced_masked_auto_encoding.embeddings.word_embeddings.weight",
+        "heads.enhanced_masked_auto_encoding.embeddings.norm.weight",
         "heads.enhanced_masked_auto_encoding.lm_head.decoder.weight",
         "heads.enhanced_masked_auto_encoding.lm_head.decoder.bias",
         "heads.bow_auto_encoding.lm_head.decoder.weight",
         "heads.bow_auto_encoding.lm_head.decoder.bias",
         "heads.enhanced_causal_auto_encoding.lm_head.decoder.weight",
         "heads.enhanced_causal_auto_encoding.lm_head.decoder.bias",
+        "heads.enhanced_causal_auto_encoding.embeddings.word_embeddings.weight",
+        "heads.enhanced_causal_auto_encoding.embeddings.norm.weight",
     ]
 
     def __init__(
