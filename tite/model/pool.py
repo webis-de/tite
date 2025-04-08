@@ -278,7 +278,8 @@ def apply_backward_pooling(
     dim = x.shape[-1]
 
     BLOCK_D = min(triton.next_power_of_2(dim), 1024)
-    BLOCK_S = min(triton.next_power_of_2(y_max_seq_len), 4)
+    # BLOCK_S = min(triton.next_power_of_2(y_max_seq_len), 4)
+    BLOCK_S = 4
     grid = lambda META: (triton.cdiv(dim, META["BLOCK_D"]), triton.cdiv(y_max_seq_len, META["BLOCK_S"]), batch)  # noqa
 
     padding = kernel_size - 1
