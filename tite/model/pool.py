@@ -66,7 +66,7 @@ def cat_arange(arange_starts: torch.Tensor, arange_ends: torch.Tensor) -> torch.
 class PackedMetaData:
     seq_lens: torch.Tensor
     cu_seq_lens: torch.Tensor
-    max_seq_len: int
+    max_seq_len: torch.Tensor
     _idcs: torch.Tensor | None = None
     _position_idcs: torch.Tensor | None = None
 
@@ -74,7 +74,7 @@ class PackedMetaData:
     def from_attention_mask(cls, attention_mask: torch.Tensor) -> "PackedMetaData":
         seq_lens = attention_mask.sum(-1, dtype=torch.int32)
         idcs = torch.nonzero(attention_mask.flatten(), as_tuple=False).flatten()
-        max_seq_len = int(seq_lens.max().item())
+        max_seq_len = seq_lens.max()
         cu_seq_lens = torch.nn.functional.pad(torch.cumsum(seq_lens, dim=0, dtype=torch.int32), (1, 0))
         return cls(seq_lens, cu_seq_lens, max_seq_len, _idcs=idcs)
 
@@ -87,7 +87,9 @@ class PackedMetaData:
     @property
     def idcs(self):
         if self._idcs is None:
-            idcs_starts = torch.arange(0, self.seq_lens.shape[0] * self.max_seq_len, self.max_seq_len)
+            idcs_starts = torch.arange(
+                0, self.seq_lens.shape[0] * self.max_seq_len, self.max_seq_len, device=self.seq_lens.device
+            )
             idcs_ends = idcs_starts + self.seq_lens
             self._idcs = cat_arange(idcs_starts, idcs_ends)
         return self._idcs
@@ -164,7 +166,8 @@ def apply_forward_pooling(
     dim = x.shape[-1]
 
     BLOCK_D = min(triton.next_power_of_2(dim), 1024)
-    BLOCK_S = min(triton.next_power_of_2(y_max_seq_len), 4)
+    # BLOCK_S = min(triton.next_power_of_2(y_max_seq_len), 4)
+    BLOCK_S = 4
     grid = lambda META: (triton.cdiv(dim, META["BLOCK_D"]), triton.cdiv(y_max_seq_len, META["BLOCK_S"]), batch)  # noqa
 
     # Need this, otherwise Triton tries to launch from cuda:0 and we get
@@ -375,7 +378,7 @@ class PackedAvgPool1d(torch.nn.Module):
 
     def eager_forward(self, packed_x: torch.Tensor, packed_meta_data: PackedMetaData) -> torch.Tensor:
         x = pad_input(packed_x, packed_meta_data)
-        mask = pad_input(torch.ones(packed_x.shape[0], dtype=torch.bool), packed_meta_data)
+        mask = pad_input(torch.ones(packed_x.shape[0], dtype=torch.bool, device=packed_x.device), packed_meta_data)
 
         batch_size, _, dim = x.shape
 
