@@ -18,6 +18,7 @@ from transformers.modeling_outputs import ModelOutput
 
 from .pool import PackedAvgPool1d, PackedMetaData, compute_output_shape
 from .rope import EagerRotaryPositionalEmbeddings, TritonRotaryPositionalEmbeddings
+from .unpad import pad_input, unpad_input
 
 
 class RMSNorm(torch.nn.Module):
@@ -300,17 +301,6 @@ class TiteAttention(torch.nn.Module):
         )
         return attn_output, None
 
-    def _unpad(self, x: torch.Tensor, packed_meta_data: PackedMetaData) -> torch.Tensor:
-        pad_x = torch.zeros(
-            len(packed_meta_data.seq_lens), packed_meta_data.max_seq_len, *x.shape[1:], dtype=x.dtype, device=x.device
-        )
-        pad_x[packed_meta_data.idcs] = x
-        return pad_x
-
-    def _repad(self, x: torch.Tensor, packed_meta_data: PackedMetaData) -> torch.Tensor:
-        packed_x = x[packed_meta_data.idcs]
-        return packed_x
-
     def sdpa_forward(
         self,
         query: torch.Tensor,
@@ -322,19 +312,19 @@ class TiteAttention(torch.nn.Module):
     ) -> Tuple[torch.Tensor, None]:
         if self.alibi is not None:
             raise ValueError("ALiBi is not supported with SDPA")
-        pad_query = self._unpad(query, query_packed_meta_data).transpose(1, 2)
-        pad_key = self._unpad(key, packed_meta_data).transpose(1, 2)
-        pad_value = self._unpad(value, packed_meta_data).transpose(1, 2)
-        query_mask = self._unpad(
+        pad_query = pad_input(query, query_packed_meta_data).transpose(1, 2)
+        pad_key = pad_input(key, packed_meta_data).transpose(1, 2)
+        pad_value = pad_input(value, packed_meta_data).transpose(1, 2)
+        query_mask = pad_input(
             torch.ones(query.shape[0], device=pad_query.device, dtype=torch.bool), query_packed_meta_data
         )
-        key_mask = self._unpad(torch.ones(key.shape[0], device=pad_key.device, dtype=torch.bool), packed_meta_data)
+        key_mask = pad_input(torch.ones(key.shape[0], device=pad_key.device, dtype=torch.bool), packed_meta_data)
         mask = query_mask.unsqueeze(-1) & key_mask.unsqueeze(-2)
         attn_output = torch.nn.functional.scaled_dot_product_attention(
             pad_query, pad_key, pad_value, attn_mask=mask[:, None]
         )
         attn_output = attn_output.transpose(1, 2)
-        attn_output = self._repad(attn_output, query_packed_meta_data)
+        attn_output = unpad_input(attn_output, query_packed_meta_data)
         return attn_output, None
 
     def eager_forward(
@@ -348,13 +338,13 @@ class TiteAttention(torch.nn.Module):
     ) -> Tuple[torch.Tensor, torch.Tensor | None]:
         if self.alibi is not None:
             raise ValueError("ALiBi is not supported with eager attention")
-        pad_query = self._unpad(query, query_packed_meta_data).transpose(1, 2)
-        pad_key = self._unpad(key, packed_meta_data).transpose(1, 2)
-        pad_value = self._unpad(value, packed_meta_data).transpose(1, 2)
-        query_mask = self._unpad(
+        pad_query = pad_input(query, query_packed_meta_data).transpose(1, 2)
+        pad_key = pad_input(key, packed_meta_data).transpose(1, 2)
+        pad_value = pad_input(value, packed_meta_data).transpose(1, 2)
+        query_mask = pad_input(
             torch.ones(query.shape[0], device=pad_query.device, dtype=torch.bool), query_packed_meta_data
         )
-        key_mask = self._unpad(torch.ones(key.shape[0], device=pad_key.device, dtype=torch.bool), packed_meta_data)
+        key_mask = pad_input(torch.ones(key.shape[0], device=pad_key.device, dtype=torch.bool), packed_meta_data)
         mask = query_mask.unsqueeze(-1) & key_mask.unsqueeze(-2)
 
         attn_values = pad_query @ pad_key.transpose(-2, -1)
@@ -363,7 +353,7 @@ class TiteAttention(torch.nn.Module):
         attn_probs = torch.nn.functional.softmax(attn_values, dim=-1)
         attn_output = attn_probs @ pad_value
         attn_output = attn_output.transpose(1, 2)
-        attn_output = self._repad(attn_output, query_packed_meta_data)
+        attn_output = unpad_input(attn_output, query_packed_meta_data)
         if output_attention:
             return attn_output, attn_probs
         return attn_output, None
@@ -787,25 +777,16 @@ class TiteModel(TitePreTrainedModel):
         if attention_mask is None:
             attention_mask = torch.ones(1, input_ids.shape[1], device=input_ids.device, dtype=torch.bool)
         attention_mask = attention_mask.bool()
-        batch_size, seq_len = input_ids.shape
         packed_meta_data = PackedMetaData.from_attention_mask(attention_mask)
-        idcs = packed_meta_data.idcs
-        assert idcs is not None
-        if self.config._attn_implementation == "flash_attention_2" and self.config.pooling_implementation == "triton":
-            packed_meta_data.idcs = None
-        input_ids = input_ids[idcs]
-        hidden_states = self.embeddings(input_ids, idcs[1])
+        input_ids = unpad_input(input_ids, packed_meta_data)
+        hidden_states = self.embeddings(input_ids, packed_meta_data.position_idcs)
         hidden_states, all_hidden_states, all_attentions = self.encoder(
             hidden_states, packed_meta_data, output_hidden_states, output_attentions
         )
         if hidden_states.shape[0] == packed_meta_data.seq_lens.shape[0]:
             hidden_states = hidden_states.unsqueeze(1)
         else:
-            repad_hidden_states = torch.zeros(
-                batch_size, seq_len, hidden_states.shape[-1], device=hidden_states.device, dtype=hidden_states.dtype
-            )
-            repad_hidden_states[idcs] = hidden_states
-            hidden_states = repad_hidden_states.view(batch_size, seq_len, -1)
+            hidden_states = pad_input(hidden_states, packed_meta_data)
         return TiteModelOutput(
             last_hidden_state=hidden_states, hidden_states=all_hidden_states, attentions=all_attentions
         )

@@ -75,7 +75,7 @@ class EagerRotaryPositionalEmbeddings(nn.Module):
 
     def forward(self, x: Tensor, packed_meta_data: PackedMetaData) -> Tensor:
         self._update_rope_cache(packed_meta_data.max_seq_len)
-        rope_cache = self.cache[packed_meta_data.idcs[1]].view(x.shape[0], 1, self.dim // 2, 2)
+        rope_cache = self.cache[packed_meta_data.position_idcs].view(x.shape[0], 1, self.dim // 2, 2)
 
         xshaped = x.view(*x.shape[:-1], self.dim // 2, 2)
 
