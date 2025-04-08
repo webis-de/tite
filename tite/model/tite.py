@@ -854,14 +854,19 @@ class TiteForPreTraining(TitePreTrainedModel):
     _tied_weights_keys = [
         "tite.embeddings.word_embeddings.weight",
         "tite.embeddings.word_embeddings.bias",
+        "tite.embeddings.norm.weight",
         "lm_decoder.weight",
         "lm_decoder.bias",
+        "heads.enhanced_masked_auto_encoding.embeddings.word_embeddings.weight",
+        "heads.enhanced_masked_auto_encoding.embeddings.norm.weight",
         "heads.enhanced_masked_auto_encoding.lm_head.decoder.weight",
         "heads.enhanced_masked_auto_encoding.lm_head.decoder.bias",
         "heads.bow_auto_encoding.lm_head.decoder.weight",
         "heads.bow_auto_encoding.lm_head.decoder.bias",
         "heads.enhanced_causal_auto_encoding.lm_head.decoder.weight",
         "heads.enhanced_causal_auto_encoding.lm_head.decoder.bias",
+        "heads.enhanced_causal_auto_encoding.embeddings.word_embeddings.weight",
+        "heads.enhanced_causal_auto_encoding.embeddings.norm.weight",
     ]
 
     def __init__(
