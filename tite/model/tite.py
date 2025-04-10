@@ -565,7 +565,7 @@ class BOWLMHead(PreTrainingHead):
         logits = logits[..., 1:]
         labels = labels[..., 1:]
 
-        logits = logits.view_as(labels)
+        logits = logits[:, 0].view_as(labels)
         return torch.nn.functional.binary_cross_entropy_with_logits(logits, labels)
 
 
@@ -692,7 +692,7 @@ class EnhancedLMHead(PreTrainingHead):
         )
         token_embeddings = self.embeddings(original_input_ids, position_idcs)
 
-        query_hidden_states = output.last_hidden_state.expand_as(token_embeddings)
+        query_hidden_states = output.last_hidden_state[:, [0]].expand_as(token_embeddings)
 
         key_value_hidden_states = token_embeddings
 
