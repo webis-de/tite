@@ -66,7 +66,7 @@ def cat_arange(arange_starts: torch.Tensor, arange_ends: torch.Tensor) -> torch.
 class PackedMetaData:
     seq_lens: torch.Tensor
     cu_seq_lens: torch.Tensor
-    max_seq_len: torch.Tensor
+    max_seq_len: int
     _idcs: torch.Tensor | None = None
     _position_idcs: torch.Tensor | None = None
 
@@ -74,9 +74,10 @@ class PackedMetaData:
     def from_attention_mask(cls, attention_mask: torch.Tensor) -> "PackedMetaData":
         seq_lens = attention_mask.sum(-1, dtype=torch.int32)
         idcs = torch.nonzero(attention_mask.flatten(), as_tuple=False).flatten()
-        max_seq_len = seq_lens.max()
+        max_seq_len = int(seq_lens.max().item())
         cu_seq_lens = torch.nn.functional.pad(torch.cumsum(seq_lens, dim=0, dtype=torch.int32), (1, 0))
-        return cls(seq_lens, cu_seq_lens, max_seq_len, _idcs=idcs)
+        position_idcs = cat_arange(torch.zeros_like(seq_lens), seq_lens)
+        return cls(seq_lens, cu_seq_lens, max_seq_len, _idcs=idcs, _position_idcs=position_idcs)
 
     @property
     def position_idcs(self):
@@ -166,8 +167,7 @@ def apply_forward_pooling(
     dim = x.shape[-1]
 
     BLOCK_D = min(triton.next_power_of_2(dim), 1024)
-    # BLOCK_S = min(triton.next_power_of_2(y_max_seq_len), 4)
-    BLOCK_S = 4
+    BLOCK_S = min(triton.next_power_of_2(y_max_seq_len), 4)
     grid = lambda META: (triton.cdiv(dim, META["BLOCK_D"]), triton.cdiv(y_max_seq_len, META["BLOCK_S"]), batch)  # noqa
 
     # Need this, otherwise Triton tries to launch from cuda:0 and we get
@@ -278,8 +278,7 @@ def apply_backward_pooling(
     dim = x.shape[-1]
 
     BLOCK_D = min(triton.next_power_of_2(dim), 1024)
-    # BLOCK_S = min(triton.next_power_of_2(y_max_seq_len), 4)
-    BLOCK_S = 4
+    BLOCK_S = min(triton.next_power_of_2(y_max_seq_len), 4)
     grid = lambda META: (triton.cdiv(dim, META["BLOCK_D"]), triton.cdiv(y_max_seq_len, META["BLOCK_S"]), batch)  # noqa
 
     padding = kernel_size - 1
@@ -326,8 +325,8 @@ class ApplyPooling_(torch.autograd.Function):
     ) -> torch.Tensor:
 
         dim = x.shape[-1]
-        y = torch.zeros(y_packed_meta_data.cu_seq_lens[-1], dim, device=x.device, dtype=x.dtype)
-        norm = torch.zeros_like(y)
+        y = torch.empty(y_packed_meta_data.cu_seq_lens[-1], dim, device=x.device, dtype=x.dtype)
+        norm = torch.empty_like(y)
 
         apply_forward_pooling(
             x=x,
