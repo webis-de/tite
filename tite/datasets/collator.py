@@ -91,7 +91,7 @@ class TransformationCollator(Collator):
         return transformed_encoding, auxiliary_data
 
     def tokenize(self, agg: dict) -> tuple[BatchEncoding, BatchEncoding, dict]:
-        encoding = super().tokenize({self.text_keys[0]: agg})
+        encoding = super().tokenize(agg)
         transformed_texts, string_auxiliary_data = self.apply_string_transformations(agg)
         transformed_encoding = super().tokenize({self.text_keys[0]: transformed_texts})
         transformed_encoding, token_auxiliary_data = self.apply_token_transformations(transformed_encoding)
