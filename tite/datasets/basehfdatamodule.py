@@ -3,7 +3,7 @@ from typing import Any
 
 from datasets import Dataset, DatasetDict, IterableDataset, IterableDatasetDict, load_dataset
 from lightning import LightningDataModule
-from torch.utils.data import DataLoader
+from torchdata.stateful_dataloader import StatefulDataLoader
 
 from .collator import Collator
 
@@ -47,6 +47,7 @@ class BaseHFDataModule(LightningDataModule):
                 "num_workers": num_workers,
             }
         )
+        self._state_dict = {}
 
     def setup(self, stage: str) -> None:
         assert self.dataset is None, "Dataset is already set up"
@@ -56,39 +57,46 @@ class BaseHFDataModule(LightningDataModule):
             **self.data_kwargs,
             streaming=self.streaming,
         )
-        kwargs = {}
-        if self.streaming:
-            kwargs["buffer_size"] = 1_024
-        self.dataset = self.dataset.shuffle(seed=self.hparams["seed"], **kwargs)
+        # self.dataset = self.dataset.shuffle(seed=self.hparams["seed"])
 
     def teardown(self, stage: str) -> None:
         self.dataset = None
 
-    def dataloader(self, split: str) -> DataLoader:
-        loader = DataLoader(
+    def dataloader(self, split: str) -> StatefulDataLoader | None:
+        assert self.dataset is not None, "The dataset needs to be set up"
+        if split not in self.dataset:
+            return None
+        loader = StatefulDataLoader(
             self.dataset[split],
             batch_size=self.hparams["batch_size"],
             num_workers=self.hparams["num_workers"],
             collate_fn=self.collator,
-            prefetch_factor=16 if self.hparams["num_workers"] > 0 else None,
         )
+        if split in self._state_dict:
+            loader.load_state_dict(self._state_dict[split])
         return loader
 
-    def train_dataloader(self) -> DataLoader:
-        assert self.dataset is not None, "The dataset needs to be set up"
-        return self.dataloader("train")
+    def train_dataloader(self) -> StatefulDataLoader:
+        dataloader = self.dataloader("train")
+        assert dataloader is not None, "The train dataloader needs to be set up"
+        return dataloader
 
-    def val_dataloader(self) -> DataLoader | list[DataLoader]:
-        assert self.dataset is not None, "The dataset needs to be set up"
-        return self.dataloader("validation")
+    def val_dataloader(self) -> StatefulDataLoader | list[StatefulDataLoader]:
+        dataloader = self.dataloader("validation")
+        return dataloader or []
 
-    def test_dataloader(self) -> DataLoader:
-        assert self.dataset is not None, "The dataset needs to be set up"
-        return self.dataloader("test")
+    def test_dataloader(self) -> StatefulDataLoader | list[StatefulDataLoader]:
+        dataloader = self.dataloader("test")
+        return dataloader or []
 
-    # def state_dict(self) -> dict[str, dict[str, Any]]:
-    #     return {split: loader.state_dict() for split, loader in self.dataloaders.items()}
+    def state_dict(self) -> dict[str, dict[str, Any]]:
+        state_dict = {}
+        for split in ("train", "validation", "test"):
+            dataloader = self.dataloader(split)
+            if dataloader is not None:
+                state_dict[split] = dataloader.state_dict()
+        return state_dict
 
-    # def load_state_dict(self, state_dict: dict[str, dict[str, Any]]) -> None:
-    #     for split, state in state_dict.items():
-    #         self.dataloader(split).load_state_dict(state)
+    def load_state_dict(self, state_dict: dict[str, dict[str, Any]]) -> None:
+        for split, state in state_dict.items():
+            self._state_dict[split] = state
