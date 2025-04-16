@@ -29,11 +29,10 @@ def test_packed_avg_pool1d(
     eager_x = x[idcs].detach().clone().requires_grad_(True)
     triton_x = x[idcs].detach().clone().requires_grad_(True)
 
-    eager_meta_data = PackedMetaData(seq_lens, cu_seq_lens, int(seq_lens.max().int()), idcs)
-    triton_meta_data = PackedMetaData(seq_lens, cu_seq_lens, int(seq_lens.max().int()), None)
+    meta_data = PackedMetaData(seq_lens, cu_seq_lens, int(seq_lens.max().int()))
 
-    output_eager, _ = eager(eager_x, eager_meta_data)
-    output_triton, _ = triton(triton_x, triton_meta_data)
+    output_eager, _ = eager(eager_x, meta_data)
+    output_triton, _ = triton(triton_x, meta_data)
 
     (output_eager * (torch.arange(1, dim + 1, device=x.device, dtype=x.dtype) / dim)).sum().backward()
     (output_triton * (torch.arange(1, dim + 1, device=x.device, dtype=x.dtype) / dim)).sum().backward()
