@@ -92,6 +92,7 @@ class TiteConfig(PretrainedConfig):
         pad_token_id: int = 0,
         hidden_act: str = "gelu_pytorch_tanh",
         positional_embedding_type: Literal["absolute", "rotary", "alibi"] = "rotary",
+        pooling_location: Literal["pre", "intra", "post"] = "intra",
         rotary_interleaved: bool = False,
         norm_location: Literal["pre", "post"] = "pre",
         norm_type: Literal["rms", "layer"] = "rms",
@@ -123,6 +124,7 @@ class TiteConfig(PretrainedConfig):
         self.layer_norm_eps = layer_norm_eps
         self.hidden_act = hidden_act
         self.positional_embedding_type = positional_embedding_type
+        self.pooling_location = pooling_location
         self.rotary_interleaved = rotary_interleaved
         self.norm_location = norm_location
         self.norm_type = norm_type
@@ -358,42 +360,74 @@ class TiteAttention(torch.nn.Module):
             return attn_output, attn_probs
         return attn_output, None
 
+    def _prepare_hidden_states(
+        self, hidden_states: torch.Tensor, packed_meta_data: PackedMetaData
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, PackedMetaData, PackedMetaData]:
+        if self.pooling is None or self.config.pooling_location == "post":
+            # no pooling or pooling after attention
+            input_hidden_states = hidden_states
+            if self.config.norm_location == "pre":
+                hidden_states = self.norm(hidden_states)
+            return hidden_states, hidden_states, input_hidden_states, packed_meta_data, packed_meta_data
+
+        # pre or intra attention pooling
+        pooled_hidden_states, pooled_packed_meta_data = self.pooling(hidden_states, packed_meta_data)
+        input_hidden_states = pooled_hidden_states
+        if self.config.norm_location == "pre":
+            hidden_states = self.norm(hidden_states)
+            pooled_hidden_states = self.norm(pooled_hidden_states)
+
+        if self.config.pooling_location == "pre":
+            query_hidden_states = pooled_hidden_states
+            key_value_hidden_states = pooled_hidden_states
+            key_value_packed_meta_data = pooled_packed_meta_data
+        elif self.config.pooling_location == "intra":
+            query_hidden_states = pooled_hidden_states
+            key_value_hidden_states = hidden_states
+            key_value_packed_meta_data = packed_meta_data
+        else:
+            raise ValueError(
+                f"Invalid pooling location: {self.config.pooling_location}. Must be one of 'pre', 'intra', or 'post'."
+            )
+        return (
+            query_hidden_states,
+            key_value_hidden_states,
+            input_hidden_states,
+            pooled_packed_meta_data,
+            key_value_packed_meta_data,
+        )
+
     def forward(
         self, hidden_states: torch.Tensor, packed_meta_data: PackedMetaData, output_attention: bool = False
     ) -> Tuple[torch.Tensor, torch.Tensor | None, PackedMetaData]:
         if self.alibi is not None:
             self.alibi = self.alibi.to(torch.float32)
 
-        if self.pooling is None:
-            input_hidden_states = hidden_states
-            output_packed_meta_data = packed_meta_data
-            if self.config.norm_location == "pre":
-                hidden_states = self.norm(hidden_states)
-            query_hidden_states = hidden_states
-        else:
-            query_hidden_states, output_packed_meta_data = self.pooling(hidden_states, packed_meta_data)
-            input_hidden_states = query_hidden_states
-            if self.config.norm_location == "pre":
-                hidden_states = self.norm(hidden_states)
-                query_hidden_states = self.norm(query_hidden_states)
+        (
+            query_hidden_states,
+            key_value_hidden_states,
+            input_hidden_states,
+            query_packed_meta_data,
+            key_value_packed_meta_data,
+        ) = self._prepare_hidden_states(hidden_states, packed_meta_data)
 
-        value = self.value(hidden_states)
+        value = self.value(key_value_hidden_states)
         if packed_meta_data.max_seq_len == 1:
-            hidden_states, attn_probs = value, None
+            hidden_states, attn_probs = value, None  # TODO torch.ones
         else:
             query = self.query(query_hidden_states)
-            key = self.key(hidden_states)
+            key = self.key(key_value_hidden_states)
 
             query = rearrange(query, "t (h d) -> t h d", h=self.num_attention_heads, d=self.attention_head_size)
             key = rearrange(key, "t (h d) -> t h d", h=self.num_attention_heads, d=self.attention_head_size)
             value = rearrange(value, "t (h d) -> t h d", h=self.num_attention_heads, d=self.attention_head_size)
 
             if self.rope is not None:
-                query = self.rope(query, output_packed_meta_data)
-                key = self.rope(key, packed_meta_data)
+                query = self.rope(query, query_packed_meta_data)
+                key = self.rope(key, key_value_packed_meta_data)
 
             hidden_states, attn_probs = self.attention_function(
-                query, key, value, output_packed_meta_data, packed_meta_data, output_attention
+                query, key, value, query_packed_meta_data, key_value_packed_meta_data, output_attention
             )
 
             hidden_states = rearrange(hidden_states, "t h d -> t (h d)")
@@ -404,6 +438,10 @@ class TiteAttention(torch.nn.Module):
         if self.hidden_size_diff:
             input_hidden_states = torch.nn.functional.pad(input_hidden_states, (0, self.hidden_size_diff))
         hidden_states = hidden_states + input_hidden_states
+
+        output_packed_meta_data = query_packed_meta_data
+        if self.pooling is not None and self.config.pooling_location == "post":
+            hidden_states, output_packed_meta_data = self.pooling(hidden_states, packed_meta_data)
 
         if self.config.norm_location == "post":
             hidden_states = self.norm(hidden_states)
