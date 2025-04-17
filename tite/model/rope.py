@@ -61,6 +61,7 @@ class EagerRotaryPositionalEmbeddings(nn.Module):
         cache = getattr(self, "cache", None)
         if cache is not None and cache.shape[0] >= seq_len:
             return
+        seq_len = 1 << (1000 - 1).bit_length()  # round up to next power of 2
         # Create position indexes `[0, 1, ..., max_seq_len - 1]`
         seq_idx = torch.arange(seq_len, device=self.theta.device)
 
@@ -122,6 +123,7 @@ class TritonRotaryPositionalEmbeddings(torch.nn.Module):
         # Reset the tables if the sequence length has changed,
         # if we're on a new device (possibly due to tracing for instance),
         # or if we're switching from inference mode to training
+        seq_len = 1 << (1000 - 1).bit_length()  # round up to next power of 2
         if (
             seq_len > self._seq_len_cached
             or self._cos_cached is None
