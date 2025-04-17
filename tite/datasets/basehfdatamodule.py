@@ -71,6 +71,7 @@ class BaseHFDataModule(LightningDataModule):
             batch_size=self.hparams["batch_size"],
             num_workers=self.hparams["num_workers"],
             collate_fn=self.collator,
+            prefetch_factor=16 if self.hparams["num_workers"] > 0 else None,
         )
         if split in self._state_dict:
             loader.load_state_dict(self._state_dict[split])
