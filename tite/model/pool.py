@@ -71,6 +71,7 @@ class PackedMetaData:
     _position_idcs: torch.Tensor | None = None
 
     @classmethod
+    @torch.compiler.disable
     def from_attention_mask(cls, attention_mask: torch.Tensor) -> "PackedMetaData":
         seq_lens = attention_mask.sum(-1, dtype=torch.int32)
         idcs = torch.nonzero(attention_mask.flatten(), as_tuple=False).flatten()
@@ -404,11 +405,11 @@ class PackedAvgPool1d(torch.nn.Module):
         y_packed = y[y_mask]
         return y_packed
 
-    @torch.compiler.disable
     def triton_forward(self, packed_x: torch.Tensor, packed_meta_data: PackedMetaData) -> torch.Tensor:
         y = ApplyPooling_.apply(packed_x, packed_meta_data, packed_meta_data, self.kernel_size, self.stride)
         return y
 
+    @torch.compiler.disable
     def forward(self, x: torch.Tensor, packed_meta_data: PackedMetaData) -> Tuple[torch.Tensor, PackedMetaData]:
         if packed_meta_data.max_seq_len == 1 or (self.kernel_size == 1 and self.stride == 1):
             return x, packed_meta_data
