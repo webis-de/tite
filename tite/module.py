@@ -84,7 +84,7 @@ class TiteModule(LightningModule):
         if hasattr(copy_model.config, "pooling") and getattr(copy_model.config, "pooling") is None:
             copy_model.config.pooling = "first"
         msmarco_module = MSMARCOModule(copy_model, self.tokenizer)
-        max_steps = 5_000
+        max_steps = 10_000
         trainer = Trainer(
             logger=False,
             precision=(self.trainer.precision if self.trainer is not None else "bf16-mixed"),
