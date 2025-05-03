@@ -617,6 +617,7 @@ class EnhancedMaskedAttention(TiteAttention):
     ) -> torch.Tensor:
         batch_size, query_seq_len = query_hidden_states.shape[:2]
         key_value_seq_len = key_value_hidden_states.shape[1]
+        seq_len_diff = key_value_seq_len - query_seq_len
         if self.alibi is not None:
             self.alibi = self.alibi.to(torch.float32)
 
@@ -636,34 +637,32 @@ class EnhancedMaskedAttention(TiteAttention):
 
         if self.mask_strategy == "causal":
             enhanced_decoding_mask = torch.tril(
-                torch.ones((query_seq_len, key_value_seq_len), device=input_hidden_states.device, dtype=torch.bool)
+                torch.ones((query_seq_len, key_value_seq_len), device=input_hidden_states.device, dtype=torch.bool),
+                diagonal=seq_len_diff,
             )[None].expand(input_hidden_states.shape[0], -1, -1)
         elif isinstance(self.mask_strategy, float):
             enhanced_decoding_mask = (
                 torch.rand((batch_size, query_seq_len, key_value_seq_len), device=input_hidden_states.device)
                 >= self.mask_strategy
             )
-            # set diagonal to False
-            enhanced_decoding_mask[:, range(query_seq_len), range(query_seq_len)] = False
+            # set diagonal to False (offset by 1 if seq_len_diff > 0, this means sequence embedding was concatenated)
+            if seq_len_diff:
+                enhanced_decoding_mask[:, :, 0] = True
+            enhanced_decoding_mask[:, range(query_seq_len), range(seq_len_diff, query_seq_len + seq_len_diff)] = False
             enhanced_decoding_mask = enhanced_decoding_mask.logical_and(attention_mask[..., None])
         else:
             raise ValueError("invalid mask strategy")
 
         if self.rope is not None:
-            query_packed_meta_data = PackedMetaData.from_attention_mask(torch.ones_like(attention_mask))
-            if query_hidden_states.shape[1] == key_value_hidden_states.shape[1]:
-                key_packed_meta_data = query_packed_meta_data
-            else:
-                key_packed_meta_data = PackedMetaData.from_attention_mask(
-                    torch.ones(batch_size, key_value_seq_len, device=input_hidden_states.device, dtype=torch.bool)
-                )
+            packed_meta_data = PackedMetaData.from_attention_mask(torch.ones_like(attention_mask))
             query = rearrange(
-                self.rope(rearrange(query, ("b h s d -> (b s) h d")), query_packed_meta_data),
+                self.rope(rearrange(query, ("b h s d -> (b s) h d")), packed_meta_data),
                 "(b s) h d -> b h s d",
                 b=batch_size,
             )
-            key = rearrange(
-                self.rope(rearrange(key, ("b h s d -> (b s) h d")), key_packed_meta_data),
+            # do not include cat seq embedding in rotary embeddings
+            key[:, :, seq_len_diff:] = rearrange(
+                self.rope(rearrange(key[:, :, seq_len_diff:], ("b h s d -> (b s) h d")), packed_meta_data),
                 "(b s) h d -> b h s d",
                 b=batch_size,
             )
@@ -697,6 +696,7 @@ class EnhancedLMHead(PreTrainingHead):
         embeddings: TiteEmbeddings,
         lm_decoder: torch.nn.Linear | None,
         mask_strategy: float | Literal["causal"] = 0.5,
+        cat_seq_embedding_to_key_value: bool = True,
     ):
         super().__init__()
         config = deepcopy(config)
@@ -712,6 +712,7 @@ class EnhancedLMHead(PreTrainingHead):
         self.lm_head = LMPredictionHead(config, lm_decoder)
         self.enhanced_attention = EnhancedMaskedAttention(config, mask_strategy)
         self.mask_strategy = mask_strategy
+        self.cat_seq_embedding_to_key_value = cat_seq_embedding_to_key_value
 
         if config.norm_location == "pre":
             self.norm = NORM_MAP[config.norm_type](config.hidden_size, eps=config.layer_norm_eps)
@@ -728,11 +729,12 @@ class EnhancedLMHead(PreTrainingHead):
         position_idcs = torch.arange(original_input_ids.shape[1], device=original_input_ids.device)[None].expand_as(
             original_input_ids
         )
-        token_embeddings = self.embeddings(original_input_ids, position_idcs)
+        key_value_hidden_states = self.embeddings(original_input_ids, position_idcs)
 
-        query_hidden_states = output.last_hidden_state[:, [0]].expand_as(token_embeddings)
+        query_hidden_states = output.last_hidden_state[:, [0]].expand_as(key_value_hidden_states)
 
-        key_value_hidden_states = token_embeddings
+        if self.cat_seq_embedding_to_key_value:
+            key_value_hidden_states = torch.cat((output.last_hidden_state[:, [0]], key_value_hidden_states), dim=1)
 
         hidden_states = self.enhanced_attention(query_hidden_states, key_value_hidden_states, attention_mask)
 
