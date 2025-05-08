@@ -878,10 +878,12 @@ class TiteForPreTraining(TitePreTrainedModel):
         "tite.embeddings.word_embeddings.weight",
         "tite.embeddings.word_embeddings.bias",
         "tite.embeddings.norm.weight",
+        "tite.embeddings.norm.bias",
         "lm_decoder.weight",
         "lm_decoder.bias",
         "heads.enhanced_masked_auto_encoding.embeddings.word_embeddings.weight",
         "heads.enhanced_masked_auto_encoding.embeddings.norm.weight",
+        "heads.enhanced_masked_auto_encoding.embeddings.norm.bias",
         "heads.enhanced_masked_auto_encoding.lm_head.decoder.weight",
         "heads.enhanced_masked_auto_encoding.lm_head.decoder.bias",
         "heads.bow_auto_encoding.lm_head.decoder.weight",
@@ -890,6 +892,7 @@ class TiteForPreTraining(TitePreTrainedModel):
         "heads.enhanced_causal_auto_encoding.lm_head.decoder.bias",
         "heads.enhanced_causal_auto_encoding.embeddings.word_embeddings.weight",
         "heads.enhanced_causal_auto_encoding.embeddings.norm.weight",
+        "heads.enhanced_causal_auto_encoding.embeddings.norm.bias",
     ]
 
     def __init__(
