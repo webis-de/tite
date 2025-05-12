@@ -734,6 +734,7 @@ class EnhancedLMHead(PreTrainingHead):
         cat_seq_embedding_to_key_value: bool = True,
     ):
         super().__init__()
+        upscale = config.hidden_sizes[-1] > config.hidden_sizes[0]
         config = deepcopy(config)
         config.num_hidden_layers = 1
         config.hidden_sizes = config.hidden_sizes[-1:]
@@ -745,15 +746,30 @@ class EnhancedLMHead(PreTrainingHead):
         self.vocab_size = config.vocab_size
         self.embeddings = embeddings
         self.lm_head = LMPredictionHead(config, lm_decoder)
-        self.enhanced_attention = EnhancedMaskedAttention(config, mask_strategy)
         self.mask_strategy = mask_strategy
         self.cat_seq_embedding_to_key_value = cat_seq_embedding_to_key_value
 
+        if upscale:
+            self.embedding_norm = NORM_MAP[config.norm_type](config.hidden_sizes[0], eps=config.layer_norm_eps)
+        else:
+            self.embedding_norm = self.embeddings.norm
         if config.norm_location == "pre":
             self.norm = NORM_MAP[config.norm_type](config.hidden_size, eps=config.layer_norm_eps)
         else:
             self.norm = torch.nn.Identity()
+        self.enhanced_attention = EnhancedMaskedAttention(config, mask_strategy)
         self.mlp = TiteMLP(config, -1)
+
+    def embedding_forward(self, input_ids: torch.Tensor) -> torch.Tensor:
+        # same as TiteEmbedding.forward but downscaling deactivated
+        embeddings = self.embeddings.word_embeddings(input_ids, downscale=False)
+        if self.embeddings.position_embeddings is not None:
+            position_idcs = torch.arange(input_ids.shape[1], device=input_ids.device)[None].expand_as(input_ids)
+            # NOTE downscaling with absolute positional embeddings is not supported and will raise an error
+            embeddings = embeddings + self.embeddings.position_embeddings(position_idcs)
+        embeddings = self.embedding_norm(embeddings)
+        embeddings = self.embeddings.dropout(embeddings)
+        return embeddings
 
     def forward(
         self,
@@ -761,10 +777,7 @@ class EnhancedLMHead(PreTrainingHead):
         original_input_ids: torch.Tensor,
         attention_mask: torch.Tensor,
     ) -> torch.Tensor:
-        position_idcs = torch.arange(original_input_ids.shape[1], device=original_input_ids.device)[None].expand_as(
-            original_input_ids
-        )
-        key_value_hidden_states = self.embeddings(original_input_ids, position_idcs)
+        key_value_hidden_states = self.embedding_forward(original_input_ids)
 
         query_hidden_states = output.last_hidden_state[:, [0]].expand_as(key_value_hidden_states)
 
@@ -944,9 +957,10 @@ class ComposedEmbedding(torch.nn.Embedding):
             self.embedding_dim = embedding_dim
             self.linear = torch.nn.Linear(embedding_dim, embedding_dim_small, bias=False)
 
-    def forward(self, input: torch.Tensor) -> torch.Tensor:
+    def forward(self, input: torch.Tensor, downscale: bool = True) -> torch.Tensor:
         output = super().forward(input)
-        output = self.linear(output)
+        if downscale:
+            output = self.linear(output)
         return output
 
 
@@ -963,6 +977,8 @@ class TiteForPreTraining(TitePreTrainedModel):
         "heads.enhanced_masked_auto_encoding.embeddings.word_embeddings.linear.weight",
         "heads.enhanced_masked_auto_encoding.embeddings.norm.weight",
         "heads.enhanced_masked_auto_encoding.embeddings.norm.bias",
+        "heads.enhanced_masked_auto_encoding.embedding_norm.weight",
+        "heads.enhanced_masked_auto_encoding.embedding_norm.bias",
         "heads.enhanced_masked_auto_encoding.lm_head.decoder.weight",
         "heads.enhanced_masked_auto_encoding.lm_head.decoder.bias",
         "heads.bow_auto_encoding.lm_head.decoder.weight",
@@ -973,6 +989,8 @@ class TiteForPreTraining(TitePreTrainedModel):
         "heads.enhanced_causal_auto_encoding.embeddings.word_embeddings.linear.weight",
         "heads.enhanced_causal_auto_encoding.embeddings.norm.weight",
         "heads.enhanced_causal_auto_encoding.embeddings.norm.bias",
+        "heads.enhanced_masked_auto_encoding.embedding_norm.weight",
+        "heads.enhanced_masked_auto_encoding.embedding_norm.bias",
     ]
 
     def __init__(
