@@ -179,17 +179,60 @@ class TiteConfig(PretrainedConfig):
         return self.hidden_sizes[-1]
 
 
+class ReducedComposedEmbedding(torch.nn.Embedding):
+
+    def __init__(
+        self,
+        num_embeddings: int,
+        embedding_dim: int,
+        padding_idx: int | None = None,
+        max_norm: float | None = None,
+        norm_type: float = 2,
+        scale_grad_by_freq: bool = False,
+        sparse: bool = False,
+        _weight: torch.Tensor | None = None,
+        _freeze: bool = False,
+        device=None,
+        dtype=None,
+    ) -> None:
+        super().__init__(
+            num_embeddings,
+            embedding_dim,
+            padding_idx,
+            max_norm,
+            norm_type,
+            scale_grad_by_freq,
+            sparse,
+            _weight,
+            _freeze,
+            device,
+            dtype,
+        )
+
+        self.register_load_state_dict_pre_hook(self.fix_composed_weight_hook)
+
+    @staticmethod
+    def fix_composed_weight_hook(
+        module, state_dict, prefix, local_metadata, strict, missing_keys, unexpected_keys, error_msgs
+    ) -> None:
+        if f"{prefix}linear.weight" in state_dict:
+            linear_weight = state_dict.pop(f"{prefix}linear.weight")
+            weight = state_dict.get(f"{prefix}weight")
+            weight = weight @ linear_weight.transpose(0, 1)
+            state_dict[f"{prefix}weight"] = weight
+
+
 class TiteEmbeddings(torch.nn.Module):
     def __init__(self, config: TiteConfig):
         super().__init__()
         self.num_attention_heads = config.num_attention_heads
-        self.word_embeddings = torch.nn.Embedding(
-            config.vocab_size, config.hidden_size, padding_idx=config.pad_token_id
+        self.word_embeddings: torch.nn.Embedding = ReducedComposedEmbedding(
+            config.vocab_size, config.hidden_sizes[0], padding_idx=config.pad_token_id
         )
         self.position_embeddings = None
         if config.positional_embedding_type == "absolute":
             self.position_embeddings = torch.nn.Embedding(config.max_position_embeddings, config.hidden_size)
-        self.norm = NORM_MAP[config.norm_type](config.hidden_size, eps=config.layer_norm_eps)
+        self.norm = NORM_MAP[config.norm_type](config.hidden_sizes[0], eps=config.layer_norm_eps)
         self.dropout = torch.nn.Dropout(config.dropout_prob)
 
     def forward(self, input_ids: torch.Tensor, position_idcs: torch.Tensor) -> torch.Tensor:
@@ -504,13 +547,6 @@ class TiteEncoder(torch.nn.Module):
             self.norm = NORM_MAP[config.norm_type](config.hidden_size, eps=config.layer_norm_eps)
         else:
             self.norm = torch.nn.Identity()
-        if config.hidden_sizes[0] != config.hidden_sizes[-1]:
-            self.downscale = torch.nn.Sequential(
-                torch.nn.Linear(config.hidden_sizes[-1], config.hidden_sizes[0]),
-                NORM_MAP[config.norm_type](config.hidden_sizes[0], eps=config.layer_norm_eps),
-            )
-        else:
-            self.downscale = torch.nn.Identity()
 
     def forward(
         self,
@@ -521,7 +557,6 @@ class TiteEncoder(torch.nn.Module):
     ) -> Tuple[torch.Tensor, List[torch.Tensor] | None, List[torch.Tensor] | None]:
         all_hidden_states = [hidden_states] if output_hidden_states else None
         all_attentions: List[torch.Tensor] | None = [] if output_attentions else None
-        hidden_states = self.downscale(hidden_states)
         if all_hidden_states is not None:
             all_hidden_states.append(hidden_states)
         for layer_idx, layer in enumerate(self.layers):
@@ -856,15 +891,15 @@ class TiteModel(TitePreTrainedModel):
                 new_state_dict[new_key] = value
         return new_state_dict
 
-    @classmethod
-    def _load_pretrained_model(
-        cls, model, state_dict, loaded_keys, resolved_archive_file, pretrained_model_name_or_path, *args, **kwargs
-    ):
-        new_state_dict = cls._update_state_dict(state_dict)
-        loaded_keys = list(new_state_dict.keys())
-        return super()._load_pretrained_model(
-            model, new_state_dict, loaded_keys, resolved_archive_file, pretrained_model_name_or_path, *args, **kwargs
-        )
+    # @classmethod
+    # def _load_pretrained_model(
+    #     cls, model, state_dict, loaded_keys, resolved_archive_file, pretrained_model_name_or_path, *args, **kwargs
+    # ):
+    #     new_state_dict = cls._update_state_dict(state_dict)
+    #     loaded_keys = list(new_state_dict.keys())
+    #     return super()._load_pretrained_model(
+    #         model, new_state_dict, loaded_keys, resolved_archive_file, pretrained_model_name_or_path, *args, **kwargs
+    #     )
 
 
 @dataclass
@@ -872,16 +907,60 @@ class TitePreTrainingOutput(TiteModelOutput):
     losses: Dict[str, torch.Tensor] | None = None
 
 
+class ComposedEmbedding(torch.nn.Embedding):
+
+    def __init__(
+        self,
+        num_embeddings: int,
+        embedding_dim: int,
+        embedding_dim_small: int | None = None,
+        padding_idx: int | None = None,
+        max_norm: float | None = None,
+        norm_type: float = 2,
+        scale_grad_by_freq: bool = False,
+        sparse: bool = False,
+        _weight: torch.Tensor | None = None,
+        _freeze: bool = False,
+        device=None,
+        dtype=None,
+    ) -> None:
+        super().__init__(
+            num_embeddings,
+            embedding_dim,
+            padding_idx,
+            max_norm,
+            norm_type,
+            scale_grad_by_freq,
+            sparse,
+            _weight,
+            _freeze,
+            device,
+            dtype,
+        )
+        self.embedding_dim_small = embedding_dim_small
+        if embedding_dim_small is None:
+            self.linear = torch.nn.Identity()
+        if embedding_dim_small is not None:
+            self.embedding_dim = embedding_dim
+            self.linear = torch.nn.Linear(embedding_dim, embedding_dim_small, bias=False)
+
+    def forward(self, input: torch.Tensor) -> torch.Tensor:
+        output = super().forward(input)
+        output = self.linear(output)
+        return output
+
+
 class TiteForPreTraining(TitePreTrainedModel):
 
     _tied_weights_keys = [
         "tite.embeddings.word_embeddings.weight",
-        "tite.embeddings.word_embeddings.bias",
+        "tite.embeddings.word_embeddings.linear.weight",
         "tite.embeddings.norm.weight",
         "tite.embeddings.norm.bias",
         "lm_decoder.weight",
         "lm_decoder.bias",
         "heads.enhanced_masked_auto_encoding.embeddings.word_embeddings.weight",
+        "heads.enhanced_masked_auto_encoding.embeddings.word_embeddings.linear.weight",
         "heads.enhanced_masked_auto_encoding.embeddings.norm.weight",
         "heads.enhanced_masked_auto_encoding.embeddings.norm.bias",
         "heads.enhanced_masked_auto_encoding.lm_head.decoder.weight",
@@ -891,6 +970,7 @@ class TiteForPreTraining(TitePreTrainedModel):
         "heads.enhanced_causal_auto_encoding.lm_head.decoder.weight",
         "heads.enhanced_causal_auto_encoding.lm_head.decoder.bias",
         "heads.enhanced_causal_auto_encoding.embeddings.word_embeddings.weight",
+        "heads.enhanced_causal_auto_encoding.embeddings.word_embeddings.linear.weight",
         "heads.enhanced_causal_auto_encoding.embeddings.norm.weight",
         "heads.enhanced_causal_auto_encoding.embeddings.norm.bias",
     ]
@@ -907,6 +987,11 @@ class TiteForPreTraining(TitePreTrainedModel):
         self.config: TiteConfig
 
         self.tite = TiteModel(config)
+        self.tite.embeddings.word_embeddings = ComposedEmbedding(
+            num_embeddings=config.vocab_size,
+            embedding_dim=config.hidden_size,
+            embedding_dim_small=None if config.hidden_sizes[0] == config.hidden_sizes[-1] else config.hidden_sizes[0],
+        )
         self.heads = torch.nn.ModuleDict()
         self.lm_decoder = None
 

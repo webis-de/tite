@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import pytest
 import torch
 
@@ -57,3 +59,24 @@ def test_pretrain(config: TiteConfig):
     output = model(input_ids, attention_mask, original_input_ids=input_ids, labels=labels)
 
     assert output.losses is not None
+
+
+def test_upscale(config: TiteConfig, tmp_path: Path):
+
+    assert config.hidden_size > config.hidden_sizes[0]
+    model_for_pretraining = TiteForPreTraining(config).eval()
+
+    model_for_pretraining.save_pretrained(tmp_path / "model")
+
+    model = TiteModel.from_pretrained(tmp_path / "model", attn_implementation="sdpa").eval()
+
+    input_ids = torch.randint(0, config.vocab_size, (2, config.max_position_embeddings))
+    attention_mask = torch.ones_like(input_ids, dtype=torch.bool)
+    attention_mask[1, -config.max_position_embeddings // 2 :] = False
+    special_tokens_mask = torch.zeros_like(input_ids, dtype=torch.bool)
+    special_tokens_mask[1, -config.max_position_embeddings // 2 :] = True
+
+    output_for_pretraining = model_for_pretraining(input_ids, attention_mask)
+    output = model(input_ids, attention_mask)
+
+    assert (output_for_pretraining.last_hidden_state == output.last_hidden_state).all()
