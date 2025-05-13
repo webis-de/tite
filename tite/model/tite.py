@@ -96,6 +96,7 @@ class TiteConfig(PretrainedConfig):
         rotary_interleaved: bool = False,
         norm_location: Literal["pre", "post"] = "pre",
         norm_type: Literal["rms", "layer"] = "rms",
+        qk_norm: bool = False,
         pooling_implementation: Literal["eager", "triton"] = "triton",
         rope_implementation: Literal["eager", "triton"] = "triton",
         **kwargs,
@@ -128,6 +129,7 @@ class TiteConfig(PretrainedConfig):
         self.rotary_interleaved = rotary_interleaved
         self.norm_location = norm_location
         self.norm_type = norm_type
+        self.qk_norm = qk_norm
         self.pooling_implementation = pooling_implementation
         self.rope_implementation = rope_implementation
 
@@ -285,6 +287,13 @@ class TiteAttention(torch.nn.Module):
         self.num_attention_heads = num_attention_heads
         self.attention_head_size = int(to_hidden_size / num_attention_heads)
         self.all_head_size = self.num_attention_heads * self.attention_head_size
+
+        if config.qk_norm:
+            self.q_norm = NORM_MAP[config.norm_type](self.attention_head_size, eps=config.layer_norm_eps)
+            self.k_norm = NORM_MAP[config.norm_type](self.attention_head_size, eps=config.layer_norm_eps)
+        else:
+            self.q_norm = torch.nn.Identity()
+            self.k_norm = torch.nn.Identity()
 
         self.query = torch.nn.Linear(from_hidden_size, self.all_head_size)
         self.key = torch.nn.Linear(from_hidden_size, self.all_head_size)
@@ -468,6 +477,9 @@ class TiteAttention(torch.nn.Module):
             if self.rope is not None:
                 query = self.rope(query, query_packed_meta_data)
                 key = self.rope(key, key_value_packed_meta_data)
+
+            query = self.q_norm(query).to(query)
+            key = self.k_norm(key).to(key)
 
             hidden_states, attn_probs = self.attention_function(
                 query, key, value, query_packed_meta_data, key_value_packed_meta_data, output_attention
@@ -701,6 +713,9 @@ class EnhancedMaskedAttention(TiteAttention):
                 "(b s) h d -> b h s d",
                 b=batch_size,
             )
+
+        query = self.q_norm(query).to(query)
+        key = self.k_norm(key).to(key)
 
         hidden_states = torch.nn.functional.scaled_dot_product_attention(
             query, key, value, attn_mask=enhanced_decoding_mask[:, None]
