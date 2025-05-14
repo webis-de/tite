@@ -474,12 +474,12 @@ class TiteAttention(torch.nn.Module):
             key = rearrange(key, "t (h d) -> t h d", h=self.num_attention_heads, d=self.attention_head_size)
             value = rearrange(value, "t (h d) -> t h d", h=self.num_attention_heads, d=self.attention_head_size)
 
+            query = self.q_norm(query).to(query)
+            key = self.k_norm(key).to(key)
+
             if self.rope is not None:
                 query = self.rope(query, query_packed_meta_data)
                 key = self.rope(key, key_value_packed_meta_data)
-
-            query = self.q_norm(query).to(query)
-            key = self.k_norm(key).to(key)
 
             hidden_states, attn_probs = self.attention_function(
                 query, key, value, query_packed_meta_data, key_value_packed_meta_data, output_attention
@@ -700,6 +700,9 @@ class EnhancedMaskedAttention(TiteAttention):
         else:
             raise ValueError("invalid mask strategy")
 
+        query = self.q_norm(query).to(query)
+        key = self.k_norm(key).to(key)
+
         if self.rope is not None:
             packed_meta_data = PackedMetaData.from_attention_mask(torch.ones_like(attention_mask))
             query = rearrange(
@@ -713,9 +716,6 @@ class EnhancedMaskedAttention(TiteAttention):
                 "(b s) h d -> b h s d",
                 b=batch_size,
             )
-
-        query = self.q_norm(query).to(query)
-        key = self.k_norm(key).to(key)
 
         hidden_states = torch.nn.functional.scaled_dot_product_attention(
             query, key, value, attn_mask=enhanced_decoding_mask[:, None]
