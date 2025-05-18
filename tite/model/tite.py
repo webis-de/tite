@@ -211,17 +211,43 @@ class ReducedComposedEmbedding(torch.nn.Embedding):
             dtype,
         )
 
+        self.linear: torch.nn.Linear | None = torch.nn.Linear(0, 0, bias=False)
+        self.linear.register_load_state_dict_pre_hook(self.update_linear_weight_hook)
         self.register_load_state_dict_pre_hook(self.fix_composed_weight_hook)
+        self.register_load_state_dict_post_hook(self.delete_linear_hook)
 
     @staticmethod
     def fix_composed_weight_hook(
         module, state_dict, prefix, local_metadata, strict, missing_keys, unexpected_keys, error_msgs
     ) -> None:
+        # NOTE hf does not pass the full state dict but rather only one param at a time
+        weight = state_dict.get(f"{prefix}weight")
+        if weight.shape[-1] == module.embedding_dim:
+            return
         if f"{prefix}linear.weight" in state_dict:
             linear_weight = state_dict.pop(f"{prefix}linear.weight")
-            weight = state_dict.get(f"{prefix}weight")
-            weight = weight @ linear_weight.transpose(0, 1)
-            state_dict[f"{prefix}weight"] = weight
+        elif module.linear is not None and module.linear.in_features > 0 and module.linear.out_features > 0:
+            linear_weight = module.linear.weight
+        else:
+            raise ValueError("Unable to map composed embedding weight to reduced composed embedding weight")
+        weight = weight @ linear_weight.transpose(0, 1)
+        state_dict[f"{prefix}weight"] = weight
+
+    @staticmethod
+    def update_linear_weight_hook(
+        module, state_dict, prefix, local_metadata, strict, missing_keys, unexpected_keys, error_msgs
+    ):
+        weight = state_dict.get(f"{prefix}weight", None)
+        if weight is None:
+            return
+        module.in_features = weight.shape[1]
+        module.out_features = weight.shape[0]
+        module.weight = torch.nn.Parameter(torch.empty(weight.shape[0], weight.shape[1]))
+
+    @staticmethod
+    def delete_linear_hook(module, incompatible_keys):
+        del module.linear
+        module.linear = None
 
 
 class TiteEmbeddings(torch.nn.Module):
