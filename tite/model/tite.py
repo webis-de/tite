@@ -617,6 +617,7 @@ class PreTrainingHead(torch.nn.Module, ABC):
         self,
         output: TiteModelOutput,
         original_input_ids: torch.Tensor,
+        original_attention_mask: torch.Tensor,
         attention_mask: torch.Tensor,
     ) -> torch.Tensor: ...
 
@@ -817,6 +818,8 @@ class EnhancedLMHead(PreTrainingHead):
         output: TiteModelOutput,
         original_input_ids: torch.Tensor,
         attention_mask: torch.Tensor,
+        *args,
+        **kwargs,
     ) -> torch.Tensor:
         key_value_hidden_states = self.embedding_forward(original_input_ids)
 
@@ -847,6 +850,66 @@ class EnhancedLMHead(PreTrainingHead):
         logits = logits.view(-1, self.vocab_size)
         labels = labels.reshape(-1)
         return torch.nn.functional.cross_entropy(logits, labels)
+
+
+class ContrastiveLMHead(PreTrainingHead):
+
+    def __init__(self, tite):
+        super().__init__()
+        self.tite = tite
+
+        # logits = head(
+        #             output=output,
+        #             original_input_ids=original_input_ids,
+        #             attention_mask=attention_mask,
+        #         )
+
+    def forward(
+        self,
+        output: TiteModelOutput,
+        original_input_ids: torch.Tensor,
+        original_attention_mask: torch.Tensor,
+        *args,
+        **kwargs,
+    ) -> torch.Tensor:
+        # compute scalar product between transformed and original input
+        original_output = self.tite(
+            original_input_ids, original_attention_mask, output_hidden_states=True, output_attentions=False
+        )
+        original_output = original_output.last_hidden_state
+        transformed_output = output.last_hidden_state
+
+        assert original_output.shape == transformed_output.shape
+        assert original_output.shape[1] == 1
+
+        original_output = original_output.squeeze(1)
+        transformed_output = transformed_output.squeeze(1)
+
+        logits = torch.einsum("i d, j d -> i j", original_output, original_output)
+        transformed_orig_logits = torch.einsum("b d, b d -> b", original_output, transformed_output)
+        logits.diagonal().copy_(transformed_orig_logits)
+        return logits
+
+    def get_labels(
+        self, input_ids: torch.Tensor, attention_mask: torch.Tensor, special_tokens_mask: torch.Tensor, *args, **kwargs
+    ) -> torch.Tensor:
+        return torch.arange(input_ids.shape[0], device=input_ids.device)
+
+    def compute_loss(self, logits: torch.Tensor, labels: torch.Tensor, symmetric: bool = False) -> torch.Tensor:
+        """
+        Cross entropy loss for contrastive learning.
+        If symmetric=True, computes Symmetric InfoNCE:
+          L_orig2trans = CE(logits, labels)
+          L_trans2orig = CE(logits.T, labels)
+          loss = 0.5 * (L_orig2trans + L_trans2orig)
+        Otherwise, computes standard cross entropy loss.
+        """
+        if symmetric:
+            loss_i2t = torch.nn.functional.cross_entropy(logits, labels)
+            loss_t2i = torch.nn.functional.cross_entropy(logits.t(), labels)
+            return 0.5 * (loss_i2t + loss_t2i)
+        else:
+            return torch.nn.functional.cross_entropy(logits, labels)
 
 
 class TitePreTrainedModel(PreTrainedModel):
@@ -1040,6 +1103,7 @@ class TiteForPreTraining(TitePreTrainedModel):
         enhanced_masked_auto_encoding: bool = True,
         enhanced_causal_auto_encoding: bool = True,
         bow_auto_encoding: bool = True,
+        contrastive_auto_encoding: bool = True,
         mask_prob: float = 0.5,
     ):
         super().__init__(config)
@@ -1067,6 +1131,8 @@ class TiteForPreTraining(TitePreTrainedModel):
             self.heads["enhanced_causal_auto_encoding"] = EnhancedLMHead(
                 config, self.tite.embeddings, lm_decoder, mask_strategy="causal"
             )
+        if contrastive_auto_encoding:
+            self.heads["contrastive_auto_encoding"] = ContrastiveLMHead(self.tite)
 
         self.post_init()
 
@@ -1078,6 +1144,7 @@ class TiteForPreTraining(TitePreTrainedModel):
         input_ids: torch.Tensor,
         attention_mask: torch.Tensor | None = None,
         original_input_ids: torch.Tensor | None = None,
+        original_attention_mask: torch.Tensor | None = None,
         output_hidden_states: bool = False,
         output_attentions: bool = False,
         labels: Dict[str, torch.Tensor] | None = None,
@@ -1092,6 +1159,7 @@ class TiteForPreTraining(TitePreTrainedModel):
                     output=output,
                     original_input_ids=original_input_ids,
                     attention_mask=attention_mask,
+                    original_attention_mask=original_attention_mask,
                 )
                 losses[task] = head.compute_loss(logits, labels[task])
         return TitePreTrainingOutput(
