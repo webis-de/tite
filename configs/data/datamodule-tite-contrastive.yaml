@@ -1,0 +1,38 @@
+data:
+  class_path: tite.datasets.FineWebDataModule
+  init_args:
+    path: arrow
+    data_files:
+      train: ./HuggingFaceFW___fineweb-edu/default/0.0.0/*/fineweb-edu-train-*.arrow
+    batch_size: 128
+    num_workers: 8
+    streaming: true
+    collator:
+      class_path: tite.datasets.TransformationCollator
+      init_args:
+        text_keys:
+          - text
+          - null
+        max_length: 512
+        token_transformations:
+          - class_path: tite.transformation.TokenMask
+            init_args:
+              mask_id: 103
+              mask_prob: 0.3
+          - class_path: tite.transformation.TokenReplace
+            init_args:
+              vocab_size: 30522
+              cls_id: 101
+              sep_id: 102
+              replace_prob: 0.05
+          - class_path: tite.transformation.TokenDelete
+            init_args:
+              pad_id: 0
+              cls_id: 101
+              sep_id: 102
+              delete_prob: 0.1
+          - class_path: tite.transformation.TokenInsert
+            init_args:
+              vocab_size: 30522
+              pad_id: 0
+              insert_prob: 0.05
