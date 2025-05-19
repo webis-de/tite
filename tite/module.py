@@ -144,7 +144,12 @@ class TiteModule(LightningModule):
         for name, head in self.model.heads.items():
             labels[name] = head.get_labels(**encoding, **auxiliary_data)
 
-        output = self.model.forward(**transformed_encoding, **encoding, labels=labels)
+        output = self.model.forward(
+            **transformed_encoding,
+            original_input_ids=encoding["input_ids"],
+            original_attention_mask=encoding["attention_mask"],
+            labels=labels,
+        )
 
         losses = output.losses
         assert losses is not None
