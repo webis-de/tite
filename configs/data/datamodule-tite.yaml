@@ -11,11 +11,11 @@ data:
       class_path: tite.datasets.TransformationCollator
       init_args:
         text_keys:
-        - text
-        - null
+          - text
+          - null
         max_length: 512
         token_transformations:
-        - class_path: tite.transformation.TokenMask
-          init_args:
-            mask_id: 103
-            mask_prob: 0.3
+          - class_path: tite.transformation.TokenMask
+            init_args:
+              mask_id: 103
+              mask_prob: 0.3
