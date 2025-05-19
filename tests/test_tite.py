@@ -88,4 +88,10 @@ def test_upscale(config: TiteConfig, tmp_path: Path):
     output_for_pretraining = model_for_pretraining(input_ids, attention_mask)
     output = model(input_ids, attention_mask)
 
-    assert (output_for_pretraining.last_hidden_state == output.last_hidden_state).all()
+    with torch.no_grad():
+        output_for_pretraining = model_for_pretraining(input_ids, attention_mask, output_hidden_states=True)
+        output = model(input_ids, attention_mask, output_hidden_states=True)
+
+    for hidden_state_for_pretraining, hidden_state in zip(output_for_pretraining.hidden_states, output.hidden_states):
+        assert torch.allclose(hidden_state_for_pretraining, hidden_state)
+    assert torch.allclose(output_for_pretraining.last_hidden_state, output.last_hidden_state)
