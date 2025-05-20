@@ -47,9 +47,9 @@ def compute_output_shape(input_shape, kernel_size, stride):
     if stride > kernel_size:
         raise ValueError("Stride must be less than or equal to kernel size")
     if isinstance(input_shape, int):
-        return ceil_div((max(0, input_shape - kernel_size)), stride) + 1
+        return 0 if input_shape == 0 else ceil_div((max(0, input_shape - kernel_size)), stride) + 1
     elif isinstance(input_shape, torch.Tensor):
-        return ceil_div((torch.clamp(input_shape - kernel_size, min=0)), stride) + 1
+        return torch.where(input_shape == 0, 0, ceil_div((torch.clamp(input_shape - kernel_size, min=0)), stride) + 1)
     else:
         raise NotImplementedError(f"Unsupported type {type(input_shape)}")
 

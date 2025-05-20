@@ -1,6 +1,7 @@
 from abc import ABC, abstractmethod
 from copy import deepcopy
 from dataclasses import dataclass
+from functools import wraps
 from typing import Dict, List, Literal, Tuple
 
 import torch
@@ -215,6 +216,7 @@ class ReducedComposedEmbedding(torch.nn.Embedding):
         self.linear.register_load_state_dict_pre_hook(self.update_linear_weight_hook)
         self.register_load_state_dict_pre_hook(self.fix_composed_weight_hook)
         self.register_load_state_dict_post_hook(self.delete_linear_hook)
+        # TODO load pre-trained raises warning that linear is not initialized, fix
 
     @staticmethod
     def fix_composed_weight_hook(
@@ -960,6 +962,31 @@ class TiteModel(TitePreTrainedModel):
     def set_input_embeddings(self, value):
         self.embeddings.word_embeddings = value
 
+    # @staticmethod
+    # def catch_empty_input_ids(forward):
+    #     def wrapper(
+    #         self,
+    #         input_ids: torch.Tensor,
+    #         attention_mask: torch.Tensor | None = None,
+    #         output_hidden_states: bool = False,
+    #         output_attentions: bool = False,
+    #         **kwargs,
+    #     ) -> TiteModelOutput:
+    #         if attention_mask is None:
+    #             return forward(self, input_ids, None, output_hidden_states, output_attentions, **kwargs)
+    #         has_input_ids = attention_mask.bool().any(dim=-1)
+    #         if has_input_ids.all():
+    #             return forward(self, input_ids, attention_mask, output_hidden_states, output_attentions, **kwargs)
+    #         output = forward(
+    #             self,
+    #             input_ids=input_ids[has_input_ids],
+    #             attention_mask=attention_mask[has_input_ids],
+    #             output_hidden_states=output_hidden_states,
+    #             output_attentions=output_attentions,
+    #             **kwargs,
+    #         )
+
+    # @catch_empty_input_ids
     def forward(
         self,
         input_ids: torch.Tensor,
@@ -977,7 +1004,17 @@ class TiteModel(TitePreTrainedModel):
         hidden_states, all_hidden_states, all_attentions = self.encoder(
             hidden_states, packed_meta_data, output_hidden_states, output_attentions
         )
-        if hidden_states.shape[0] == packed_meta_data.seq_lens.shape[0]:
+        if hidden_states.shape[0] <= packed_meta_data.seq_lens.shape[0]:
+            if hidden_states.shape[0] < packed_meta_data.seq_lens.shape[0]:
+                # input_ids contained empty sequence
+                new_hidden_states = torch.zeros(
+                    packed_meta_data.seq_lens.shape[0],
+                    hidden_states.shape[1],
+                    device=hidden_states.device,
+                    dtype=hidden_states.dtype,
+                )
+                new_hidden_states[attention_mask.any(-1)] = hidden_states
+                hidden_states = new_hidden_states
             hidden_states = hidden_states.unsqueeze(1)
         else:
             hidden_states = pad_input(hidden_states, packed_meta_data)
