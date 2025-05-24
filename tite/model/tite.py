@@ -213,8 +213,8 @@ class ReducedComposedEmbedding(torch.nn.Embedding):
         )
 
         self.linear: torch.nn.Linear | None = torch.nn.Linear(0, 0, bias=False)
-        self.linear.register_load_state_dict_pre_hook(self.update_linear_weight_hook)
-        self.register_load_state_dict_pre_hook(self.fix_composed_weight_hook)
+        self.linear._register_load_state_dict_pre_hook(self.update_linear_weight_hook)
+        self._register_load_state_dict_pre_hook(self.fix_composed_weight_hook)
         self.register_load_state_dict_post_hook(self.delete_linear_hook)
         # TODO load pre-trained raises warning that linear is not initialized, fix
 
