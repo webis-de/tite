@@ -1110,12 +1110,14 @@ class TiteForPreTraining(TitePreTrainedModel):
     _tied_weights_keys = [
         "tite.embeddings.word_embeddings.weight",
         "tite.embeddings.word_embeddings.linear.weight",
+        "tite.embeddings.position_embeddings.weight",
         "tite.embeddings.norm.weight",
         "tite.embeddings.norm.bias",
         "lm_decoder.weight",
         "lm_decoder.bias",
         "heads.enhanced_masked_auto_encoding.embeddings.word_embeddings.weight",
         "heads.enhanced_masked_auto_encoding.embeddings.word_embeddings.linear.weight",
+        "heads.enhanced_masked_auto_encoding.embeddings.position_embeddings.weight",
         "heads.enhanced_masked_auto_encoding.embeddings.norm.weight",
         "heads.enhanced_masked_auto_encoding.embeddings.norm.bias",
         "heads.enhanced_masked_auto_encoding.embedding_norm.weight",
@@ -1128,10 +1130,11 @@ class TiteForPreTraining(TitePreTrainedModel):
         "heads.enhanced_causal_auto_encoding.lm_head.decoder.bias",
         "heads.enhanced_causal_auto_encoding.embeddings.word_embeddings.weight",
         "heads.enhanced_causal_auto_encoding.embeddings.word_embeddings.linear.weight",
+        "heads.enhanced_causal_auto_encoding.embeddings.position_embeddings.weight",
         "heads.enhanced_causal_auto_encoding.embeddings.norm.weight",
         "heads.enhanced_causal_auto_encoding.embeddings.norm.bias",
-        "heads.enhanced_masked_auto_encoding.embedding_norm.weight",
-        "heads.enhanced_masked_auto_encoding.embedding_norm.bias",
+        "heads.enhanced_causal_auto_encoding.embedding_norm.weight",
+        "heads.enhanced_causal_auto_encoding.embedding_norm.bias",
     ]
 
     def __init__(
