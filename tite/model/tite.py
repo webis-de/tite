@@ -962,31 +962,6 @@ class TiteModel(TitePreTrainedModel):
     def set_input_embeddings(self, value):
         self.embeddings.word_embeddings = value
 
-    # @staticmethod
-    # def catch_empty_input_ids(forward):
-    #     def wrapper(
-    #         self,
-    #         input_ids: torch.Tensor,
-    #         attention_mask: torch.Tensor | None = None,
-    #         output_hidden_states: bool = False,
-    #         output_attentions: bool = False,
-    #         **kwargs,
-    #     ) -> TiteModelOutput:
-    #         if attention_mask is None:
-    #             return forward(self, input_ids, None, output_hidden_states, output_attentions, **kwargs)
-    #         has_input_ids = attention_mask.bool().any(dim=-1)
-    #         if has_input_ids.all():
-    #             return forward(self, input_ids, attention_mask, output_hidden_states, output_attentions, **kwargs)
-    #         output = forward(
-    #             self,
-    #             input_ids=input_ids[has_input_ids],
-    #             attention_mask=attention_mask[has_input_ids],
-    #             output_hidden_states=output_hidden_states,
-    #             output_attentions=output_attentions,
-    #             **kwargs,
-    #         )
-
-    # @catch_empty_input_ids
     def forward(
         self,
         input_ids: torch.Tensor,
