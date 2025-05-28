@@ -19,20 +19,19 @@ data:
             init_args:
               mask_id: 103
               mask_prob: 0.3
-          - class_path: tite.transformation.TokenReplace
+        string_transformations:
+          - class_path: tite.transformation.SentenceSwapNeighboring
             init_args:
-              vocab_size: 30522
-              cls_id: 101
-              sep_id: 102
-              replace_prob: 0.05
-          - class_path: tite.transformation.TokenDelete
+              swap_prob: 0.3
+          - class_path: tite.transformation.SentenceDelete
             init_args:
-              pad_id: 0
-              cls_id: 101
-              sep_id: 102
-              delete_prob: 0.1
-          - class_path: tite.transformation.TokenInsert
+              delete_prob: 0.05
+          - class_path: tite.transformation.CharacterDelete
             init_args:
-              vocab_size: 30522
-              pad_id: 0
+              delete_prob: 0.05
+          - class_path: tite.transformation.CharacterSwapNeighboring
+            init_args:
+              swap_prob: 0.1
+          - class_path: tite.transformation.CharacterInsert
+            init_args:
               insert_prob: 0.05
