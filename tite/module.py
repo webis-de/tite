@@ -3,7 +3,7 @@ from pathlib import Path
 from typing import Any
 
 import torch
-from lightning import LightningModule, Trainer
+from lightning import LightningModule, Trainer, seed_everything
 from lightning.pytorch.utilities import grad_norm
 from transformers import PreTrainedTokenizerBase
 
@@ -60,6 +60,7 @@ class TiteModule(LightningModule):
                 limit_train_batches=2 if self.trainer is not None and self.trainer.sanity_checking else None,
                 limit_val_batches=2 if self.trainer is not None and self.trainer.sanity_checking else None,
             )
+            seed_everything(42)
             trainer.fit(glue_module, glue)
             for name, value in trainer.logged_metrics.items():
                 if "step" in name:
@@ -97,6 +98,7 @@ class TiteModule(LightningModule):
             limit_train_batches=2 if self.trainer is not None and self.trainer.sanity_checking else None,
             limit_val_batches=2 if self.trainer is not None and self.trainer.sanity_checking else None,
         )
+        seed_everything(42)
         trainer.fit(msmarco_module, msmarco)
         metrics = {}
         for name, value in trainer.logged_metrics.items():
