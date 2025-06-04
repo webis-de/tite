@@ -419,15 +419,15 @@ class TiteAttention(torch.nn.Module):
 
         value = self.value(key_value_hidden_states)
         if self.config.norm_location == "qkv":
-            value = self.norm(value)
+            value = self.norm(value).to(value)
         if packed_meta_data.max_seq_len == 1:
             hidden_states, attn_probs = value, None  # TODO torch.ones
         else:
             query = self.query(query_hidden_states)
             key = self.key(key_value_hidden_states)
             if self.config.norm_location == "qkv":
-                query = self.norm(query)
-                key = self.norm(key)
+                query = self.norm(query).to(query)
+                key = self.norm(key).to(key)
 
             query = rearrange(query, "t (h d) -> t h d", h=self.num_attention_heads, d=self.attention_head_size)
             key = rearrange(key, "t (h d) -> t h d", h=self.num_attention_heads, d=self.attention_head_size)
@@ -511,7 +511,7 @@ class TiteEncoder(torch.nn.Module):
         self.layers = torch.nn.ModuleList(
             [TiteLayer(config, layer_idx) for layer_idx in range(config.num_hidden_layers)]
         )
-        if config.norm_location == "pre":
+        if config.norm_location in {"pre", "qkv"}:
             self.norm = NORM_MAP[config.norm_type](config.hidden_size, eps=config.layer_norm_eps)
         else:
             self.norm = torch.nn.Identity()
