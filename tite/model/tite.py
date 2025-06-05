@@ -588,7 +588,7 @@ class BOWLMHead(PreTrainingHead):
         self.lm_head = LMPredictionHead(config, lm_decoder)
 
     def forward(self, output: TiteModelOutput, *args, **kwargs) -> torch.Tensor:
-        return self.lm_head(output.last_hidden_state)
+        return self.lm_head(output.last_hidden_state[:, [0]])
 
     def get_labels(
         self, input_ids: torch.Tensor, attention_mask: torch.Tensor, special_tokens_mask: torch.Tensor, *args, **kwargs

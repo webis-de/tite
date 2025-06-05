@@ -3,6 +3,8 @@ from typing import Dict, Literal
 import torch
 
 from .tite import (
+    BOWLMHead,
+    EnhancedLMHead,
     LMPredictionHead,
     PreTrainingHead,
     TiteConfig,
@@ -94,10 +96,10 @@ class BertModel(TiteModel):
 
 
 class MaskLMHead(PreTrainingHead):
-    def __init__(self, config: BertConfig):
+    def __init__(self, config: BertConfig, lm_decoder: torch.nn.Linear | None = None):
         super().__init__()
         self.vocab_size = config.vocab_size
-        self.lm_head = LMPredictionHead(config)
+        self.lm_head = LMPredictionHead(config, lm_decoder)
 
     def forward(self, output: TiteModelOutput, *args, **kwargs) -> torch.Tensor:
         return self.lm_head(output.last_hidden_state)
@@ -124,17 +126,63 @@ class BertForPreTraining(BertPreTrainedModel):
 
     _tied_weights_keys = [
         "bert.embeddings.word_embeddings.weight",
-        "bert.embeddings.word_embeddings.bias",
-        "heads.mlm.lm_head.decoder.weight",
-        "heads.mlm.lm_head.decoder.bias",
+        "bert.embeddings.word_embeddings.linear.weight",
+        "bert.embeddings.position_embeddings.weight",
+        "bert.embeddings.norm.weight",
+        "bert.embeddings.norm.bias",
+        "lm_decoder.weight",
+        "lm_decoder.bias",
+        "heads.enhanced_masked_auto_encoding.embeddings.word_embeddings.weight",
+        "heads.enhanced_masked_auto_encoding.embeddings.word_embeddings.linear.weight",
+        "heads.enhanced_masked_auto_encoding.embeddings.position_embeddings.weight",
+        "heads.enhanced_masked_auto_encoding.embeddings.norm.weight",
+        "heads.enhanced_masked_auto_encoding.embeddings.norm.bias",
+        "heads.enhanced_masked_auto_encoding.embedding_norm.weight",
+        "heads.enhanced_masked_auto_encoding.embedding_norm.bias",
+        "heads.enhanced_masked_auto_encoding.lm_head.decoder.weight",
+        "heads.enhanced_masked_auto_encoding.lm_head.decoder.bias",
+        "heads.bow_auto_encoding.lm_head.decoder.weight",
+        "heads.bow_auto_encoding.lm_head.decoder.bias",
+        "heads.enhanced_causal_auto_encoding.lm_head.decoder.weight",
+        "heads.enhanced_causal_auto_encoding.lm_head.decoder.bias",
+        "heads.enhanced_causal_auto_encoding.embeddings.word_embeddings.weight",
+        "heads.enhanced_causal_auto_encoding.embeddings.word_embeddings.linear.weight",
+        "heads.enhanced_causal_auto_encoding.embeddings.position_embeddings.weight",
+        "heads.enhanced_causal_auto_encoding.embeddings.norm.weight",
+        "heads.enhanced_causal_auto_encoding.embeddings.norm.bias",
+        "heads.enhanced_causal_auto_encoding.embedding_norm.weight",
+        "heads.enhanced_causal_auto_encoding.embedding_norm.bias",
     ]
 
-    def __init__(self, config: BertConfig):
+    def __init__(
+        self,
+        config: BertConfig,
+        masked_language_modeling: bool = True,
+        enhanced_masked_auto_encoding: bool = False,
+        enhanced_causal_auto_encoding: bool = False,
+        bow_auto_encoding: bool = False,
+        mask_prob: float = 0.5,
+    ):
         super().__init__(config)
 
         self.bert = BertModel(config)
         self.heads = torch.nn.ModuleDict()
-        self.heads["mlm"] = MaskLMHead(config)
+
+        lm_decoder = torch.nn.Linear(config.hidden_size, config.vocab_size, bias=False)
+        if masked_language_modeling:
+            self.heads["mlm"] = MaskLMHead(config, lm_decoder)
+        if enhanced_masked_auto_encoding:
+            self.heads["enhanced_masked_auto_encoding"] = EnhancedLMHead(
+                config, self.bert.embeddings, lm_decoder, mask_strategy=mask_prob
+            )
+            self.lm_decoder = lm_decoder
+        if bow_auto_encoding:
+            self.heads["bow_auto_encoding"] = BOWLMHead(config, lm_decoder)
+            self.lm_decoder = lm_decoder
+        if enhanced_causal_auto_encoding:
+            self.heads["enhanced_causal_auto_encoding"] = EnhancedLMHead(
+                config, self.bert.embeddings, lm_decoder, mask_strategy="causal"
+            )
 
     def get_output_embeddings(self):
         return self.lm_decoder
@@ -144,6 +192,7 @@ class BertForPreTraining(BertPreTrainedModel):
         input_ids: torch.Tensor,
         attention_mask: torch.Tensor | None = None,
         original_input_ids: torch.Tensor | None = None,
+        original_attention_mask: torch.Tensor | None = None,
         output_hidden_states: bool = False,
         output_attentions: bool = False,
         labels: Dict[str, torch.Tensor] | None = None,
@@ -159,6 +208,7 @@ class BertForPreTraining(BertPreTrainedModel):
                     output=output,
                     original_input_ids=original_input_ids,
                     attention_mask=attention_mask,
+                    original_attention_mask=original_attention_mask,
                 )
                 losses[task] = head.compute_loss(logits, labels[task])
 

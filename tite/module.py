@@ -9,14 +9,14 @@ from transformers import PreTrainedTokenizerBase
 
 from .datasets import GLUEDataModule, IRDatasetsDataModule
 from .glue_module import GlueModule
-from .model.tite import TiteForPreTraining
+from .model import BertForPreTraining, TiteForPreTraining
 from .msmarco_module import MSMARCOModule
 
 
 class TiteModule(LightningModule):
     def __init__(
         self,
-        model: TiteForPreTraining,
+        model: TiteForPreTraining | BertForPreTraining,
         tokenizer: PreTrainedTokenizerBase,
         validate_on_glue: bool = False,
         validate_on_trec_dl: bool = False,

@@ -61,12 +61,11 @@ class SigmoidSchedulerWithLinearWarmup(LambdaWarmupScheduler):
         num_training_steps: int,
         final_value: float = 0.0,
         *args,
-        verbose: bool = False,
         **kwargs,
     ) -> None:
         self.num_training_steps = num_training_steps
         self.final_value = final_value
-        super().__init__(num_warmup_steps, *args, verbose=verbose, **kwargs)
+        super().__init__(num_warmup_steps, *args, **kwargs)
 
     def value_lambda(self, current_step: int) -> float:
         if self.check_delay(current_step):
@@ -95,7 +94,6 @@ class WarmupLRScheduler(LambdaWarmupScheduler, torch.optim.lr_scheduler.LambdaLR
         optimizer: torch.optim.Optimizer,
         num_warmup_steps: int,
         *args,
-        verbose: bool = False,
         **kwargs,
     ) -> None:
         last_epoch = -1
@@ -106,7 +104,6 @@ class WarmupLRScheduler(LambdaWarmupScheduler, torch.optim.lr_scheduler.LambdaLR
             lr_lambda=self.value_lambda,
             num_warmup_steps=num_warmup_steps,
             last_epoch=last_epoch,
-            verbose=verbose,
             **kwargs,
         )
 
@@ -121,13 +118,12 @@ class LARSScheduler(WarmupLRScheduler):
         batch_size: int,
         base_factor: float | None = None,
         *args,
-        verbose: bool = False,
         **kwargs,
     ) -> None:
         self.num_training_steps = num_training_steps
         self.batch_size = batch_size
         self.base_factor = base_factor
-        super().__init__(optimizer, num_warmup_steps, *args, verbose=verbose, **kwargs)
+        super().__init__(optimizer, num_warmup_steps, *args, **kwargs)
 
     def value_lambda(self, current_step: int) -> float:
         base_factor = self.batch_size / 256 if self.base_factor is None else self.base_factor
