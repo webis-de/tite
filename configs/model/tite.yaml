@@ -19,10 +19,10 @@ model:
             hidden_act: gelu_pytorch_tanh
             norm_location: post
             norm_type: layer
-            qk_norm: true
         enhanced_masked_auto_encoding: true
         enhanced_causal_auto_encoding: false
         bow_auto_encoding: true
+        contrastive_auto_encoding: false
     tokenizer:
       class_path: tite.model.TiteTokenizer
       init_args:

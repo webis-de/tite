@@ -5,17 +5,8 @@ trainer:
   devices: auto
   num_nodes: 1
   precision: bf16-mixed
-  logger:
-    class_path: LightningIRWandbLogger
-    init_args:
-      project: tite
-    dict_kwargs:
-      entity: tite
   callbacks:
   - class_path: ModelCheckpoint
-  # - class_path: LearningRateMonitor
-  #   init_args:
-  #     logging_interval: step
   - class_path: tite.utils.callbacks.DummyImportCallback
   max_epochs: null
   max_steps: 50020

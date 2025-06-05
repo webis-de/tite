@@ -1,5 +1,0 @@
-model:
-  class_path: BiEncoderModule
-  init_args:
-    evaluation_metrics:
-    - nDCG@10

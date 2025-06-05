@@ -1,8 +1,9 @@
 model:
   class_path: BiEncoderModule
   init_args:
+    model_name_or_path: CHANGE-ME
     config:
-      class_path: BiEncoderConfig
+      class_path: DprConfig
       init_args:
         similarity_function: dot
         query_pooling_strategy: first

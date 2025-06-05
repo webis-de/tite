@@ -1,3 +1,0 @@
-trainer:
-  callbacks+:
-  - class_path: ReRankCallback

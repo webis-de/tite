@@ -4,6 +4,6 @@ trainer:
     init_args:
       use_gpu: true
       search_config:
-        class_path: FaissSearchConfig
+        class_path: TorchDenseSearchConfig
         init_args:
           k: 100

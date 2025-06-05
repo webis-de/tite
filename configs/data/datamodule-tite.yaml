@@ -1,9 +1,7 @@
 data:
   class_path: tite.datasets.FineWebDataModule
   init_args:
-    path: arrow
-    data_files:
-      train: ./HuggingFaceFW___fineweb-edu/default/0.0.0/*/fineweb-edu-train-*.arrow
+    path: HuggingFaceFW/fineweb-edu
     batch_size: 128
     num_workers: 8
     streaming: true
@@ -14,8 +12,3 @@ data:
           - text
           - null
         max_length: 512
-        token_transformations:
-          - class_path: tite.transformation.TokenMask
-            init_args:
-              mask_id: 103
-              mask_prob: 0.3
