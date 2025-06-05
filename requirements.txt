@@ -1,6 +1,6 @@
 # datasets==2.20.0
 git+https://github.com/fschlatt/datasets
-lightning==2.3.0
+lightning==2.3.3
 transformers>=4.50.0
 wandb>=0.12.10
 einops==0.8.0
