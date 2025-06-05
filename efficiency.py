@@ -1,18 +1,16 @@
 from argparse import ArgumentParser
-from time import perf_counter
 
 import ir_datasets
 import pandas as pd
 import torch
 from torch.profiler import ProfilerActivity, profile, record_function
 from tqdm import tqdm
-from transformers import AutoConfig, AutoModel, AutoTokenizer, BertConfig, PreTrainedModel, PreTrainedTokenizerBase
+from transformers import AutoConfig, AutoModel, AutoTokenizer, PreTrainedModel, PreTrainedTokenizerBase
 
-from tite.callbacks import DummyImportCallback
-from tite.model import TiteConfig
+from tite.model.tite import TiteConfig
 
 
-def grad_docs(dataset: ir_datasets.Dataset, num_docs: int) -> list[str]:
+def grab_docs(dataset: ir_datasets.Dataset, num_docs: int) -> list[str]:
     docs = []
     for doc in dataset.docs_iter():
         docs.append(doc.default_text())
@@ -94,32 +92,77 @@ def run_model(
 
 def main(args=None):
     parser = ArgumentParser()
-    parser.add_argument("--num_texts", type=int, default=50_000)
+    parser.add_argument("--num_texts", type=int, default=10_000)
     parser.add_argument("--profile", action="store_true")
+    parser.add_argument("--compile", action="store_true")
 
     args = parser.parse_args(args)
 
     dataset = ir_datasets.load("msmarco-passage/train")
-    docs = grad_docs(dataset, args.num_texts)
+    docs = grab_docs(dataset, args.num_texts)
     queries = grab_queries(dataset, args.num_texts)
 
     _results = {}
 
-    # ("mini-lm-l6", AutoConfig.from_pretrained("sentence-transformers/msmarco-MiniLM-L-6-v3")),
-    # ("mini-lm-l12", AutoConfig.from_pretrained("sentence-transformers/msmarco-MiniLM-L12-cos-v5")),
     configs = [
-        ("bert", AutoConfig.from_pretrained("sentence-transformers/msmarco-bert-base-dot-v5")),
-        # ("bert-large", AutoConfig.from_pretrained("bert-large-uncased")),
-        ("modern-bert", AutoConfig.from_pretrained("answerdotai/ModernBERT-base")),
-        ("distil-bert", AutoConfig.from_pretrained("sentence-transformers/msmarco-distilbert-dot-v5")),
-        ("tite-bert-absolute", TiteConfig(positional_embedding_type="absolute")),
-        ("tite-bert-rope", TiteConfig(positional_embedding_type="rotary")),
+        # eager
+        ("bert-eager", AutoConfig.from_pretrained("bert-base-uncased", attn_implementation="eager")),
+        ("funnel-transformer", AutoConfig.from_pretrained("funnel-transformer/medium-base")),
         (
-            "tite-2-late-rope",
+            "distil-bert-eager",
+            AutoConfig.from_pretrained("sentence-transformers/msmarco-distilbert-dot-v5", attn_implementation="eager"),
+        ),
+        (
+            "tite-2-late-absolute-eager",
             TiteConfig(
                 strides=(None, None, None, 2, 2, 2, 2, 2, 2, 2, 2, 2),
                 kernel_sizes=(None, None, None, 2, 2, 2, 2, 2, 2, 2, 2, 2),
-                positional_embedding_type="rotary",
+                positional_embedding_type="absolute",
+                attn_implementation="eager",
+            ),
+        ),
+        # sdpa
+        ("bert-sdpa", AutoConfig.from_pretrained("bert-base-uncased")),
+        ("distil-bert-sdpa", AutoConfig.from_pretrained("sentence-transformers/msmarco-distilbert-dot-v5")),
+        (
+            "tite-2-late-absolute-spda",
+            TiteConfig(
+                strides=(None, None, None, 2, 2, 2, 2, 2, 2, 2, 2, 2),
+                kernel_sizes=(None, None, None, 2, 2, 2, 2, 2, 2, 2, 2, 2),
+                positional_embedding_type="absolute",
+                attn_implementation="sdpa",
+            ),
+        ),
+        # flash
+        ("bert-flash", TiteConfig(positional_embedding_type="absolute")),
+        ("bert-rope-flash", TiteConfig(positional_embedding_type="rotary")),
+        ("modern-bert", AutoConfig.from_pretrained("answerdotai/ModernBERT-base")),
+        (
+            "tite-2-late-rope-intra",
+            TiteConfig(
+                strides=(None, None, None, 2, 2, 2, 2, 2, 2, 2, 2, 2),
+                kernel_sizes=(None, None, None, 2, 2, 2, 2, 2, 2, 2, 2, 2),
+            ),
+        ),
+        (
+            "tite-2-staggered-rope",
+            TiteConfig(
+                strides=(None, 2, 2, 2, None, 2, 2, 2, None, 2, 2, 2),
+                kernel_sizes=(None, 2, 2, 2, None, 2, 2, 2, None, 2, 2, 2),
+            ),
+        ),
+        (
+            "tite-3-late-rope",
+            TiteConfig(
+                strides=(None, None, None, None, None, None, 3, 3, 3, 3, 3, 3),
+                kernel_sizes=(None, None, None, None, None, None, 3, 3, 3, 3, 3, 3),
+            ),
+        ),
+        (
+            "tite-3-staggered-rope",
+            TiteConfig(
+                strides=(None, 3, None, 3, None, 3, None, 3, None, 3, None, 3),
+                kernel_sizes=(None, 3, None, 3, None, 3, None, 3, None, 3, None, 3),
             ),
         ),
         (
@@ -127,7 +170,6 @@ def main(args=None):
             TiteConfig(
                 strides=(None, None, None, 2, 2, 2, 2, 2, 2, 2, 2, 2),
                 kernel_sizes=(None, None, None, 2, 2, 2, 2, 2, 2, 2, 2, 2),
-                positional_embedding_type="rotary",
                 pooling_location="pre",
             ),
         ),
@@ -136,7 +178,6 @@ def main(args=None):
             TiteConfig(
                 strides=(None, None, None, 2, 2, 2, 2, 2, 2, 2, 2, 2),
                 kernel_sizes=(None, None, None, 2, 2, 2, 2, 2, 2, 2, 2, 2),
-                positional_embedding_type="rotary",
                 pooling_location="post",
             ),
         ),
@@ -149,34 +190,8 @@ def main(args=None):
                     hidden_sizes=(768, 768, 768, 1024, 1024, 1024, 1280, 1280, 1280, 1536, 1536, 1536),
                     num_attention_heads=(12, 12, 12, 16, 16, 16, 20, 20, 20, 24, 24, 24),
                     intermediate_sizes=(3072, 3072, 3072, 4096, 4096, 4096, 5120, 5120, 5120, 6144, 6144, 6144),
-                    positional_embedding_type="rotary",
-                    pooling_location="post",
                 ),
             )
-        ),
-        (
-            "tite-3-late-rope",
-            TiteConfig(
-                strides=(None, None, None, None, None, None, 3, 3, 3, 3, 3, 3),
-                kernel_sizes=(None, None, None, None, None, None, 3, 3, 3, 3, 3, 3),
-                positional_embedding_type="rotary",
-            ),
-        ),
-        (
-            "tite-2-staggered-rope",
-            TiteConfig(
-                strides=(None, 2, 2, 2, None, 2, 2, 2, None, 2, 2, 2),
-                kernel_sizes=(None, 2, 2, 2, None, 2, 2, 2, None, 2, 2, 2),
-                positional_embedding_type="rotary",
-            ),
-        ),
-        (
-            "tite-3-staggered-rope",
-            TiteConfig(
-                strides=(None, 3, None, 3, None, 3, None, 3, None, 3, None, 3),
-                kernel_sizes=(None, 3, None, 3, None, 3, None, 3, None, 3, None, 3),
-                positional_embedding_type="rotary",
-            ),
         ),
     ]
 
@@ -184,6 +199,10 @@ def main(args=None):
     for config_name, config in pg:
         pg.set_description(config_name)
         model = AutoModel.from_config(config, torch_dtype=torch.bfloat16).eval().to("cuda")
+        if args.compile and (
+            "funnel" not in model.config.name_or_path and "Modern" not in model.config.name_or_path
+        ):  # funnel and modern-bert compile does not work
+            model.compile(dynamic=True)
         if model.config.name_or_path:
             tokenizer = AutoTokenizer.from_pretrained(model.config.name_or_path)
         else:
@@ -192,8 +211,8 @@ def main(args=None):
         # iterator, total = zip(["queries"], [queries], [32]), 1
         # iterator, total = zip(["docs"], [docs], [512]), 1
         for text_type, text, max_length in tqdm(iterator, position=1, leave=False, total=total):
-            for grad in tqdm((True, False), position=2, leave=False):
-                # for grad in tqdm((False,), position=2, leave=False):
+            # for grad in tqdm((True, False), position=2, leave=False):
+            for grad in tqdm((False,), position=2, leave=False):
                 # for grad in tqdm((True,), position=2, leave=False):
                 if grad:
                     model_results = run_model(model, tokenizer, text, max_length, args.profile)
@@ -210,7 +229,7 @@ def main(args=None):
     results["num_texts"] = results["batch_size"] * results["num_batches"]
     results["num_texts_per_sec"] = results["num_texts"] / results["time"]
     results["kb / text"] = results["mem"] / results["num_texts"] / 1024
-    results.to_json("efficiency.json")
+    results.to_json("efficiency.json", orient="records", lines=True)
     columns = ["text_type", "grad"]
     index = ["model"]
     values = ["num_texts_per_sec", "kb / text"]
