@@ -9,5 +9,5 @@ einops==0.8.0
 jsonargparse[signatures]>=4.27.7
 ir_datasets
 more_itertools==10.4.0
-nltk==3.8.1
+nltk==3.9.1
 git+https://github.com/webis-de/lightning-ir
