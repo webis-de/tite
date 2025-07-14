@@ -4,7 +4,46 @@ This repository contains the code for the paper [`TITE: Token-Independent Text E
 
 ## Model Zoo
 
-Coming soon
+### Pre-trained Models
+
+We provide two pre-trained models. The first uses a intra-attention pooling, distributes the pooling layers late in the model, and uses a kernel size and stride of 2. The second model uses the same pooling, but upscales the hidden states. The base model is available here: [`webis/tite-2-late`](https://huggingface.co/webis/tite-2-late) and the upscaled model is available here: [`webis/tite-2-late-upscale`](https://huggingface.co/webis/tite-2-late-upscale). The configuration files `pl_config.yaml` to reproduce both models are avilable in the respective model repositories and can be reproduced using the following command:
+
+```bash
+python main.py fit --config pl_config.yaml
+```
+
+### Fine-tuned Models
+
+We fine-tuned both models using Lightning IR and on MS MARCO and distillation scores from a large Set-Encoder model [`webis/set-encoder-large`](https://huggingface.co/webis/set-encoder-large). The table below summarizes the nDCG@10 scores of the fine-tuned models on TREC DL 19 and 20 and the geometric mean on BEIR. The values are slightly different from the values reported in the paper due to a slightly different fine-tuning setup. The configuration files to reproduce both fine-tuned models are available in the respective model repositories and can be reproduced using the following command:
+
+```bash
+lightning-ir fit --config pl_config.yaml
+```
+
+| Model | TREC DL 19 | TREC DL 20 | BEIR (geometric mean) |
+|-------|------------|------------|-----------------------|
+| [`webis/tite-2-late-msmarco`](https://huggingface.co/webis/tite-2-late-msmarco) | 0.69 | 0.71 | 0.40 |
+| [`webis/tite-2-late-upscale-msmarco`](https://huggingface.co/webis/tite-2-late-upscale-msmarco) | 0.68 | 0.71 | 0.41 |
+
+The results of the table can be reproduced using the following commands:
+
+```bash
+lightning-ir index \
+  --config lightning-ir-configs/index/trainer.yaml \
+  --config lightning-ir-configs/index/model.yaml \
+  --config lightning-ir-configs/index/datamodule.yaml \
+  --config lightning-ir-configs/index/index-callback.yaml \
+  --model.model_name_or_path {MODEL_NAME}
+  
+
+lightning-ir search \
+  --config lightning-ir-configs/search/trainer.yaml \
+  --config lightning-ir-configs/search/model.yaml \
+  --config lightning-ir-configs/search/datamodule.yaml \
+  --config lightning-ir-configs/search/search-callback.yaml \
+  --model.model_name_or_path {MODEL_NAME}
+```
+
 
 ## Pre-training
 
