@@ -75,7 +75,7 @@ class PackedMetaData:
     def from_attention_mask(cls, attention_mask: torch.Tensor) -> "PackedMetaData":
         seq_lens = attention_mask.sum(-1, dtype=torch.int32)
         idcs = torch.nonzero(attention_mask.flatten(), as_tuple=False).flatten()
-        max_seq_len = int(seq_lens.max().item())
+        max_seq_len = attention_mask.shape[-1]
         cu_seq_lens = torch.nn.functional.pad(torch.cumsum(seq_lens, dim=0, dtype=torch.int32), (1, 0))
         position_idcs = cat_arange(torch.zeros_like(seq_lens), seq_lens)
         return cls(seq_lens, cu_seq_lens, max_seq_len, _idcs=idcs, _position_idcs=position_idcs)
@@ -365,43 +365,50 @@ class ApplyPooling_(torch.autograd.Function):
         return grad_x, None, None, None, None
 
 
-class PackedAvgPool1d(torch.nn.Module):
+class MaskedAvgPool1d(torch.nn.Module):
+    def __init__(self, kernel_size: int, stride: int):
+        super().__init__()
+        if stride > kernel_size:
+            raise ValueError("Stride must be less than or equal to kernel size")
+        self.kernel_size = kernel_size
+        self.stride = stride
+
+    def forward(self, x: torch.Tensor, mask: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+        if self.kernel_size > x.shape[-2]:
+            padding = self.kernel_size - x.shape[-2]
+        else:
+            padding = (self.kernel_size - x.shape[-2] - self.stride) % self.stride
+
+        if padding != 0:
+            x = torch.nn.functional.pad(x, (0, 0, 0, padding))
+            mask = torch.nn.functional.pad(mask, (0, padding))
+        x_blocks = x.unfold(-2, self.kernel_size, self.stride)
+        mask_blocks = mask.unfold(-1, self.kernel_size, self.stride).unsqueeze(-2)
+        x_masked = x_blocks * mask_blocks
+        normalization = mask_blocks.sum(-1)
+        normalization[normalization == 0] = 1
+        y = x_masked.sum(-1) / normalization
+        output_seq_lens = compute_output_shape(mask.sum(-1), self.kernel_size, self.stride)
+        y_mask = torch.arange(y.shape[1], device=y.device)[None].expand(y.shape[0], -1) < output_seq_lens[:, None]
+        return y, y_mask
+
+
+class PackedAvgPool1d(MaskedAvgPool1d):
 
     def __init__(self, kernel_size: int, stride: int, implementation: Literal["eager", "triton"] = "triton"):
-        super().__init__()
+        super().__init__(kernel_size, stride)
         if stride > kernel_size:
             raise ValueError("Stride must be less than or equal to kernel size")
         if implementation == "triton" and not _has_triton:
             raise ValueError("Triton is not installed. Please install it to use the 'triton' implementation.")
-        self.kernel_size = kernel_size
-        self.stride = stride
         self.implementation = implementation
 
     def eager_forward(self, packed_x: torch.Tensor, packed_meta_data: PackedMetaData) -> torch.Tensor:
         x = pad_input(packed_x, packed_meta_data)
         mask = pad_input(torch.ones(packed_x.shape[0], dtype=torch.bool, device=packed_x.device), packed_meta_data)
 
-        batch_size, _, dim = x.shape
+        y, y_mask = super().forward(x, mask)
 
-        seq_lens = mask.sum(-1)
-        if self.kernel_size > x.shape[-2]:
-            padding = self.kernel_size - x.shape[-2]
-        else:
-            padding = (self.kernel_size - seq_lens - self.stride) % self.stride
-
-        output_seq_lens = compute_output_shape(seq_lens, self.kernel_size, self.stride)
-
-        pad_seq_lens = seq_lens + padding
-        pad_x = torch.zeros(batch_size, int(pad_seq_lens.max().item()), dim, device=x.device, dtype=x.dtype)
-        pad_mask = torch.zeros(batch_size, int(pad_seq_lens.max().item()), device=mask.device, dtype=mask.dtype)
-        pad_x[:, : x.shape[-2]] = x
-        pad_mask[:, : x.shape[-2]] = mask
-
-        x_blocks = pad_x.unfold(-2, self.kernel_size, self.stride)
-        mask_blocks = pad_mask.unfold(-1, self.kernel_size, self.stride).unsqueeze(-2)
-        norm = mask_blocks.sum(-1).clamp_min(1)
-        y = (x_blocks.sum(-1) / norm).to(packed_x)
-        y_mask = torch.arange(y.shape[1], device=y.device)[None].expand(y.shape[0], -1) < output_seq_lens[:, None]
         y_packed = y[y_mask]
         return y_packed
 

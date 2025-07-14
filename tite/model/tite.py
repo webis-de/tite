@@ -1,7 +1,7 @@
 from abc import ABC, abstractmethod
 from copy import deepcopy
 from dataclasses import dataclass
-from typing import Dict, List, Literal, Tuple
+from typing import Any, Dict, List, Literal, Tuple
 
 import torch
 from einops import rearrange
@@ -16,8 +16,9 @@ from transformers import PretrainedConfig, PreTrainedModel
 from transformers.activations import ACT2FN
 from transformers.modeling_outputs import ModelOutput
 
+from .alibi import AlibiPositionalEmbeddings
 from .pool import PackedAvgPool1d, PackedMetaData, compute_output_shape
-from .rope import EagerRotaryPositionalEmbeddings, TritonRotaryPositionalEmbeddings
+from .rope import RotaryPositionalEmbeddings
 from .unpad import pad_input, unpad_input
 
 
@@ -38,6 +39,9 @@ class RMSNorm(torch.nn.Module):
 
     def _init_weights(self, reset_params: bool = False):
         torch.nn.init.ones_(self.weight)
+
+    def _initialize_weights(self, reset_params: bool = False):
+        self._init_weights(reset_params)
 
 
 class SwiGLU(torch.nn.Module):
@@ -91,16 +95,28 @@ class TiteConfig(PretrainedConfig):
         layer_norm_eps: float = 1e-12,
         pad_token_id: int = 0,
         hidden_act: str = "gelu_pytorch_tanh",
-        positional_embedding_type: Literal["absolute", "rotary", "alibi"] = "rotary",
+        absolute_positional_embedding_type: Literal["learned"] | None = None,
+        relative_positional_embedding_type: Literal["alibi", "rotary"] | None = "rotary",
         pooling_location: Literal["pre", "intra", "post"] = "intra",
-        rotary_interleaved: bool = False,
+        rotary_interleaved: bool = True,
         norm_location: Literal["pre", "qkv", "post"] = "pre",
         norm_type: Literal["rms", "layer"] = "rms",
         pooling_implementation: Literal["eager", "triton"] = "triton",
-        rope_implementation: Literal["eager", "triton"] = "triton",
+        rope_implementation: Literal["eager", "triton"] = "eager",
         **kwargs,
     ):
         super().__init__(pad_token_id=pad_token_id, **kwargs)
+
+        #### legacy parsing
+        positional_embedding_type = kwargs.get("positional_embedding_type", None)
+        if positional_embedding_type is not None:
+            if positional_embedding_type == "absolute":
+                absolute_positional_embedding_type = "learned"
+                relative_positional_embedding_type = None
+            else:
+                absolute_positional_embedding_type = None
+                relative_positional_embedding_type = positional_embedding_type
+        ####
         if isinstance(hidden_sizes, int):
             hidden_sizes = (hidden_sizes,) * num_hidden_layers
         if isinstance(num_attention_heads, int):
@@ -123,7 +139,8 @@ class TiteConfig(PretrainedConfig):
         self.initializer_range = initializer_range
         self.layer_norm_eps = layer_norm_eps
         self.hidden_act = hidden_act
-        self.positional_embedding_type = positional_embedding_type
+        self.absolute_positional_embedding_type = absolute_positional_embedding_type
+        self.relative_positional_embedding_type = relative_positional_embedding_type
         self.pooling_location = pooling_location
         self.rotary_interleaved = rotary_interleaved
         self.norm_location = norm_location
@@ -191,17 +208,17 @@ class TiteEmbeddings(torch.nn.Module):
         else:
             self.downscale = torch.nn.Identity()
         self.position_embeddings = None
-        if config.positional_embedding_type == "absolute":
+        if config.absolute_positional_embedding_type == "learned":
             self.position_embeddings = torch.nn.Embedding(
                 config.max_position_embeddings, self.word_embeddings.embedding_dim
             )
         self.norm = NORM_MAP[config.norm_type](config.hidden_sizes[0], eps=config.layer_norm_eps)
         self.dropout = torch.nn.Dropout(config.dropout_prob)
 
-    def forward(self, input_ids: torch.Tensor, position_idcs: torch.Tensor) -> torch.Tensor:
+    def forward(self, input_ids: torch.Tensor, packed_meta_data: PackedMetaData) -> torch.Tensor:
         embeddings = self.downscale(self.word_embeddings(input_ids))
         if self.position_embeddings is not None:
-            position_embeddings = self.downscale(self.position_embeddings(position_idcs))
+            position_embeddings = self.downscale(self.position_embeddings(packed_meta_data.position_idcs))
             embeddings = embeddings + position_embeddings
         embeddings = self.norm(embeddings)
         embeddings = self.dropout(embeddings)
@@ -214,11 +231,6 @@ class TiteAttention(torch.nn.Module):
         "flash_attention_2": "flash_attn_forward",
         "sdpa": "sdpa_forward",
         "eager": "eager_forward",
-    }
-
-    ROPE_CLASSES = {
-        "eager": EagerRotaryPositionalEmbeddings,
-        "triton": TritonRotaryPositionalEmbeddings,
     }
 
     def __init__(self, config: TiteConfig, layer_idx: int):
@@ -262,17 +274,16 @@ class TiteAttention(torch.nn.Module):
         if kernel_size is not None and stride is not None:
             self.pooling = PackedAvgPool1d(kernel_size, stride, config.pooling_implementation)
 
-        if config.positional_embedding_type == "rotary":
-            self.rope = self.ROPE_CLASSES[config.rope_implementation](
-                self.attention_head_size, interleaved=config.rotary_interleaved
+        if config.relative_positional_embedding_type == "rotary":
+            self.rope = RotaryPositionalEmbeddings(
+                self.attention_head_size,
+                interleaved=config.rotary_interleaved,
+                implementation=config.rope_implementation,
             )
             self.alibi = None
-        elif config.positional_embedding_type == "alibi":
+        elif config.relative_positional_embedding_type == "alibi":
             self.rope = None
-            x = (2**8) ** (1 / num_attention_heads)
-            self.register_buffer(
-                "alibi", torch.tensor([1 / x ** (i + 1) for i in range(num_attention_heads)]), persistent=False
-            )
+            self.alibi = AlibiPositionalEmbeddings(num_attention_heads)
         else:
             self.rope = None
             self.alibi = None
@@ -293,6 +304,8 @@ class TiteAttention(torch.nn.Module):
         packed_meta_data: PackedMetaData,
         output_attention: bool = False,
     ) -> Tuple[torch.Tensor, None]:
+        if self.alibi is not None:
+            raise ValueError("Flash Attention 2 does not support Alibi positional embeddings.")
         if flash_attn_varlen_func is None:
             raise ValueError(
                 "Flash Attention 2 is not installed. Please install or use a different attention implementation"
@@ -305,7 +318,9 @@ class TiteAttention(torch.nn.Module):
             packed_meta_data.cu_seq_lens,
             query_packed_meta_data.max_seq_len,
             packed_meta_data.max_seq_len,
-            alibi_slopes=self.alibi,
+            alibi_slopes=None if self.alibi is None else self.alibi.slopes,
+            # TODO flash attn uses "absolute" relative position embeddings, pooling requires the relative positions
+            # to be float values and not integer indices
         )
         return attn_output, None
 
@@ -318,8 +333,6 @@ class TiteAttention(torch.nn.Module):
         packed_meta_data: PackedMetaData,
         output_attention: bool = False,
     ) -> Tuple[torch.Tensor, None]:
-        if self.alibi is not None:
-            raise ValueError("ALiBi is not supported with SDPA")
         pad_query = pad_input(query, query_packed_meta_data).transpose(1, 2)
         pad_key = pad_input(key, packed_meta_data).transpose(1, 2)
         pad_value = pad_input(value, packed_meta_data).transpose(1, 2)
@@ -327,10 +340,10 @@ class TiteAttention(torch.nn.Module):
             torch.ones(query.shape[0], device=pad_query.device, dtype=torch.bool), query_packed_meta_data
         )
         key_mask = pad_input(torch.ones(key.shape[0], device=pad_key.device, dtype=torch.bool), packed_meta_data)
-        mask = query_mask.unsqueeze(-1) & key_mask.unsqueeze(-2)
-        attn_output = torch.nn.functional.scaled_dot_product_attention(
-            pad_query, pad_key, pad_value, attn_mask=mask[:, None]
-        )
+        mask = (query_mask.unsqueeze(-1) & key_mask.unsqueeze(-2))[:, None]
+        if self.alibi is not None:
+            mask = self.alibi(mask)
+        attn_output = torch.nn.functional.scaled_dot_product_attention(pad_query, pad_key, pad_value, attn_mask=mask)
         attn_output = attn_output.transpose(1, 2)
         attn_output = unpad_input(attn_output, query_packed_meta_data)
         return attn_output, None
@@ -344,8 +357,6 @@ class TiteAttention(torch.nn.Module):
         packed_meta_data: PackedMetaData,
         output_attention: bool = False,
     ) -> Tuple[torch.Tensor, torch.Tensor | None]:
-        if self.alibi is not None:
-            raise ValueError("ALiBi is not supported with eager attention")
         pad_query = pad_input(query, query_packed_meta_data).transpose(1, 2)
         pad_key = pad_input(key, packed_meta_data).transpose(1, 2)
         pad_value = pad_input(value, packed_meta_data).transpose(1, 2)
@@ -353,11 +364,14 @@ class TiteAttention(torch.nn.Module):
             torch.ones(query.shape[0], device=pad_query.device, dtype=torch.bool), query_packed_meta_data
         )
         key_mask = pad_input(torch.ones(key.shape[0], device=pad_key.device, dtype=torch.bool), packed_meta_data)
-        mask = query_mask.unsqueeze(-1) & key_mask.unsqueeze(-2)
+        mask = (query_mask.unsqueeze(-1) & key_mask.unsqueeze(-2))[:, None]
 
         attn_values = pad_query @ pad_key.transpose(-2, -1)
         attn_values = attn_values / (self.attention_head_size**0.5)
-        attn_values = attn_values.masked_fill(~mask[:, None], torch.finfo(attn_values.dtype).min)
+        if self.alibi is not None:
+            attn_values = attn_values + self.alibi(mask)
+        else:
+            attn_values = attn_values.masked_fill(~mask, torch.finfo(attn_values.dtype).min)
         attn_probs = torch.nn.functional.softmax(attn_values, dim=-1)
         attn_output = attn_probs @ pad_value
         attn_output = attn_output.transpose(1, 2)
@@ -434,7 +448,20 @@ class TiteAttention(torch.nn.Module):
             value = rearrange(value, "t (h d) -> t h d", h=self.num_attention_heads, d=self.attention_head_size)
 
             if self.rope is not None:
-                query = self.rope(query, query_packed_meta_data)
+                query = self.rope(
+                    query,
+                    query_packed_meta_data,
+                    kernel_size=(
+                        self.pooling.kernel_size
+                        if self.pooling is not None and self.config.pooling_location == "intra"
+                        else None
+                    ),
+                    stride=(
+                        self.pooling.kernel_size
+                        if self.pooling is not None and self.config.pooling_location == "intra"
+                        else None
+                    ),
+                )
                 key = self.rope(key, key_value_packed_meta_data)
 
             hidden_states, attn_probs = self.attention_function(
@@ -476,7 +503,7 @@ class TiteMLP(torch.nn.Module):
 
     def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
         input_hidden_states = hidden_states
-        if self.config.norm_location == "pre":
+        if self.config.norm_location in {"pre", "qkv"}:
             hidden_states = self.norm(hidden_states)
         hidden_states = self.intermediate_dense(hidden_states)
         hidden_states = self.intermediate_act_fn(hidden_states)
@@ -588,7 +615,7 @@ class BOWLMHead(PreTrainingHead):
         self.lm_head = LMPredictionHead(config, lm_decoder)
 
     def forward(self, output: TiteModelOutput, *args, **kwargs) -> torch.Tensor:
-        return self.lm_head(output.last_hidden_state[:, [0]])
+        return self.lm_head(output.last_hidden_state)
 
     def get_labels(
         self, input_ids: torch.Tensor, attention_mask: torch.Tensor, special_tokens_mask: torch.Tensor, *args, **kwargs
@@ -612,9 +639,17 @@ class BOWLMHead(PreTrainingHead):
 
 
 class EnhancedMaskedAttention(TiteAttention):
-    def __init__(self, config: TiteConfig, mask_strategy: float | Literal["causal"] = 0.0):
+    def __init__(
+        self,
+        config: TiteConfig,
+        mask_strategy: Literal["causal", "random", "windowed"],
+        mask_prob: float = 0.5,
+        mask_window_size: int = 5,
+    ):
         super().__init__(config, layer_idx=-1)
         self.mask_strategy = mask_strategy
+        self.mask_prob = mask_prob
+        self.mask_window_size = mask_window_size
 
     def forward(  # type: ignore
         self, query_hidden_states: torch.Tensor, key_value_hidden_states: torch.Tensor, attention_mask: torch.Tensor
@@ -649,15 +684,32 @@ class EnhancedMaskedAttention(TiteAttention):
                 torch.ones((query_seq_len, key_value_seq_len), device=input_hidden_states.device, dtype=torch.bool),
                 diagonal=seq_len_diff,
             )[None].expand(input_hidden_states.shape[0], -1, -1)
-        elif isinstance(self.mask_strategy, float):
+        elif self.mask_strategy == "random":
             enhanced_decoding_mask = (
                 torch.rand((batch_size, query_seq_len, key_value_seq_len), device=input_hidden_states.device)
-                >= self.mask_strategy
+                >= self.mask_prob
             )
             # set diagonal to False (offset by 1 if seq_len_diff > 0, this means sequence embedding was concatenated)
             if seq_len_diff:
                 enhanced_decoding_mask[:, :, 0] = True
             enhanced_decoding_mask[:, range(query_seq_len), range(seq_len_diff, query_seq_len + seq_len_diff)] = False
+            enhanced_decoding_mask = enhanced_decoding_mask.logical_and(attention_mask[..., None])
+        elif self.mask_strategy == "windowed":
+            if self.mask_window_size < 1:
+                raise ValueError("mask_window_size must be greater than or equal to 1 for windowed masking")
+            idx = torch.arange(query_seq_len, device=input_hidden_states.device)
+            diff = idx.unsqueeze(1) - torch.arange(query_seq_len, device=input_hidden_states.device)
+            band_mask = diff.abs() <= self.mask_window_size
+            band_mask.fill_diagonal_(False)
+            if seq_len_diff:
+                band_mask = torch.cat(
+                    [
+                        torch.ones((query_seq_len, seq_len_diff), device=input_hidden_states.device, dtype=torch.bool),
+                        band_mask,
+                    ],
+                    dim=1,
+                )
+            enhanced_decoding_mask = band_mask[None].expand(batch_size, -1, -1)
             enhanced_decoding_mask = enhanced_decoding_mask.logical_and(attention_mask[..., None])
         else:
             raise ValueError("invalid mask strategy")
@@ -704,12 +756,23 @@ class EnhancedLMHead(PreTrainingHead):
         config: TiteConfig,
         embeddings: TiteEmbeddings,
         lm_decoder: torch.nn.Linear | None,
-        mask_strategy: float | Literal["causal"] = 0.5,
+        mask_strategy: Literal["causal", "random", "windowed"],
+        mask_prob: float = 0.5,
+        mask_window_size: int = 5,
         cat_seq_embedding_to_key_value: bool = True,
+        absolute_positional_embedding_type: Literal["learned", "same"] | None = "same",
+        relative_positional_embedding_type: Literal["alibi", "rotary", "same"] | None = "same",
     ):
         super().__init__()
         upscale = config.hidden_sizes[-1] > config.hidden_sizes[0]
         config = deepcopy(config)
+        self.position_embeddings = embeddings.position_embeddings
+        if absolute_positional_embedding_type != "same":
+            if config.absolute_positional_embedding_type is None:
+                self.position_embeddings = torch.nn.Embedding(config.max_position_embeddings, config.hidden_sizes[0])
+            config.absolute_positional_embedding_type = absolute_positional_embedding_type
+        if relative_positional_embedding_type != "same":
+            config.relative_positional_embedding_type = relative_positional_embedding_type
         config.num_hidden_layers = 1
         config.hidden_sizes = config.hidden_sizes[-1:]
         config.num_attention_heads = config.num_attention_heads[-1:]
@@ -721,6 +784,8 @@ class EnhancedLMHead(PreTrainingHead):
         self.embeddings = embeddings
         self.lm_head = LMPredictionHead(config, lm_decoder)
         self.mask_strategy = mask_strategy
+        self.mask_prob = mask_prob
+        self.mask_window_size = mask_window_size
         self.cat_seq_embedding_to_key_value = cat_seq_embedding_to_key_value
 
         if upscale:
@@ -731,35 +796,40 @@ class EnhancedLMHead(PreTrainingHead):
             self.norm = NORM_MAP[config.norm_type](config.hidden_size, eps=config.layer_norm_eps)
         else:
             self.norm = torch.nn.Identity()
-        self.enhanced_attention = EnhancedMaskedAttention(config, mask_strategy)
+        self.enhanced_attention = EnhancedMaskedAttention(config, mask_strategy, mask_prob=mask_prob)
         self.mlp = TiteMLP(config, -1)
 
-    def embedding_forward(self, input_ids: torch.Tensor) -> torch.Tensor:
-        # same as TiteEmbedding.forward but downscaling deactivated
+    def embedding_forward(self, input_ids: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor | None]:
+        # same as TiteEmbeddings.forward but downscaling deactivated and embeddings output for query hidden states
         embeddings = self.embeddings.word_embeddings(input_ids)
-        if self.embeddings.position_embeddings is not None:
+        position_embeddings = None
+        if self.position_embeddings is not None:
             position_idcs = torch.arange(input_ids.shape[1], device=input_ids.device)[None].expand_as(input_ids)
-            embeddings = embeddings + self.embeddings.position_embeddings(position_idcs)
+            position_embeddings = self.position_embeddings(position_idcs)
+            embeddings = embeddings + position_embeddings
         embeddings = self.embedding_norm(embeddings)
         embeddings = self.embeddings.dropout(embeddings)
-        return embeddings
+        return embeddings, position_embeddings
 
     def forward(
         self,
         output: TiteModelOutput,
         original_input_ids: torch.Tensor,
-        attention_mask: torch.Tensor,
+        original_attention_mask: torch.Tensor,
         *args,
         **kwargs,
     ) -> torch.Tensor:
-        key_value_hidden_states = self.embedding_forward(original_input_ids)
+        key_value_hidden_states, position_embeddings = self.embedding_forward(original_input_ids)
 
-        query_hidden_states = output.last_hidden_state[:, [0]].expand_as(key_value_hidden_states)
+        seq_embedding = output.last_hidden_state[:, [0]]
+        query_hidden_states = seq_embedding.expand_as(key_value_hidden_states)
+        if position_embeddings is not None:
+            query_hidden_states = self.embedding_norm(query_hidden_states + position_embeddings)
 
         if self.cat_seq_embedding_to_key_value:
-            key_value_hidden_states = torch.cat((output.last_hidden_state[:, [0]], key_value_hidden_states), dim=1)
+            key_value_hidden_states = torch.cat((seq_embedding, key_value_hidden_states), dim=1)
 
-        hidden_states = self.enhanced_attention(query_hidden_states, key_value_hidden_states, attention_mask)
+        hidden_states = self.enhanced_attention(query_hidden_states, key_value_hidden_states, original_attention_mask)
 
         if self.mask_strategy == "causal":
             hidden_states = hidden_states[:, :-1]
@@ -787,24 +857,18 @@ class ContrastiveLMHead(PreTrainingHead):
 
     def __init__(self, tite):
         super().__init__()
-        self.tite = tite
-
-        # logits = head(
-        #             output=output,
-        #             original_input_ids=original_input_ids,
-        #             attention_mask=attention_mask,
-        #         )
 
     def forward(
         self,
         output: TiteModelOutput,
         original_input_ids: torch.Tensor,
         original_attention_mask: torch.Tensor,
+        tite,
         *args,
         **kwargs,
     ) -> torch.Tensor:
         # compute scalar product between transformed and original input
-        original_output = self.tite(
+        original_output = tite(
             original_input_ids, original_attention_mask, output_hidden_states=True, output_attentions=False
         )
         original_output = original_output.last_hidden_state
@@ -904,7 +968,7 @@ class TiteModel(TitePreTrainedModel):
         attention_mask = attention_mask.bool()
         packed_meta_data = PackedMetaData.from_attention_mask(attention_mask)
         input_ids = unpad_input(input_ids, packed_meta_data)
-        hidden_states = self.embeddings(input_ids, packed_meta_data.position_idcs)
+        hidden_states = self.embeddings(input_ids, packed_meta_data)
         hidden_states, all_hidden_states, all_attentions = self.encoder(
             hidden_states, packed_meta_data, output_hidden_states, output_attentions
         )
@@ -959,14 +1023,14 @@ class TiteForPreTraining(TitePreTrainedModel):
 
     _tied_weights_keys = [
         "tite.embeddings.word_embeddings.weight",
-        "tite.embeddings.word_embeddings.linear.weight",
+        "tite.embeddings.downscale.weight",
         "tite.embeddings.position_embeddings.weight",
         "tite.embeddings.norm.weight",
         "tite.embeddings.norm.bias",
         "lm_decoder.weight",
         "lm_decoder.bias",
         "heads.enhanced_masked_auto_encoding.embeddings.word_embeddings.weight",
-        "heads.enhanced_masked_auto_encoding.embeddings.word_embeddings.linear.weight",
+        "heads.enhanced_masked_auto_encoding.embeddings.downscale.weight",
         "heads.enhanced_masked_auto_encoding.embeddings.position_embeddings.weight",
         "heads.enhanced_masked_auto_encoding.embeddings.norm.weight",
         "heads.enhanced_masked_auto_encoding.embeddings.norm.bias",
@@ -979,7 +1043,7 @@ class TiteForPreTraining(TitePreTrainedModel):
         "heads.enhanced_causal_auto_encoding.lm_head.decoder.weight",
         "heads.enhanced_causal_auto_encoding.lm_head.decoder.bias",
         "heads.enhanced_causal_auto_encoding.embeddings.word_embeddings.weight",
-        "heads.enhanced_causal_auto_encoding.embeddings.word_embeddings.linear.weight",
+        "heads.enhanced_causal_auto_encoding.embeddings.downscale.weight",
         "heads.enhanced_causal_auto_encoding.embeddings.position_embeddings.weight",
         "heads.enhanced_causal_auto_encoding.embeddings.norm.weight",
         "heads.enhanced_causal_auto_encoding.embeddings.norm.bias",
@@ -990,11 +1054,16 @@ class TiteForPreTraining(TitePreTrainedModel):
     def __init__(
         self,
         config: TiteConfig,
-        enhanced_masked_auto_encoding: bool = True,
-        enhanced_causal_auto_encoding: bool = True,
-        bow_auto_encoding: bool = True,
-        contrastive_auto_encoding: bool = True,
-        mask_prob: float = 0.5,
+        enhanced_masked_auto_encoding: bool = False,
+        enhanced_causal_auto_encoding: bool = False,
+        enhanced_windowed_auto_encoding: bool = False,
+        bow_auto_encoding: bool = False,
+        contrastive_learning: bool = False,
+        enhanced_masked_auto_encoding_kwargs: Dict[str, Any] | None = None,
+        enhanced_causal_auto_encoding_kwargs: Dict[str, Any] | None = None,
+        enhanced_windowed_auto_encoding_kwargs: Dict[str, Any] | None = None,
+        bow_auto_encoding_kwargs: Dict[str, Any] | None = None,
+        contrastive_learning_kwargs: Dict[str, Any] | None = None,
     ):
         super().__init__(config)
         self.config: TiteConfig
@@ -1006,18 +1075,35 @@ class TiteForPreTraining(TitePreTrainedModel):
         lm_decoder = torch.nn.Linear(config.hidden_size, config.vocab_size, bias=False)
         if enhanced_masked_auto_encoding:
             self.heads["enhanced_masked_auto_encoding"] = EnhancedLMHead(
-                config, self.tite.embeddings, lm_decoder, mask_strategy=mask_prob
+                config,
+                self.tite.embeddings,
+                lm_decoder,
+                mask_strategy="random",
+                **(enhanced_masked_auto_encoding_kwargs or {}),
             )
             self.lm_decoder = lm_decoder
         if bow_auto_encoding:
-            self.heads["bow_auto_encoding"] = BOWLMHead(config, lm_decoder)
+            self.heads["bow_auto_encoding"] = BOWLMHead(config, lm_decoder, **(bow_auto_encoding_kwargs or {}))
             self.lm_decoder = lm_decoder
         if enhanced_causal_auto_encoding:
             self.heads["enhanced_causal_auto_encoding"] = EnhancedLMHead(
-                config, self.tite.embeddings, lm_decoder, mask_strategy="causal"
+                config,
+                self.tite.embeddings,
+                lm_decoder,
+                mask_strategy="causal",
+                **(enhanced_causal_auto_encoding_kwargs or {}),
             )
-        if contrastive_auto_encoding:
-            self.heads["contrastive_auto_encoding"] = ContrastiveLMHead(self.tite)
+        if enhanced_windowed_auto_encoding:
+            self.heads["enhanced_windowed_auto_encoding"] = EnhancedLMHead(
+                config,
+                self.tite.embeddings,
+                lm_decoder,
+                mask_strategy="windowed",
+                **(enhanced_windowed_auto_encoding_kwargs or {}),
+            )
+            self.lm_decoder = lm_decoder
+        if contrastive_learning:
+            self.heads["contrastive_learning"] = ContrastiveLMHead(self.tite, **(contrastive_learning_kwargs or {}))
 
         self.post_init()
 
@@ -1039,12 +1125,14 @@ class TiteForPreTraining(TitePreTrainedModel):
         losses = None
         if labels is not None:
             losses = {}
-            for task, head in self.heads.items():
+            for task in labels:
+                head = self.heads[task]
                 logits = head(
                     output=output,
                     original_input_ids=original_input_ids,
                     attention_mask=attention_mask,
                     original_attention_mask=original_attention_mask,
+                    tite=self.tite,
                 )
                 losses[task] = head.compute_loss(logits, labels[task])
         return TitePreTrainingOutput(

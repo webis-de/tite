@@ -9,14 +9,14 @@ from transformers import PreTrainedTokenizerBase
 
 from .datasets import GLUEDataModule, IRDatasetsDataModule
 from .glue_module import GlueModule
-from .model import BertForPreTraining, TiteForPreTraining
+from .model.tite import TiteForPreTraining
 from .msmarco_module import MSMARCOModule
 
 
 class TiteModule(LightningModule):
     def __init__(
         self,
-        model: TiteForPreTraining | BertForPreTraining,
+        model: TiteForPreTraining,
         tokenizer: PreTrainedTokenizerBase,
         validate_on_glue: bool = False,
         validate_on_trec_dl: bool = False,
@@ -140,21 +140,27 @@ class TiteModule(LightningModule):
         # using the GlueModule and MSMARCOModule
         return
 
-    def training_step(self, batch: dict[str, Any], batch_idx: int) -> torch.Tensor:
-        encoding, transformed_encoding, auxiliary_data = batch
-        labels = {}
-        for name, head in self.model.heads.items():
-            labels[name] = head.get_labels(**encoding, **auxiliary_data)
+    def training_step(
+        self, batch: tuple[dict[str, Any], dict[str, Any], dict[str, Any]], batch_idx: int
+    ) -> torch.Tensor:
+        encoding, transformed_encodings, auxiliary_data = batch
 
-        output = self.model.forward(
-            **transformed_encoding,
-            original_input_ids=encoding["input_ids"],
-            original_attention_mask=encoding["attention_mask"],
-            labels=labels,
-        )
+        losses = {}
+        for tasks in transformed_encodings:
+            transformed_encoding = transformed_encodings[tasks]
+            aux_data = auxiliary_data[tasks]
+            labels = {}
+            for task in tasks:
+                labels[task] = self.model.heads[task].get_labels(**encoding, **aux_data)
+            output = self.model.forward(
+                **transformed_encoding,
+                original_input_ids=encoding["input_ids"],
+                original_attention_mask=encoding["attention_mask"],
+                labels=labels,
+            )
+            assert output.losses is not None
+            losses.update(output.losses)
 
-        losses = output.losses
-        assert losses is not None
         losses["total"] = sum(losses.values())
         num_tokens = encoding["attention_mask"].sum()
         self.tokens_seen += num_tokens
