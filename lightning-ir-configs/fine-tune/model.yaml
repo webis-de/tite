@@ -8,6 +8,7 @@ model:
         similarity_function: dot
         query_pooling_strategy: first
         doc_pooling_strategy: first
+        add_marker_tokens: true
         query_length: 32
         doc_length: 256
         embedding_dim: 768

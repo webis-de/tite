@@ -9,11 +9,8 @@ trainer:
   - class_path: ModelCheckpoint
   - class_path: tite.utils.callbacks.DummyImportCallback
   max_epochs: null
-  max_steps: 50020
-  val_check_interval: 80000
+  max_steps: 10100
+  val_check_interval: 20000
   check_val_every_n_epoch: null
-  num_sanity_val_steps: 2
   accumulate_grad_batches: 8
   gradient_clip_val: 1
-  inference_mode: true
-  enable_progress_bar: false
