@@ -14,15 +14,13 @@ model:
             hidden_sizes: 768
             num_attention_heads: 12
             intermediate_sizes: 3072
-            positional_embedding_type: rotary
-            rotary_interleaved: true
+            absolute_positional_embedding_type: learned
+            relative_positional_embedding_type: rotary
             hidden_act: gelu_pytorch_tanh
             norm_location: post
             norm_type: layer
         enhanced_masked_auto_encoding: true
-        enhanced_causal_auto_encoding: false
         bow_auto_encoding: true
-        contrastive_auto_encoding: false
     tokenizer:
       class_path: tite.model.TiteTokenizer
       init_args:

@@ -12,3 +12,12 @@ data:
           - text
           - null
         max_length: 512
+        token_transformations:
+          enhanced_masked_auto_encoding,bow_auto_encoding:
+          - class_path: tite.transformation.TokenMask
+            init_args:
+              mask_id: 103
+              mask_prob: 0.3
+        string_transformations:
+          enhanced_masked_auto_encoding,bow_auto_encoding: null
+          

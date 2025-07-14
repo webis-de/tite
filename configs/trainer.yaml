@@ -14,4 +14,5 @@ trainer:
       init_args:
         logging_interval: step
   max_steps: 200000
+  gradient_clip_val: 1
   enable_progress_bar: false
