@@ -50,12 +50,16 @@ lightning-ir search \
 To pre-train a TITE model, run the following command:
 
 ```bash
-python main.py --config configs/trainer.yaml --config configs/adamw.yaml --config configs/data/datamodule-tite.yaml --config configs/model/tite.yaml
+python main.py \
+  --config configs/trainer.yaml \
+  --config configs/adamw.yaml \
+  --config configs/data/datamodule-tite.yaml \
+  --config configs/model/tite.yaml
 ```
 
 See the configuration files in the `configs` directory for available configuration options. 
 
-Note that this command will stream the Hugging Face FineWeb dataset. We recommend first downloading the dataset and then using the local path as exemplified below to avoid downloading streaming the dataset during trianing:
+Note that this command will stream the Hugging Face FineWeb dataset. We recommend first downloading the dataset and then using the local path as exemplified below to avoid streaming the dataset from Hugging Face during training:
 
 ```yaml
 data:
